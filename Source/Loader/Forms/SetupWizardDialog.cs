@@ -170,8 +170,8 @@ namespace Loader.Forms
                 BackColor = HeaderBg,
             };
 
-            // Title row — single line, plenty of vertical room so it never
-            // collides with the stepper at any DPI scale.
+            // Title row — single line. 48px tall ensures descenders ("g")
+            // are never clipped at any DPI scale, with breathing room above.
             TitleLabel = new Label
             {
                 Text = "Welcome",
@@ -179,21 +179,21 @@ namespace Loader.Forms
                 ForeColor = HeaderText,
                 AutoSize = false,
                 TextAlign = ContentAlignment.MiddleLeft,
-                Bounds = new Rectangle(PadX, 16, FormW - PadX * 2, 38),
+                Bounds = new Rectangle(PadX, 14, FormW - PadX * 2, 48),
                 BackColor = HeaderBg,
                 UseCompatibleTextRendering = false,
             };
 
-            // Stepper occupies the lower half of the header. 64px is enough
+            // Stepper occupies the lower half of the header. 70px is enough
             // for 24px circles, the connecting line, and the labels below.
             Stepper = new StepIndicator(StepTitles)
             {
-                Bounds = new Rectangle(PadX, 64, FormW - PadX * 2, 68),
+                Bounds = new Rectangle(PadX, 66, FormW - PadX * 2, 68),
                 BackColor = HeaderBg,
                 ActiveColor = StepActive,
                 DoneColor = StepDone,
                 FutureColor = StepFuture,
-                LabelColor = Color.FromArgb(225, 222, 215),
+                LabelColor = Color.FromArgb(190, 188, 180),
                 ActiveLabelColor = Color.White,
             };
 
@@ -309,10 +309,10 @@ namespace Loader.Forms
         {
             int y = 0;
 
-            var heading = MakeHeading("Let's set up your server.");
+            var heading = MakeHeading("Let's set up your server");
             heading.Location = new Point(0, y);
             WelcomePanel.Controls.Add(heading);
-            y += heading.Height + 14;
+            y += heading.Height + 8;
 
             var body = MakeBody(
                 "This wizard installs the latest server build, configures the\n" +
@@ -331,10 +331,11 @@ namespace Loader.Forms
             GameTypeCombo = new ComboBox
             {
                 DropDownStyle = ComboBoxStyle.DropDownList,
-                Bounds = new Rectangle(120, y, 260, 28),
+                Bounds = new Rectangle(110, y, 260, 28),
                 Font = new Font("Segoe UI", 10F),
                 FlatStyle = FlatStyle.Flat,
                 BackColor = Color.White,
+                TabStop = false, // don't grab focus on form load
             };
             GameTypeCombo.Items.AddRange(new object[] { "DarkSouls2", "DarkSouls3" });
             GameTypeCombo.SelectedIndexChanged += (s, e) => GameType = (string)GameTypeCombo.SelectedItem;
@@ -352,10 +353,10 @@ namespace Loader.Forms
         {
             int y = 0;
 
-            var heading = MakeHeading("Download the server build.");
+            var heading = MakeHeading("Download the server build");
             heading.Location = new Point(0, y);
             DownloadPanel.Controls.Add(heading);
-            y += heading.Height + 14;
+            y += heading.Height + 8;
 
             DownloadStatusLabel = MakeBody("Checking for the latest release…");
             DownloadStatusLabel.Location = new Point(0, y);
@@ -391,10 +392,10 @@ namespace Loader.Forms
         {
             int y = 0;
 
-            var heading = MakeHeading("Configure Windows Firewall.");
+            var heading = MakeHeading("Configure Windows Firewall");
             heading.Location = new Point(0, y);
             FirewallPanel.Controls.Add(heading);
-            y += heading.Height + 14;
+            y += heading.Height + 8;
 
             var body = MakeBody(
                 "We'll create the Windows Firewall rules so other players can reach your\n" +
@@ -441,10 +442,10 @@ namespace Loader.Forms
         {
             int y = 0;
 
-            var heading = MakeHeading("Configure your network.");
+            var heading = MakeHeading("Configure your network");
             heading.Location = new Point(0, y);
             NetworkPanel.Controls.Add(heading);
-            y += heading.Height + 14;
+            y += heading.Height + 8;
 
             var body = MakeBody(
                 "We need your public (WAN) IP and your local (LAN) IP. We can detect\n" +
@@ -487,13 +488,13 @@ namespace Loader.Forms
             NetworkPanel.Controls.Add(ManualRadio);
             y += 36;
 
-            var pubLabel = MakeLabel("Public IP (WAN)");
+            var pubLabel = MakeLabel("Public IP (WAN)", semibold: true);
             pubLabel.Location = new Point(0, y + 6);
             NetworkPanel.Controls.Add(pubLabel);
 
             PublicIpTextBox = new TextBox
             {
-                Bounds = new Rectangle(150, y, 320, 28),
+                Bounds = new Rectangle(160, y, 320, 28),
                 Font = new Font("Consolas", 11F),
                 BorderStyle = BorderStyle.FixedSingle,
             };
@@ -504,13 +505,13 @@ namespace Loader.Forms
             NetworkPanel.Controls.Add(PublicIpTextBox);
             y += 36;
 
-            var privLabel = MakeLabel("Private IP (LAN)");
+            var privLabel = MakeLabel("Private IP (LAN)", semibold: true);
             privLabel.Location = new Point(0, y + 6);
             NetworkPanel.Controls.Add(privLabel);
 
             PrivateIpTextBox = new TextBox
             {
-                Bounds = new Rectangle(150, y, 320, 28),
+                Bounds = new Rectangle(160, y, 320, 28),
                 Font = new Font("Consolas", 11F),
                 BorderStyle = BorderStyle.FixedSingle,
             };
@@ -523,7 +524,7 @@ namespace Loader.Forms
 
             RedetectButton = new FlatButton("Re-detect")
             {
-                Bounds = new Rectangle(150, y, 120, 32),
+                Bounds = new Rectangle(160, y, 120, 32),
                 Style = FlatButton.ButtonStyle.Secondary,
             };
             RedetectButton.Clicked += async (s, e) => await DetectIps();
@@ -540,10 +541,10 @@ namespace Loader.Forms
         {
             int y = 0;
 
-            var heading = MakeHeading("Server settings.");
+            var heading = MakeHeading("Server settings");
             heading.Location = new Point(0, y);
             SettingsPanel.Controls.Add(heading);
-            y += heading.Height + 14;
+            y += heading.Height + 8;
 
             var body = MakeBody(
                 "Choose how your server identifies itself in the public list (or hide it\n" +
@@ -554,12 +555,12 @@ namespace Loader.Forms
 
             void AddRow(string label, Control control)
             {
-                var l = MakeLabel(label);
+                var l = MakeLabel(label, semibold: true);
                 l.Location = new Point(0, y + 6);
                 SettingsPanel.Controls.Add(l);
-                control.Bounds = new Rectangle(170, y, FormW - PadX * 2 - 170, 28);
+                control.Bounds = new Rectangle(180, y, FormW - PadX * 2 - 180, 28);
                 SettingsPanel.Controls.Add(control);
-                y += 36;
+                y += 38;
             }
 
             NameTextBox = new TextBox { Font = new Font("Segoe UI", 10F), BorderStyle = BorderStyle.FixedSingle };
@@ -600,11 +601,11 @@ namespace Loader.Forms
         {
             int y = 0;
 
-            var heading = MakeHeading("Setup complete!");
+            var heading = MakeHeading("Setup complete");
             heading.ForeColor = OkGreen;
             heading.Location = new Point(0, y);
             DonePanel.Controls.Add(heading);
-            y += heading.Height + 14;
+            y += heading.Height + 8;
 
             var body = MakeBody(
                 "Everything is configured. Click Start Server below, then close this\n" +
@@ -1109,11 +1110,12 @@ namespace Loader.Forms
             {
                 Text = text,
                 AutoSize = false,
-                Bounds = new Rectangle(0, 0, FormW - PadX * 2, 30),
+                Bounds = new Rectangle(0, 0, FormW - PadX * 2, 38),
                 Font = new Font("Segoe UI Semibold", 13F),
                 ForeColor = TextPrimary,
                 BackColor = BodyBg,
                 TextAlign = ContentAlignment.MiddleLeft,
+                UseCompatibleTextRendering = false,
             };
         }
 
