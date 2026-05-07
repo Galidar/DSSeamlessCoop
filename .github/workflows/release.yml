@@ -1,0 +1,106 @@
+name: Release
+
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 1.0.0.0)'
+        required: true
+        default: '1.0.0.0'
+      version_postfix:
+        description: 'Version postfix (e.g. -galidar)'
+        required: false
+        default: '-galidar'
+  push:
+    tags:
+      - 'v*'
+
+env:
+  SOLUTION_FILE_PATH: ./intermediate/vs2022/ds3os.sln
+  BUILD_CONFIGURATION: Release
+
+jobs:
+  build-windows:
+    name: Build Windows
+    runs-on: windows-2022
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Resolve version
+        id: version
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            TAG="${GITHUB_REF#refs/tags/}"
+            VERSION="${TAG#v}"
+            POSTFIX=""
+          else
+            VERSION="${{ github.event.inputs.version }}"
+            POSTFIX="${{ github.event.inputs.version_postfix }}"
+          fi
+          FULL="${VERSION}${POSTFIX}"
+          echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
+          echo "postfix=${POSTFIX}" >> "$GITHUB_OUTPUT"
+          echo "full=${FULL}" >> "$GITHUB_OUTPUT"
+          echo "tag=v${FULL}" >> "$GITHUB_OUTPUT"
+
+      - name: Setup .NET
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: '8.0.x'
+
+      - name: Add MSBuild to PATH
+        uses: microsoft/setup-msbuild@v2
+
+      - name: Generate Solution
+        shell: cmd
+        working-directory: ${{ github.workspace }}/Tools
+        run: ${{ github.workspace }}/Tools/generate_vs2022.bat
+
+      - name: Restore Dependencies
+        working-directory: ${{ github.workspace }}
+        run: msbuild /m /p:Configuration=${{ env.BUILD_CONFIGURATION }} ${{ env.SOLUTION_FILE_PATH }} /t:Restore
+
+      - name: Package Loader (.NET)
+        run: dotnet publish ./Source/Loader/Loader.csproj -r win-x64 -c Release --output ${{ github.workspace }}/Bin/Loader/Package/ /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true /p:Version=${{ steps.version.outputs.full }} /p:FileVersion=${{ steps.version.outputs.version }} /p:AssemblyVersion=${{ steps.version.outputs.version }}
+
+      - name: Build
+        working-directory: ${{ github.workspace }}
+        run: msbuild /m /p:Configuration=${{ env.BUILD_CONFIGURATION }} ${{ env.SOLUTION_FILE_PATH }} /t:Build
+
+      - name: Package Release
+        shell: cmd
+        working-directory: ${{ github.workspace }}
+        run: ${{ github.workspace }}/Tools/generate_package_windows.bat
+
+      - name: Zip Release
+        uses: vimtor/action-zip@v1.2
+        with:
+          files: DS3OS/
+          dest: windows.zip
+
+      - name: Upload Build Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows
+          path: ./windows.zip
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          name: Release ${{ steps.version.outputs.tag }}
+          body: |
+            Automated build from `${{ github.sha }}`.
+
+            ## How to install
+            See [Setup/README.md](https://github.com/${{ github.repository }}/blob/main/Setup/README.md) — `Setup/setup.bat` will download this release automatically.
+          draft: false
+          prerelease: ${{ contains(steps.version.outputs.full, '-') }}
+          files: ./windows.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

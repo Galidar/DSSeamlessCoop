@@ -1,0 +1,194 @@
+/*
+ * Dark Souls 3 - Open Server
+ * Copyright (C) 2021 Tim Leonard
+ *
+ * This program is free software; licensed under the MIT license. 
+ * You should have received a copy of the license along with this program. 
+ * If not, see <https://opensource.org/licenses/MIT>.
+ */
+
+// Credit: Parts of this are based on research by: AmirBohd, Radai
+
+syntax = "proto2";
+option optimize_for = LITE_RUNTIME;
+package DS2_Frpg2PlayerData;
+
+message AllStatus {
+	optional PlayerLocation player_location = 1;
+	optional PlayerStatus player_status = 2;
+	optional ItemUsingInfo item_using_info = 3;
+	optional StatsInfo stats_info = 4;
+	optional LevelStatus attributes = 5;
+	optional PhysicalStatus physical_status = 6;
+	optional WeaponStatus weapon_status = 7;
+	optional ArmorStatus armor_status = 8;
+	optional ServerSideStatus server_side_status = 9;
+	optional EquipmentInfo equipment_info = 10;
+}
+
+message ArmorStatus {
+	optional uint32 strike_def = 1;
+	optional uint32 slash_def = 2;
+	optional uint32 thrust_def = 3;
+	optional float poise = 4;
+}
+
+message DateTime {
+	required uint32 year = 1;
+	required uint32 month = 2;
+	required uint32 day = 3;
+	required uint32 hours = 4;
+	required uint32 minutes = 5;
+	required uint32 seconds = 6;
+	required uint32 tzdiff = 7;
+}
+
+message EquipmentInfo {
+	optional uint32 weapon_slots = 1;
+	optional uint32 armor_slots = 2;
+	optional uint32 ring_slots = 3;
+	optional uint32 ammunition_slots = 4;
+	optional uint32 belt_slots = 5;
+	optional uint32 spell_slots = 6;
+}
+
+message ItemUsingInfo {
+	optional uint32 named_ring_god = 1;
+	optional uint32 using_dried_fingers = 2;
+	optional uint32 unknown_3 = 3;
+	optional uint32 guardians_seal = 4;
+	optional uint32 bell_keepers_seal = 5;
+	optional uint32 crest_of_the_rat = 6;
+	optional uint32 unknown_7 = 7;
+	optional uint32 unknown_8 = 8;
+}
+
+message LevelStatus {
+	optional uint32 vigor = 1;
+	optional uint32 endurance = 2;
+	optional uint32 vitality = 3;
+	optional uint32 attunement = 4;
+	optional uint32 strenght = 5;
+	optional uint32 dexterity = 6;
+	optional uint32 intelligence = 7;
+	optional uint32 faith = 8;
+	optional uint32 adaptability = 9;
+}
+
+message PhantomTypeCount {
+	optional uint32 unknown_1 = 1;
+	optional uint32 unknown_2 = 2;
+}
+
+message PhysicalStatus {
+	optional uint32 health = 1;
+	optional uint32 stamina = 2;
+	optional float equip_load = 3;
+	//optional uint32 unknown_3 = 3;
+	optional uint32 unknown_4 = 4;
+	optional uint32 unknown_5 = 5;
+	optional uint32 attack_strength = 6;  
+	optional uint32 attack_dexterity = 7; 
+	optional uint32 unknown_8 = 8;
+	optional uint32 unknown_9 = 9;
+	optional uint32 unknown_10 = 10;
+	optional uint32 unknown_11 = 11;
+	optional uint32 unknown_12 = 12;
+	optional uint32 unknown_13 = 13;
+	optional uint32 physical_defence = 14;
+	optional uint32 unknown_15 = 15;    // changes with int    
+	optional uint32 unknown_16 = 16;    // changes with int            
+	optional uint32 unknown_17 = 17;    // changes with faith  
+	optional uint32 unknown_18 = 18;    // changes with int       
+	optional uint32 unknown_19 = 19;    // changes with adaptability
+	optional uint32 unknown_20 = 20;    // changes with faith    
+	optional uint32 petrify_resist = 21;
+	optional uint32 curse_resist = 22; 
+	optional uint32 agility = 23;    
+	optional float poise = 24;
+}
+
+message PlayerLocation {
+	optional uint32 online_area_id = 1;
+	optional uint32 cell_id = 2;        // 1074321607, 3225573558, 1078414675,
+	optional uint32 online_activity_area_id = 3;      // 0, 101640, 103130, 103110, 103120,
+	optional Vector position = 4;
+	optional float unknown_5 = 5;       // 1074321607, 3225573558, 1078414675
+}
+
+message PlayerStatus_Phantom_leave_at {
+	optional uint32 unknown_1 = 1;
+	optional DateTime datetime = 2;
+}
+
+message PlayerStatus {
+	optional string name = 1;
+	optional uint32 archetype = 2;
+	optional uint32 covenant = 3;
+    optional uint32 unknown_4 = 4;      // 1, 0
+	optional uint32 unknown_5 = 5;      // 0, 1, 2
+	optional uint32 unknown_6 = 6;      // 0
+	optional uint32 sitting_at_bonfire = 7;      
+	optional PlayerStatus_Phantom_leave_at phantom_leave_at = 8;
+	optional uint32 disable_cross_region_play = 9;
+	optional uint32 character_id = 10;    
+	optional uint32 human_effigy_burnt = 11;
+	repeated uint32 played_areas = 12;    
+	optional uint32 unknown_13 = 13;
+	optional uint32 unknown_14 = 14;
+	optional uint32 soul_level = 15;    
+	optional uint32 unknown_16 = 16;
+	optional uint32 unknown_17 = 17;
+	optional uint32 play_time_seconds = 18;        
+	optional uint32 soul_memory = 19;
+	optional uint32 unknown_20 = 20;
+	optional string unknown_21 = 21;
+}
+
+message ServerSideStatus {
+	optional uint32 unknown_1 = 1;
+}
+
+message StatsInfo_Bonfire_levels {
+	optional uint32 bonfire_id = 1;
+	optional uint32 bonfire_level = 2;
+}
+
+message StatsInfo {
+	optional uint32 unknown_1 = 1;
+	optional uint32 unknown_2 = 2;
+	optional uint32 sinner_points = 3;
+	repeated StatsInfo_Bonfire_levels bonfire_levels = 4;
+	optional uint32 unknown_5 = 5;
+	repeated PhantomTypeCount phantom_type_count_6 = 6;
+	repeated PhantomTypeCount phantom_type_count_7 = 7;
+	repeated PhantomTypeCount phantom_type_count_8 = 8;
+	repeated PhantomTypeCount phantom_type_count_9 = 9;
+	optional uint32 unknown_10 = 10;
+	repeated uint32 unknown_11 = 11;
+	optional uint32 unknown_12 = 12;
+	optional uint32 unknown_13 = 13;
+	optional uint32 unknown_14 = 14;
+	optional uint32 unknown_15 = 15;
+	optional uint32 unknown_16 = 16;
+	optional DateTime datetime = 17;
+	optional uint32 unknown_18 = 18;
+	repeated uint32 unlocked_bonfires = 19;
+	optional uint32 unknown_20 = 20;
+	repeated uint32 unknown_21 = 21;
+}
+
+message Vector {
+	required float x = 1;
+	required float y = 2;
+	required float z = 3;
+}
+
+message WeaponStatus {
+	optional uint32 left_ar_1 = 1;
+	optional uint32 left_ar_2 = 2;
+	optional uint32 left_ar_3 = 3;
+	optional uint32 right_ar_1 = 4;
+	optional uint32 right_ar_2 = 5;
+	optional uint32 right_ar_3 = 6;
+}
