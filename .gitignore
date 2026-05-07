@@ -75,10 +75,6 @@ Tools/Deploy/
 # for nix build .
 result
 
-# Setup/ runtime artifacts (binarios descargados, claves, db)
-Setup/Server/
-Setup/Loader/
-Setup/Prerequisites/
-Setup/ReadMe.txt
-Setup/windows.zip
-Setup/*.log
+# Loader runtime artifacts created by the in-app Setup Wizard
+# (when running Loader.exe from the unpacked release zip)
+_release.zip

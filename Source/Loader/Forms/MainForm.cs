@@ -347,11 +347,15 @@ namespace Loader
         }
 
         private void OnCreateNewServer(object sender, EventArgs e)
-        {        
-            Forms.CreateServerDialog Dialog = new Forms.CreateServerDialog(ServerList.Servers, MachinePublicIp, this, CurrentGameType);
-            if (Dialog.ShowDialog() != DialogResult.OK)
+        {
+            // Galidar fork: this button now opens the local-server Setup Wizard,
+            // which guides the user through downloading, firewall, network, and
+            // server settings — a self-hosted private server on this machine.
+            // The original sharded-server flow (Forms.CreateServerDialog) is
+            // preserved in the codebase but no longer wired up.
+            using (var Wizard = new Forms.SetupWizardDialog())
             {
-                return;
+                Wizard.ShowDialog(this);
             }
         }
 

@@ -87,7 +87,7 @@ namespace Loader
         ImportButton.Name = "ImportButton";
         ImportButton.Size = new System.Drawing.Size(166, 35);
         ImportButton.TabIndex = 1;
-        ImportButton.Text = "Create New Server";
+        ImportButton.Text = "Setup Server";
         ImportButton.TextAlign = System.Drawing.ContentAlignment.MiddleRight;
         ImportButton.TextImageRelation = System.Windows.Forms.TextImageRelation.ImageBeforeText;
         ImportButton.UseVisualStyleBackColor = true;

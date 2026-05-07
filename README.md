@@ -12,20 +12,20 @@ The goal of this fork is to host my own modifications focused on **Dark Souls II
 
 ## What's different in this fork?
 
-- **Streamlined installation** for Dark Souls 2 SOTFS via the [`Setup/`](./Setup) folder — automated installer that detects your IPs, downloads the latest build, and applies a preconfigured `config.json`.
-- **Self-hosted Windows builds** via GitHub Actions — releases are produced from this fork's source code, no dependency on the upstream release page.
-- **Customizations** to the server behavior (work in progress).
+- **Built-in Setup Wizard** inside the Loader — a single `Loader.exe` walks you through downloading the server, applying firewall rules, configuring the network (auto-detect or manual override for paid hosting), choosing server name/description/password, and starting the server. **No `.bat` files, no manual steps.**
+- **Self-hosted Windows builds** via GitHub Actions — releases are produced from this fork's source code, with no dependency on the upstream release page.
+- **Customizations** to the server behavior, focused on Dark Souls II SOTFS (work in progress).
 
 ## Quick start
 
-If you just want to run the server, see the [`Setup/`](./Setup) folder. TL;DR:
+1. Download the latest `windows.zip` from the [Releases page](https://github.com/Galidar/DSSeamlessCoop/releases/latest).
+2. Extract it anywhere (for example, `C:\DSSeamlessCoop\`).
+3. Open `Loader\Loader.exe`.
+4. Click **Setup Server** at the bottom of the window.
+5. Follow the wizard — Welcome → Download → Firewall → Network → Server Settings → Done.
+6. The wizard starts the server for you. Back in the main Loader window, refresh the list, select your server, and click **Launch Game**.
 
-```sh
-git clone https://github.com/Galidar/DSSeamlessCoop.git
-cd DSSeamlessCoop\Setup
-```
-
-Then double click `setup.bat`. Full instructions are in [Setup/README.md](./Setup/README.md).
+That's the whole install. Steam must be running while the server is up — no Steam login required.
 
 ## What is the underlying project?
 
@@ -49,7 +49,7 @@ When you build the project, you'll get a `Bin/` folder with two relevant subfold
 
 > **NOTE:** The Steam client (no login required) must be running when you launch `Server.exe`, otherwise it will fail to initialize.
 
-For users of this fork, all of this is automated by `Setup/setup.bat`.
+For users of this fork, all of this is automated by the built-in **Setup Wizard** in `Loader.exe`.
 
 ## Feature support (from upstream)
 
@@ -97,8 +97,8 @@ DSOS uses its own saves to avoid issues with retail. To transfer your retail sav
 ### I launch the game but it can't connect
 
 1. Make sure the Loader is running **as administrator** (it patches the game's memory).
-2. Make sure ports `50000`, `50010`, `50050`, `50020` (TCP and UDP) are open in your firewall and forwarded on your router. The `Setup/1-Setup-Firewall.bat` script handles the firewall side automatically.
-3. Verify `ServerHostname` (your WAN IP) and `ServerPrivateHostname` (your LAN IP) in `Saved/default/config.json`. The `Setup/setup.bat` and `Setup/Update-IPs.bat` scripts handle this automatically.
+2. Make sure ports `50000`, `50010`, `50050`, `50020` (TCP and UDP) are open in your firewall and forwarded on your router. The Setup Wizard's **Firewall** step handles the firewall side automatically (UAC prompt).
+3. Verify `ServerHostname` (your WAN IP) and `ServerPrivateHostname` (your LAN IP) in `Saved/default/config.json`. The Setup Wizard's **Network** step detects them automatically, or you can override them manually if you use a paid hosting / VPN.
 
 ### What do all the properties in the config file mean?
 
@@ -116,10 +116,11 @@ For automated builds, this fork uses GitHub Actions (see `.github/workflows/`).
 /
 ├── Protobuf/              Protobuf definitions used by the server's network traffic
 ├── Resources/             General resources for building and packaging
-├── Setup/                 Streamlined installer for Dark Souls 2 SOTFS (this fork)
 ├── Source/                All source code for the project
 │   ├── Injector/          DLL injected into the game to provide DS3OS functionality
-│   ├── Loader/            WinForms app that loads DS2/DS3 to connect to a custom server
+│   ├── Loader/            WinForms app — loads DS2/DS3 and ships the Setup Wizard for hosting
+│   │   ├── Forms/         UI forms (MainForm, SetupWizardDialog, etc.)
+│   │   └── LocalServer/   Setup Wizard backend (download, firewall, process, config)
 │   ├── MasterServer/      NodeJS API server for advertising and listing active servers
 │   ├── Server/            Source code for the main server
 │   ├── Server.DarkSouls3/ Code specific to Dark Souls 3 support
