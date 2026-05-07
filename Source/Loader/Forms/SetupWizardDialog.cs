@@ -9,13 +9,15 @@
  *   5. Configure Server settings (name, description, password)
  *   6. Done — start server
  *
- * The wizard is intentionally code-only (no .Designer.cs) so the page logic
- * lives in one place. Each page is a Panel made visible/hidden as the user
- * navigates through Back / Next.
+ * Visual style intentionally matches the main Loader (dark masthead, white
+ * body, firekeeper-amber accents). The page state machine and the layout are
+ * both code-only — easier to keep aligned across DPI scales than the WinForms
+ * Designer.
  */
 
 using System;
 using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.IO;
 using System.Net;
 using System.Threading;
@@ -28,74 +30,104 @@ namespace Loader.Forms
 {
     public class SetupWizardDialog : Form
     {
-        // ---------------- Layout constants ----------------
-        private const int FormWidth = 720;
-        private const int FormHeight = 520;
-        private const int HeaderHeight = 70;
-        private const int FooterHeight = 60;
-        private const int Pad = 16;
+        // ============================================================
+        //  Theme
+        // ============================================================
+        private static readonly Color HeaderBg     = Color.FromArgb(20, 20, 20);
+        private static readonly Color HeaderText   = Color.White;
+        private static readonly Color BodyBg       = Color.White;
+        private static readonly Color FooterBg     = Color.FromArgb(245, 244, 240);
+        private static readonly Color BorderLine   = Color.FromArgb(220, 218, 210);
+        private static readonly Color TextPrimary  = Color.FromArgb(35, 32, 28);
+        private static readonly Color TextSubtle   = Color.FromArgb(110, 105, 95);
+        private static readonly Color Accent       = Color.FromArgb(200, 134, 47); // firekeeper amber
+        private static readonly Color AccentHover  = Color.FromArgb(225, 152, 60);
+        private static readonly Color AccentText   = Color.White;
+        private static readonly Color OkGreen      = Color.FromArgb(46, 130, 60);
+        private static readonly Color WarnAmber    = Color.FromArgb(190, 120, 30);
+        private static readonly Color ErrRed       = Color.FromArgb(180, 60, 60);
+        private static readonly Color StepActive   = Accent;
+        private static readonly Color StepDone     = Color.FromArgb(60, 60, 60);
+        private static readonly Color StepFuture   = Color.FromArgb(160, 160, 160);
 
-        // ---------------- Wizard state ----------------
+        // ============================================================
+        //  Layout
+        // ============================================================
+        private const int FormW = 820;
+        private const int FormH = 600;
+        private const int HeaderH = 110;
+        private const int FooterH = 70;
+        private const int PadX = 36;
+        private const int PadY = 28;
+
+        // ============================================================
+        //  State
+        // ============================================================
         private enum Page { Welcome, Download, Firewall, Network, Settings, Done }
         private Page Current = Page.Welcome;
+        private static readonly string[] StepTitles =
+        {
+            "Welcome", "Download", "Firewall", "Network", "Settings", "Finish",
+        };
 
-        // ---------------- Top-level controls ----------------
+        // GitHub repo to fetch releases from. The fork.
+        private const string ReleaseRepo = "Galidar/DSSeamlessCoop";
+
+        // ----- top-level controls -----
+        private Panel HeaderPanel, BodyPanel, FooterPanel;
         private Label TitleLabel;
-        private Label StepLabel;
-        private Panel HeaderPanel, FooterPanel;
-        private Panel WelcomePanel, DownloadPanel, FirewallPanel, NetworkPanel, SettingsPanel, DonePanel;
-        private Button BackButton, NextButton, CancelBtn;
+        private Label SubtitleLabel;
+        private StepIndicator Stepper;
+        private FlatButton NextButton, BackButton, CancelBtn;
 
-        // ---------------- Welcome page ----------------
+        // ----- page panels -----
+        private Panel WelcomePanel, DownloadPanel, FirewallPanel, NetworkPanel, SettingsPanel, DonePanel;
+
+        // ----- welcome -----
         private ComboBox GameTypeCombo;
 
-        // ---------------- Download page ----------------
+        // ----- download -----
         private Label DownloadStatusLabel;
         private ProgressBar DownloadProgress;
         private Label DownloadDetailLabel;
-        private Button DownloadButton;
+        private FlatButton DownloadButton;
         private bool DownloadComplete;
         private string ResolvedReleaseTag = "";
         private CancellationTokenSource DownloadCts;
 
-        // ---------------- Firewall page ----------------
+        // ----- firewall -----
         private Label FirewallStatusLabel;
-        private Button ApplyFirewallButton;
-        private Button SkipFirewallLink;
+        private FlatButton ApplyFirewallButton;
+        private LinkLabel SkipFirewallLink;
         private bool FirewallReady;
 
-        // ---------------- Network page ----------------
-        private RadioButton AutoDetectRadio;
-        private RadioButton ManualRadio;
-        private TextBox PublicIpTextBox;
-        private TextBox PrivateIpTextBox;
+        // ----- network -----
+        private RadioButton AutoDetectRadio, ManualRadio;
+        private TextBox PublicIpTextBox, PrivateIpTextBox;
         private Label NetworkStatusLabel;
-        private Button RedetectButton;
+        private FlatButton RedetectButton;
 
-        // ---------------- Settings page ----------------
-        private TextBox NameTextBox;
-        private TextBox DescriptionTextBox;
-        private TextBox PasswordTextBox;
+        // ----- settings -----
+        private TextBox NameTextBox, DescriptionTextBox, PasswordTextBox;
         private CheckBox AdvertiseCheckBox;
 
-        // ---------------- Done page ----------------
+        // ----- done -----
         private Label DoneSummaryLabel;
-        private Button StartServerButton;
+        private FlatButton StartServerButton;
         private Label ServerStatusLabel;
 
-        // ---------------- Wizard config (in-memory until applied) ----------------
+        // ----- model (in-memory until applied) -----
         private string GameType = "DarkSouls2";
-        private string PublicIp = "";
-        private string PrivateIp = "";
+        private string PublicIp = "", PrivateIp = "";
         private bool ManualNetwork = false;
         private string ServerName = "My DS3OS Server";
         private string ServerDescription = "A custom Dark Souls server.";
         private string Password = "";
         private bool Advertise = true;
 
-        // GitHub repo to fetch releases from. The fork.
-        private const string ReleaseRepo = "Galidar/DSSeamlessCoop";
-
+        // ============================================================
+        //  Construction
+        // ============================================================
         public SetupWizardDialog()
         {
             BuildUi();
@@ -103,89 +135,147 @@ namespace Loader.Forms
             ShowPage(Page.Welcome);
         }
 
-        // ============================================================
-        //  UI construction
-        // ============================================================
-
         private void BuildUi()
         {
             Text = "DSSeamlessCoop — Server Setup";
-            ClientSize = new Size(FormWidth, FormHeight);
+            ClientSize = new Size(FormW, FormH);
             FormBorderStyle = FormBorderStyle.FixedDialog;
             MaximizeBox = false;
             MinimizeBox = false;
             StartPosition = FormStartPosition.CenterParent;
-            Font = new Font("Segoe UI", 9F);
+            Font = new Font("Segoe UI", 9.5F);
+            BackColor = BodyBg;
+            DoubleBuffered = true;
 
-            // ---- Header ----
+            BuildHeader();
+            BuildFooter();
+            BuildBody();
+
+            // Z-order: footer & header drawn over body. Body fills remaining.
+            Controls.Add(BodyPanel);
+            Controls.Add(HeaderPanel);
+            Controls.Add(FooterPanel);
+        }
+
+        private void BuildHeader()
+        {
             HeaderPanel = new Panel
             {
                 Dock = DockStyle.Top,
-                Height = HeaderHeight,
-                BackColor = Color.FromArgb(30, 30, 30),
+                Height = HeaderH,
+                BackColor = HeaderBg,
             };
+
             TitleLabel = new Label
             {
                 Text = "Welcome",
-                Font = new Font("Segoe UI Semibold", 16F),
-                ForeColor = Color.White,
-                AutoSize = true,
-                Location = new Point(Pad, 12),
+                Font = new Font("Segoe UI Semibold", 18F),
+                ForeColor = HeaderText,
+                AutoSize = false,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Bounds = new Rectangle(PadX, 14, FormW - PadX * 2, 36),
+                BackColor = HeaderBg,
             };
-            StepLabel = new Label
-            {
-                Text = "Step 1 of 6",
-                Font = new Font("Segoe UI", 9F),
-                ForeColor = Color.LightGray,
-                AutoSize = true,
-                Location = new Point(Pad, 42),
-            };
-            HeaderPanel.Controls.Add(TitleLabel);
-            HeaderPanel.Controls.Add(StepLabel);
 
-            // ---- Footer ----
+            SubtitleLabel = new Label
+            {
+                Text = "Get your private Dark Souls server up in a few clicks.",
+                Font = new Font("Segoe UI", 9.5F),
+                ForeColor = Color.FromArgb(190, 188, 180),
+                AutoSize = false,
+                TextAlign = ContentAlignment.MiddleLeft,
+                Bounds = new Rectangle(PadX, 50, FormW - PadX * 2, 20),
+                BackColor = HeaderBg,
+            };
+
+            Stepper = new StepIndicator(StepTitles)
+            {
+                Bounds = new Rectangle(PadX, 76, FormW - PadX * 2, 28),
+                BackColor = HeaderBg,
+                ActiveColor = StepActive,
+                DoneColor = StepDone,
+                FutureColor = StepFuture,
+                LabelColor = Color.FromArgb(220, 218, 210),
+            };
+
+            HeaderPanel.Controls.Add(TitleLabel);
+            HeaderPanel.Controls.Add(SubtitleLabel);
+            HeaderPanel.Controls.Add(Stepper);
+
+            // 1px hairline at the bottom of the header for separation.
+            var hairline = new Panel
+            {
+                BackColor = Color.FromArgb(40, 40, 40),
+                Height = 1,
+                Dock = DockStyle.Bottom,
+            };
+            HeaderPanel.Controls.Add(hairline);
+        }
+
+        private void BuildFooter()
+        {
             FooterPanel = new Panel
             {
                 Dock = DockStyle.Bottom,
-                Height = FooterHeight,
-                BackColor = Color.FromArgb(245, 245, 245),
+                Height = FooterH,
+                BackColor = FooterBg,
             };
-            CancelBtn = new Button
-            {
-                Text = "Cancel",
-                Width = 100, Height = 32,
-                Location = new Point(Pad, 14),
-            };
-            CancelBtn.Click += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
 
-            BackButton = new Button
+            // 1px hairline at the top of the footer.
+            var hairline = new Panel
             {
-                Text = "< Back",
-                Width = 100, Height = 32,
-                Location = new Point(FormWidth - 230, 14),
+                BackColor = BorderLine,
+                Height = 1,
+                Dock = DockStyle.Top,
             };
-            BackButton.Click += OnBackClicked;
+            FooterPanel.Controls.Add(hairline);
 
-            NextButton = new Button
+            CancelBtn = new FlatButton("Cancel")
             {
-                Text = "Next >",
-                Width = 110, Height = 32,
-                Location = new Point(FormWidth - 120, 14),
+                Bounds = new Rectangle(PadX, 18, 100, 36),
+                Style = FlatButton.ButtonStyle.Ghost,
             };
-            NextButton.Click += OnNextClicked;
+            CancelBtn.Clicked += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
+
+            BackButton = new FlatButton("Back")
+            {
+                Bounds = new Rectangle(FormW - PadX - 100 - 8 - 130, 18, 100, 36),
+                Style = FlatButton.ButtonStyle.Secondary,
+            };
+            BackButton.Clicked += OnBackClicked;
+
+            NextButton = new FlatButton("Next")
+            {
+                Bounds = new Rectangle(FormW - PadX - 130, 18, 130, 36),
+                Style = FlatButton.ButtonStyle.Primary,
+            };
+            NextButton.Clicked += OnNextClicked;
 
             FooterPanel.Controls.Add(CancelBtn);
             FooterPanel.Controls.Add(BackButton);
             FooterPanel.Controls.Add(NextButton);
+        }
 
-            // ---- Page panels (all share the same area) ----
-            var pageBounds = new Rectangle(0, HeaderHeight, FormWidth, FormHeight - HeaderHeight - FooterHeight);
-            WelcomePanel  = MakePagePanel(pageBounds);
-            DownloadPanel = MakePagePanel(pageBounds);
-            FirewallPanel = MakePagePanel(pageBounds);
-            NetworkPanel  = MakePagePanel(pageBounds);
-            SettingsPanel = MakePagePanel(pageBounds);
-            DonePanel     = MakePagePanel(pageBounds);
+        private void BuildBody()
+        {
+            BodyPanel = new Panel
+            {
+                Dock = DockStyle.Fill,
+                BackColor = BodyBg,
+                Padding = new Padding(0),
+            };
+
+            int innerW = FormW - PadX * 2;
+            // Bounds inside BodyPanel — body height computed at runtime.
+            int innerH = FormH - HeaderH - FooterH;
+            var bounds = new Rectangle(PadX, PadY, innerW, innerH - PadY * 2);
+
+            WelcomePanel  = MakePagePanel(bounds);
+            DownloadPanel = MakePagePanel(bounds);
+            FirewallPanel = MakePagePanel(bounds);
+            NetworkPanel  = MakePagePanel(bounds);
+            SettingsPanel = MakePagePanel(bounds);
+            DonePanel     = MakePagePanel(bounds);
 
             BuildWelcomePage();
             BuildDownloadPage();
@@ -194,14 +284,12 @@ namespace Loader.Forms
             BuildSettingsPage();
             BuildDonePage();
 
-            Controls.Add(WelcomePanel);
-            Controls.Add(DownloadPanel);
-            Controls.Add(FirewallPanel);
-            Controls.Add(NetworkPanel);
-            Controls.Add(SettingsPanel);
-            Controls.Add(DonePanel);
-            Controls.Add(HeaderPanel);
-            Controls.Add(FooterPanel);
+            BodyPanel.Controls.Add(WelcomePanel);
+            BodyPanel.Controls.Add(DownloadPanel);
+            BodyPanel.Controls.Add(FirewallPanel);
+            BodyPanel.Controls.Add(NetworkPanel);
+            BodyPanel.Controls.Add(SettingsPanel);
+            BodyPanel.Controls.Add(DonePanel);
         }
 
         private Panel MakePagePanel(Rectangle bounds)
@@ -209,192 +297,189 @@ namespace Loader.Forms
             return new Panel
             {
                 Bounds = bounds,
-                BackColor = Color.White,
+                BackColor = BodyBg,
                 Visible = false,
             };
         }
 
-        // ---------------- Welcome ----------------
+        // ============================================================
+        //  Page builders
+        // ============================================================
 
         private void BuildWelcomePage()
         {
-            int y = Pad;
+            int y = 0;
 
-            var intro = new Label
-            {
-                Text = "This wizard installs and configures a private Dark Souls Open Server\n" +
-                       "on your machine. We'll download the latest server build, set up the\n" +
-                       "Windows Firewall, configure your network, and start the server.\n\n" +
-                       "Click Next to begin.",
-                AutoSize = true,
-                Location = new Point(Pad, y),
-                Font = new Font("Segoe UI", 10F),
-            };
-            WelcomePanel.Controls.Add(intro);
-            y += intro.Height + 24;
+            var heading = MakeHeading("Let's set up your server.");
+            heading.Location = new Point(0, y);
+            WelcomePanel.Controls.Add(heading);
+            y += heading.Height + 14;
 
-            var gameLabel = new Label
-            {
-                Text = "Game type:",
-                AutoSize = true,
-                Location = new Point(Pad, y),
-                Font = new Font("Segoe UI Semibold", 9.5F),
-            };
+            var body = MakeBody(
+                "This wizard installs the latest server build, configures the\n" +
+                "Windows Firewall, sets up your network (auto-detected by default,\n" +
+                "or manual override for paid hosting / VPN), and starts the server\n" +
+                "for you.\n\n" +
+                "It takes about a minute. Click Next to begin.");
+            body.Location = new Point(0, y);
+            WelcomePanel.Controls.Add(body);
+            y += body.Height + 28;
+
+            var gameLabel = MakeLabel("Game type", semibold: true);
+            gameLabel.Location = new Point(0, y + 5);
             WelcomePanel.Controls.Add(gameLabel);
 
             GameTypeCombo = new ComboBox
             {
                 DropDownStyle = ComboBoxStyle.DropDownList,
-                Width = 220,
-                Location = new Point(Pad + 100, y - 3),
+                Bounds = new Rectangle(120, y, 260, 28),
+                Font = new Font("Segoe UI", 10F),
+                FlatStyle = FlatStyle.Flat,
+                BackColor = Color.White,
             };
             GameTypeCombo.Items.AddRange(new object[] { "DarkSouls2", "DarkSouls3" });
             GameTypeCombo.SelectedIndexChanged += (s, e) => GameType = (string)GameTypeCombo.SelectedItem;
             WelcomePanel.Controls.Add(GameTypeCombo);
             y += 40;
 
-            var note = new Label
-            {
-                Text = "(Dark Souls II SOTFS is the focus of this fork — the bundled config is\n" +
-                       "preconfigured for it. You can change later in Server Settings.)",
-                AutoSize = true,
-                Location = new Point(Pad, y),
-                ForeColor = Color.Gray,
-                Font = new Font("Segoe UI", 8.5F, FontStyle.Italic),
-            };
+            var note = MakeNote(
+                "Dark Souls II SOTFS is the focus of this fork — the bundled config is\n" +
+                "preconfigured for it. You can change the game type later in Settings.");
+            note.Location = new Point(0, y);
             WelcomePanel.Controls.Add(note);
         }
 
-        // ---------------- Download ----------------
-
         private void BuildDownloadPage()
         {
-            int y = Pad;
+            int y = 0;
 
-            DownloadStatusLabel = new Label
-            {
-                Text = "Checking for the latest server build…",
-                AutoSize = true,
-                Location = new Point(Pad, y),
-                Font = new Font("Segoe UI", 10F),
-            };
+            var heading = MakeHeading("Download the server build.");
+            heading.Location = new Point(0, y);
+            DownloadPanel.Controls.Add(heading);
+            y += heading.Height + 14;
+
+            DownloadStatusLabel = MakeBody("Checking for the latest release…");
+            DownloadStatusLabel.Location = new Point(0, y);
+            DownloadStatusLabel.Width = WelcomePanel.Width;
             DownloadPanel.Controls.Add(DownloadStatusLabel);
-            y += 36;
+            y += 50;
 
             DownloadProgress = new ProgressBar
             {
-                Bounds = new Rectangle(Pad, y, FormWidth - Pad * 2, 24),
+                Bounds = new Rectangle(0, y, WelcomePanel.Width, 22),
                 Style = ProgressBarStyle.Continuous,
                 Minimum = 0, Maximum = 100, Value = 0,
             };
             DownloadPanel.Controls.Add(DownloadProgress);
-            y += DownloadProgress.Height + 8;
+            y += 30;
 
-            DownloadDetailLabel = new Label
-            {
-                Text = "",
-                AutoSize = true,
-                Location = new Point(Pad, y),
-                ForeColor = Color.DimGray,
-                Font = new Font("Segoe UI", 9F),
-            };
+            DownloadDetailLabel = MakeNote("");
+            DownloadDetailLabel.Location = new Point(0, y);
+            DownloadDetailLabel.Width = WelcomePanel.Width;
             DownloadPanel.Controls.Add(DownloadDetailLabel);
-            y += 32;
+            y += 36;
 
-            DownloadButton = new Button
+            DownloadButton = new FlatButton("Download && Install")
             {
-                Text = "Download && Install",
-                Width = 180, Height = 34,
-                Location = new Point(Pad, y),
+                Bounds = new Rectangle(0, y, 200, 36),
+                Style = FlatButton.ButtonStyle.Secondary,
             };
-            DownloadButton.Click += async (s, e) => await StartDownload();
+            DownloadButton.Clicked += async (s, e) => await StartDownload();
             DownloadPanel.Controls.Add(DownloadButton);
         }
 
-        // ---------------- Firewall ----------------
-
         private void BuildFirewallPage()
         {
-            int y = Pad;
+            int y = 0;
 
-            var hint = new Label
-            {
-                Text = "We'll create Windows Firewall rules so that other players can reach\n" +
-                       "your server. This requires administrator privileges — Windows will\n" +
-                       "show a UAC prompt; click Yes when it appears.",
-                AutoSize = true,
-                Location = new Point(Pad, y),
-                Font = new Font("Segoe UI", 10F),
-            };
-            FirewallPanel.Controls.Add(hint);
-            y += hint.Height + 16;
+            var heading = MakeHeading("Configure Windows Firewall.");
+            heading.Location = new Point(0, y);
+            FirewallPanel.Controls.Add(heading);
+            y += heading.Height + 14;
 
-            FirewallStatusLabel = new Label
-            {
-                Text = "Status: checking…",
-                AutoSize = true,
-                Location = new Point(Pad, y),
-                Font = new Font("Segoe UI Semibold", 9.5F),
-            };
+            var body = MakeBody(
+                "We'll create the Windows Firewall rules so other players can reach your\n" +
+                "server. This requires administrator privileges — Windows will show a UAC\n" +
+                "prompt; click Yes when it appears.");
+            body.Location = new Point(0, y);
+            FirewallPanel.Controls.Add(body);
+            y += body.Height + 24;
+
+            FirewallStatusLabel = MakeLabel("Status: checking…", semibold: true);
+            FirewallStatusLabel.Location = new Point(0, y);
+            FirewallStatusLabel.Width = WelcomePanel.Width;
             FirewallPanel.Controls.Add(FirewallStatusLabel);
-            y += 30;
+            y += 36;
 
-            ApplyFirewallButton = new Button
+            ApplyFirewallButton = new FlatButton("Apply Firewall Rules")
             {
-                Text = "Apply Firewall Rules",
-                Width = 200, Height = 34,
-                Location = new Point(Pad, y),
+                Bounds = new Rectangle(0, y, 220, 38),
+                Style = FlatButton.ButtonStyle.Secondary,
             };
-            ApplyFirewallButton.Click += async (s, e) => await ApplyFirewall();
+            ApplyFirewallButton.Clicked += async (s, e) => await ApplyFirewall();
             FirewallPanel.Controls.Add(ApplyFirewallButton);
-            y += 44;
+            y += 56;
 
-            SkipFirewallLink = new Button
+            SkipFirewallLink = new LinkLabel
             {
-                Text = "Skip for now",
-                Width = 120, Height = 24,
-                FlatStyle = FlatStyle.Flat,
-                Location = new Point(Pad, y),
+                Text = "Skip firewall step (use if rules already exist)",
+                AutoSize = true,
+                Location = new Point(0, y),
+                Font = new Font("Segoe UI", 9F),
+                LinkColor = Accent,
+                ActiveLinkColor = AccentHover,
+                LinkBehavior = LinkBehavior.HoverUnderline,
             };
-            SkipFirewallLink.FlatAppearance.BorderSize = 0;
-            SkipFirewallLink.ForeColor = Color.SteelBlue;
-            SkipFirewallLink.Click += (s, e) =>
+            SkipFirewallLink.LinkClicked += (s, e) =>
             {
-                // Allow advancing without firewall — useful when running on a
-                // host that already has rules in place.
                 FirewallReady = true;
                 ShowPage(Page.Network);
             };
             FirewallPanel.Controls.Add(SkipFirewallLink);
         }
 
-        // ---------------- Network ----------------
-
         private void BuildNetworkPage()
         {
-            int y = Pad;
+            int y = 0;
+
+            var heading = MakeHeading("Configure your network.");
+            heading.Location = new Point(0, y);
+            NetworkPanel.Controls.Add(heading);
+            y += heading.Height + 14;
+
+            var body = MakeBody(
+                "We need your public (WAN) IP and your local (LAN) IP. We can detect\n" +
+                "them automatically; switch to Manual override only if you're hosting\n" +
+                "on a paid server or behind a VPN.");
+            body.Location = new Point(0, y);
+            NetworkPanel.Controls.Add(body);
+            y += body.Height + 18;
 
             AutoDetectRadio = new RadioButton
             {
-                Text = "Auto-detect IPs (recommended for home networks)",
+                Text = "Auto-detect IPs (recommended)",
                 AutoSize = true,
                 Checked = true,
-                Location = new Point(Pad, y),
-                Font = new Font("Segoe UI", 9.5F),
+                Location = new Point(0, y),
+                Font = new Font("Segoe UI", 10F),
+                ForeColor = TextPrimary,
+                BackColor = BodyBg,
             };
             AutoDetectRadio.CheckedChanged += (s, e) =>
             {
                 if (AutoDetectRadio.Checked) { ManualNetwork = false; UpdateNetworkUi(); }
             };
             NetworkPanel.Controls.Add(AutoDetectRadio);
-            y += 28;
+            y += 26;
 
             ManualRadio = new RadioButton
             {
-                Text = "Manual override (for paid hosting / VPN)",
+                Text = "Manual override (paid hosting / VPN)",
                 AutoSize = true,
-                Location = new Point(Pad, y),
-                Font = new Font("Segoe UI", 9.5F),
+                Location = new Point(0, y),
+                Font = new Font("Segoe UI", 10F),
+                ForeColor = TextPrimary,
+                BackColor = BodyBg,
             };
             ManualRadio.CheckedChanged += (s, e) =>
             {
@@ -403,173 +488,167 @@ namespace Loader.Forms
             NetworkPanel.Controls.Add(ManualRadio);
             y += 36;
 
-            var pubLabel = new Label
-            {
-                Text = "Public IP (WAN):",
-                AutoSize = true,
-                Location = new Point(Pad, y + 4),
-            };
+            var pubLabel = MakeLabel("Public IP (WAN)");
+            pubLabel.Location = new Point(0, y + 6);
             NetworkPanel.Controls.Add(pubLabel);
 
             PublicIpTextBox = new TextBox
             {
-                Width = 240,
-                Location = new Point(Pad + 130, y),
-                Font = new Font("Consolas", 10F),
+                Bounds = new Rectangle(150, y, 320, 28),
+                Font = new Font("Consolas", 11F),
+                BorderStyle = BorderStyle.FixedSingle,
             };
-            PublicIpTextBox.TextChanged += (s, e) => { if (ManualNetwork) PublicIp = PublicIpTextBox.Text.Trim(); };
-            NetworkPanel.Controls.Add(PublicIpTextBox);
-            y += 32;
-
-            var privLabel = new Label
+            PublicIpTextBox.TextChanged += (s, e) =>
             {
-                Text = "Private IP (LAN):",
-                AutoSize = true,
-                Location = new Point(Pad, y + 4),
+                if (ManualNetwork) PublicIp = PublicIpTextBox.Text.Trim();
             };
+            NetworkPanel.Controls.Add(PublicIpTextBox);
+            y += 36;
+
+            var privLabel = MakeLabel("Private IP (LAN)");
+            privLabel.Location = new Point(0, y + 6);
             NetworkPanel.Controls.Add(privLabel);
 
             PrivateIpTextBox = new TextBox
             {
-                Width = 240,
-                Location = new Point(Pad + 130, y),
-                Font = new Font("Consolas", 10F),
+                Bounds = new Rectangle(150, y, 320, 28),
+                Font = new Font("Consolas", 11F),
+                BorderStyle = BorderStyle.FixedSingle,
             };
-            PrivateIpTextBox.TextChanged += (s, e) => { if (ManualNetwork) PrivateIp = PrivateIpTextBox.Text.Trim(); };
-            NetworkPanel.Controls.Add(PrivateIpTextBox);
-            y += 36;
-
-            RedetectButton = new Button
+            PrivateIpTextBox.TextChanged += (s, e) =>
             {
-                Text = "Re-detect",
-                Width = 110, Height = 28,
-                Location = new Point(Pad + 130, y),
+                if (ManualNetwork) PrivateIp = PrivateIpTextBox.Text.Trim();
             };
-            RedetectButton.Click += async (s, e) => await DetectIps();
-            NetworkPanel.Controls.Add(RedetectButton);
+            NetworkPanel.Controls.Add(PrivateIpTextBox);
             y += 40;
 
-            NetworkStatusLabel = new Label
+            RedetectButton = new FlatButton("Re-detect")
             {
-                Text = "",
-                AutoSize = true,
-                Location = new Point(Pad, y),
-                ForeColor = Color.DimGray,
-                Font = new Font("Segoe UI", 8.5F, FontStyle.Italic),
+                Bounds = new Rectangle(150, y, 120, 32),
+                Style = FlatButton.ButtonStyle.Secondary,
             };
+            RedetectButton.Clicked += async (s, e) => await DetectIps();
+            NetworkPanel.Controls.Add(RedetectButton);
+            y += 42;
+
+            NetworkStatusLabel = MakeNote("");
+            NetworkStatusLabel.Location = new Point(0, y);
+            NetworkStatusLabel.Width = WelcomePanel.Width;
             NetworkPanel.Controls.Add(NetworkStatusLabel);
         }
 
-        private void UpdateNetworkUi()
-        {
-            PublicIpTextBox.ReadOnly = !ManualNetwork;
-            PrivateIpTextBox.ReadOnly = !ManualNetwork;
-            PublicIpTextBox.BackColor = ManualNetwork ? SystemColors.Window : SystemColors.Control;
-            PrivateIpTextBox.BackColor = ManualNetwork ? SystemColors.Window : SystemColors.Control;
-            RedetectButton.Enabled = !ManualNetwork;
-        }
-
-        // ---------------- Settings ----------------
-
         private void BuildSettingsPage()
         {
-            int y = Pad;
+            int y = 0;
+
+            var heading = MakeHeading("Server settings.");
+            heading.Location = new Point(0, y);
+            SettingsPanel.Controls.Add(heading);
+            y += heading.Height + 14;
+
+            var body = MakeBody(
+                "Choose how your server identifies itself in the public list (or hide it\n" +
+                "entirely and only share the IP/password with friends).");
+            body.Location = new Point(0, y);
+            SettingsPanel.Controls.Add(body);
+            y += body.Height + 18;
 
             void AddRow(string label, Control control)
             {
-                var l = new Label { Text = label, AutoSize = true, Location = new Point(Pad, y + 4) };
+                var l = MakeLabel(label);
+                l.Location = new Point(0, y + 6);
                 SettingsPanel.Controls.Add(l);
-                control.Location = new Point(Pad + 140, y);
-                control.Width = FormWidth - Pad * 2 - 140;
+                control.Bounds = new Rectangle(170, y, FormW - PadX * 2 - 170, 28);
                 SettingsPanel.Controls.Add(control);
-                y += 34;
+                y += 36;
             }
 
-            NameTextBox = new TextBox { Font = new Font("Segoe UI", 10F) };
+            NameTextBox = new TextBox { Font = new Font("Segoe UI", 10F), BorderStyle = BorderStyle.FixedSingle };
             NameTextBox.TextChanged += (s, e) => ServerName = NameTextBox.Text;
-            AddRow("Server Name:", NameTextBox);
+            AddRow("Server Name", NameTextBox);
 
-            DescriptionTextBox = new TextBox { Font = new Font("Segoe UI", 10F) };
+            DescriptionTextBox = new TextBox { Font = new Font("Segoe UI", 10F), BorderStyle = BorderStyle.FixedSingle };
             DescriptionTextBox.TextChanged += (s, e) => ServerDescription = DescriptionTextBox.Text;
-            AddRow("Description:", DescriptionTextBox);
+            AddRow("Description", DescriptionTextBox);
 
-            PasswordTextBox = new TextBox { Font = new Font("Segoe UI", 10F), UseSystemPasswordChar = false };
+            PasswordTextBox = new TextBox { Font = new Font("Segoe UI", 10F), BorderStyle = BorderStyle.FixedSingle };
             PasswordTextBox.TextChanged += (s, e) => Password = PasswordTextBox.Text;
-            AddRow("Password (optional):", PasswordTextBox);
+            AddRow("Password (optional)", PasswordTextBox);
 
+            y += 6;
             AdvertiseCheckBox = new CheckBox
             {
                 Text = "List my server publicly on the master server",
                 AutoSize = true,
-                Location = new Point(Pad, y),
+                Location = new Point(0, y),
                 Checked = true,
-                Font = new Font("Segoe UI", 9.5F),
+                Font = new Font("Segoe UI", 10F),
+                ForeColor = TextPrimary,
+                BackColor = BodyBg,
             };
             AdvertiseCheckBox.CheckedChanged += (s, e) => Advertise = AdvertiseCheckBox.Checked;
             SettingsPanel.Controls.Add(AdvertiseCheckBox);
-            y += 28;
+            y += 26;
 
-            var note = new Label
-            {
-                Text = "Uncheck if you only want to play with friends who know your IP\n" +
-                       "and password (the server stays reachable, just hidden from the list).",
-                AutoSize = true,
-                Location = new Point(Pad + 24, y),
-                ForeColor = Color.DimGray,
-                Font = new Font("Segoe UI", 8.5F, FontStyle.Italic),
-            };
+            var note = MakeNote(
+                "Uncheck to keep the server unlisted. It stays reachable, just hidden\n" +
+                "from the public master list — friends can join with your IP and password.");
+            note.Location = new Point(22, y);
             SettingsPanel.Controls.Add(note);
         }
 
-        // ---------------- Done ----------------
-
         private void BuildDonePage()
         {
-            int y = Pad;
+            int y = 0;
 
-            var bigLabel = new Label
-            {
-                Text = "Setup complete!",
-                Font = new Font("Segoe UI Semibold", 14F),
-                AutoSize = true,
-                Location = new Point(Pad, y),
-                ForeColor = Color.FromArgb(60, 110, 60),
-            };
-            DonePanel.Controls.Add(bigLabel);
-            y += 40;
+            var heading = MakeHeading("Setup complete!");
+            heading.ForeColor = OkGreen;
+            heading.Location = new Point(0, y);
+            DonePanel.Controls.Add(heading);
+            y += heading.Height + 14;
+
+            var body = MakeBody(
+                "Everything is configured. Click Start Server below, then close this\n" +
+                "wizard and use the main Loader window to launch the game.");
+            body.Location = new Point(0, y);
+            DonePanel.Controls.Add(body);
+            y += body.Height + 18;
 
             DoneSummaryLabel = new Label
             {
-                AutoSize = true,
-                Location = new Point(Pad, y),
-                Font = new Font("Segoe UI", 9.5F),
+                AutoSize = false,
+                Bounds = new Rectangle(0, y, WelcomePanel.Width, 140),
+                Font = new Font("Consolas", 9.5F),
+                ForeColor = TextPrimary,
+                BackColor = Color.FromArgb(248, 246, 240),
                 Text = "",
+                Padding = new Padding(12),
+                BorderStyle = BorderStyle.FixedSingle,
             };
             DonePanel.Controls.Add(DoneSummaryLabel);
-            y += 130;
+            y += DoneSummaryLabel.Height + 18;
 
-            StartServerButton = new Button
+            StartServerButton = new FlatButton("Start Server")
             {
-                Text = "Start Server",
-                Width = 180, Height = 36,
-                Location = new Point(Pad, y),
-                Font = new Font("Segoe UI Semibold", 10F),
+                Bounds = new Rectangle(0, y, 180, 40),
+                Style = FlatButton.ButtonStyle.Primary,
             };
-            StartServerButton.Click += (s, e) => StartLocalServer();
+            StartServerButton.Clicked += (s, e) => ToggleLocalServer();
             DonePanel.Controls.Add(StartServerButton);
 
             ServerStatusLabel = new Label
             {
                 AutoSize = true,
-                Location = new Point(Pad + 200, y + 8),
+                Location = new Point(200, y + 10),
                 Font = new Font("Segoe UI Semibold", 10F),
                 Text = "",
+                BackColor = BodyBg,
             };
             DonePanel.Controls.Add(ServerStatusLabel);
         }
 
         // ============================================================
-        //  Page navigation / lifecycle
+        //  Page navigation
         // ============================================================
 
         private void ShowPage(Page page)
@@ -584,40 +663,20 @@ namespace Loader.Forms
             DonePanel.Visible     = page == Page.Done;
 
             BackButton.Enabled = page != Page.Welcome;
-            NextButton.Text = page == Page.Done ? "Finish" : "Next >";
+            NextButton.Text = page == Page.Done ? "Finish" : "Next";
+
+            int idx = (int)page;
+            TitleLabel.Text = StepTitles[idx];
+            Stepper.SetActiveStep(idx);
 
             switch (page)
             {
-                case Page.Welcome:
-                    TitleLabel.Text = "Welcome";
-                    StepLabel.Text = "Step 1 of 6";
-                    GameTypeCombo.SelectedItem = GameType;
-                    break;
-                case Page.Download:
-                    TitleLabel.Text = "Download Server";
-                    StepLabel.Text = "Step 2 of 6";
-                    OnEnterDownloadPage();
-                    break;
-                case Page.Firewall:
-                    TitleLabel.Text = "Windows Firewall";
-                    StepLabel.Text = "Step 3 of 6";
-                    OnEnterFirewallPage();
-                    break;
-                case Page.Network:
-                    TitleLabel.Text = "Network Configuration";
-                    StepLabel.Text = "Step 4 of 6";
-                    OnEnterNetworkPage();
-                    break;
-                case Page.Settings:
-                    TitleLabel.Text = "Server Settings";
-                    StepLabel.Text = "Step 5 of 6";
-                    OnEnterSettingsPage();
-                    break;
-                case Page.Done:
-                    TitleLabel.Text = "Finish";
-                    StepLabel.Text = "Step 6 of 6";
-                    OnEnterDonePage();
-                    break;
+                case Page.Welcome:  GameTypeCombo.SelectedItem = GameType; break;
+                case Page.Download: OnEnterDownloadPage(); break;
+                case Page.Firewall: OnEnterFirewallPage(); break;
+                case Page.Network:  OnEnterNetworkPage(); break;
+                case Page.Settings: OnEnterSettingsPage(); break;
+                case Page.Done:     OnEnterDonePage(); break;
             }
         }
 
@@ -625,21 +684,16 @@ namespace Loader.Forms
         {
             switch (Current)
             {
-                case Page.Welcome:
-                    ShowPage(Page.Download);
-                    break;
+                case Page.Welcome: ShowPage(Page.Download); break;
                 case Page.Download:
                     if (!DownloadComplete && !LocalServerPaths.ServerInstalled)
                     {
-                        MessageBox.Show("Please download the server first, or click 'Skip' if it's already installed.",
-                            "Download required", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                        ShowToast("Please download the server first, or skip if it's already installed.");
                         return;
                     }
                     ShowPage(Page.Firewall);
                     break;
-                case Page.Firewall:
-                    ShowPage(Page.Network);
-                    break;
+                case Page.Firewall: ShowPage(Page.Network); break;
                 case Page.Network:
                     if (!ValidateNetwork()) return;
                     ShowPage(Page.Settings);
@@ -673,19 +727,18 @@ namespace Loader.Forms
 
         private void OnEnterDownloadPage()
         {
-            // Already installed?
             if (LocalServerPaths.ServerInstalled)
             {
-                DownloadStatusLabel.Text = "Server is already installed. You can re-download to update, or skip ahead.";
+                DownloadStatusLabel.Text = "The server is already installed on this machine. You can re-download to update or skip ahead.";
                 DownloadProgress.Value = 100;
                 DownloadDetailLabel.Text = "Installed at: " + LocalServerPaths.ServerDirectory;
                 DownloadButton.Text = "Re-download Latest";
                 DownloadButton.Enabled = true;
-                DownloadComplete = true; // allows Next without forcing a download
+                DownloadComplete = true;
                 return;
             }
 
-            DownloadStatusLabel.Text = "The server has not been installed yet. Click Download to fetch the latest build (~115 MB).";
+            DownloadStatusLabel.Text = "The server is not installed yet. Click Download to fetch the latest build (~115 MB).";
             DownloadProgress.Value = 0;
             DownloadDetailLabel.Text = "";
             DownloadButton.Text = "Download && Install";
@@ -702,10 +755,9 @@ namespace Loader.Forms
 
             try
             {
-                // Stop server if running so we can overwrite files.
                 LocalServerProcess.Stop();
 
-                DownloadStatusLabel.Text = "Resolving latest release from " + ReleaseRepo + "…";
+                DownloadStatusLabel.Text = "Resolving the latest release from " + ReleaseRepo + "…";
                 DownloadDetailLabel.Text = "";
                 DownloadProgress.Value = 0;
 
@@ -715,8 +767,10 @@ namespace Loader.Forms
 
                 if (info == null || string.IsNullOrEmpty(info.AssetUrl))
                 {
-                    DownloadStatusLabel.Text = "Could not resolve the latest release. Check your connection or that " +
-                                               ReleaseRepo + " has a public release with windows.zip.";
+                    DownloadStatusLabel.Text =
+                        "Could not resolve the latest release. Check your internet connection or that " +
+                        ReleaseRepo + " has a published release.";
+                    DownloadStatusLabel.ForeColor = ErrRed;
                     DownloadButton.Enabled = true;
                     BackButton.Enabled = true;
                     NextButton.Enabled = true;
@@ -726,6 +780,7 @@ namespace Loader.Forms
 
                 ResolvedReleaseTag = info.TagName ?? "";
                 DownloadStatusLabel.Text = "Downloading release " + ResolvedReleaseTag + "…";
+                DownloadStatusLabel.ForeColor = TextPrimary;
 
                 var zipPath = Path.Combine(LocalServerPaths.InstallRoot, "_release.zip");
 
@@ -735,13 +790,14 @@ namespace Loader.Forms
                     BeginInvoke((MethodInvoker)delegate
                     {
                         DownloadProgress.Value = Math.Max(0, Math.Min(100, pct));
-                        DownloadDetailLabel.Text = $"{recv / (1024 * 1024)} / {total / (1024 * 1024)} MB";
+                        DownloadDetailLabel.Text = (recv / (1024 * 1024)) + " / " + (total / (1024 * 1024)) + " MB";
                     });
                 }, DownloadCts.Token);
 
                 if (!ok)
                 {
                     DownloadStatusLabel.Text = "Download failed.";
+                    DownloadStatusLabel.ForeColor = ErrRed;
                     DownloadButton.Enabled = true;
                     BackButton.Enabled = true;
                     NextButton.Enabled = true;
@@ -761,11 +817,13 @@ namespace Loader.Forms
                 if (!extracted)
                 {
                     DownloadStatusLabel.Text = "Extraction failed.";
+                    DownloadStatusLabel.ForeColor = ErrRed;
                     DownloadButton.Enabled = true;
                 }
                 else
                 {
                     DownloadStatusLabel.Text = "Done — release " + ResolvedReleaseTag + " installed.";
+                    DownloadStatusLabel.ForeColor = OkGreen;
                     DownloadDetailLabel.Text = "Installed at: " + LocalServerPaths.ServerDirectory;
                     DownloadComplete = true;
                     DownloadButton.Text = "Re-download Latest";
@@ -775,6 +833,7 @@ namespace Loader.Forms
             catch (Exception ex)
             {
                 DownloadStatusLabel.Text = "Error: " + ex.Message;
+                DownloadStatusLabel.ForeColor = ErrRed;
                 DownloadButton.Enabled = true;
             }
             finally
@@ -785,7 +844,7 @@ namespace Loader.Forms
             }
         }
 
-        // ---------------- Firewall ----------------
+        // ----- firewall -----
 
         private void OnEnterFirewallPage()
         {
@@ -797,19 +856,17 @@ namespace Loader.Forms
             bool installed = FirewallManager.AllRulesInstalled();
             FirewallReady = installed;
             FirewallStatusLabel.Text = installed
-                ? "Status: ✅ Firewall rules are installed."
-                : "Status: ⚠️ Firewall rules are not installed yet.";
-            FirewallStatusLabel.ForeColor = installed
-                ? Color.FromArgb(60, 110, 60)
-                : Color.DarkOrange;
+                ? "Status: Firewall rules are installed."
+                : "Status: Firewall rules are not installed yet.";
+            FirewallStatusLabel.ForeColor = installed ? OkGreen : WarnAmber;
             ApplyFirewallButton.Text = installed ? "Reapply Rules" : "Apply Firewall Rules";
         }
 
         private async Task ApplyFirewall()
         {
             ApplyFirewallButton.Enabled = false;
-            FirewallStatusLabel.Text = "Status: applying rules… Approve the UAC prompt.";
-            FirewallStatusLabel.ForeColor = Color.DimGray;
+            FirewallStatusLabel.Text = "Status: applying rules… approve the UAC prompt that appears.";
+            FirewallStatusLabel.ForeColor = TextSubtle;
 
             string serverExe = LocalServerPaths.ServerExecutable;
             string loaderExe = Application.ExecutablePath;
@@ -817,8 +874,8 @@ namespace Loader.Forms
             bool ok = await Task.Run(() => FirewallManager.ApplyRulesElevated(serverExe, loaderExe));
             if (!ok)
             {
-                FirewallStatusLabel.Text = "Status: ❌ Failed (UAC denied or netsh error).";
-                FirewallStatusLabel.ForeColor = Color.IndianRed;
+                FirewallStatusLabel.Text = "Status: failed (UAC denied or netsh error).";
+                FirewallStatusLabel.ForeColor = ErrRed;
                 ApplyFirewallButton.Enabled = true;
                 return;
             }
@@ -827,7 +884,7 @@ namespace Loader.Forms
             ApplyFirewallButton.Enabled = true;
         }
 
-        // ---------------- Network ----------------
+        // ----- network -----
 
         private void OnEnterNetworkPage()
         {
@@ -838,18 +895,27 @@ namespace Loader.Forms
             }
             else
             {
-                PublicIpTextBox.Text = PublicIp;
-                PrivateIpTextBox.Text = PrivateIp;
+                SetIpText(PublicIpTextBox, PublicIp);
+                SetIpText(PrivateIpTextBox, PrivateIp);
             }
+        }
+
+        private void UpdateNetworkUi()
+        {
+            PublicIpTextBox.ReadOnly = !ManualNetwork;
+            PrivateIpTextBox.ReadOnly = !ManualNetwork;
+            PublicIpTextBox.BackColor = ManualNetwork ? Color.White : Color.FromArgb(245, 244, 240);
+            PrivateIpTextBox.BackColor = ManualNetwork ? Color.White : Color.FromArgb(245, 244, 240);
+            RedetectButton.Enabled = !ManualNetwork;
         }
 
         private async Task DetectIps()
         {
             NetworkStatusLabel.Text = "Detecting…";
+            NetworkStatusLabel.ForeColor = TextSubtle;
             RedetectButton.Enabled = false;
 
-            string wan = "";
-            string lan = "";
+            string wan = "", lan = "";
             await Task.Run(() =>
             {
                 wan = NetUtils.GetMachineIPv4(true);
@@ -858,40 +924,47 @@ namespace Loader.Forms
 
             PublicIp = wan ?? "";
             PrivateIp = lan ?? "";
-            PublicIpTextBox.Text = PublicIp;
-            PrivateIpTextBox.Text = PrivateIp;
+            SetIpText(PublicIpTextBox, PublicIp);
+            SetIpText(PrivateIpTextBox, PrivateIp);
 
             if (string.IsNullOrEmpty(PublicIp) || string.IsNullOrEmpty(PrivateIp))
             {
-                NetworkStatusLabel.Text = "Could not detect one or both IPs. Switch to Manual override and enter them.";
-                NetworkStatusLabel.ForeColor = Color.DarkOrange;
+                NetworkStatusLabel.Text = "Could not detect one or both IPs. Switch to Manual override and enter them yourself.";
+                NetworkStatusLabel.ForeColor = WarnAmber;
             }
             else
             {
                 NetworkStatusLabel.Text = "Detected automatically.";
-                NetworkStatusLabel.ForeColor = Color.DimGray;
+                NetworkStatusLabel.ForeColor = OkGreen;
             }
             RedetectButton.Enabled = !ManualNetwork;
+        }
+
+        // Set text in a textbox and reset cursor to start so the leading
+        // characters are always visible (otherwise the textbox scrolls right).
+        private static void SetIpText(TextBox tb, string value)
+        {
+            tb.Text = value;
+            tb.SelectionStart = 0;
+            tb.SelectionLength = 0;
         }
 
         private bool ValidateNetwork()
         {
             if (string.IsNullOrWhiteSpace(PublicIp) || string.IsNullOrWhiteSpace(PrivateIp))
             {
-                MessageBox.Show("Both Public and Private IPs are required.",
-                    "Missing IP", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                ShowToast("Both Public and Private IPs are required.");
                 return false;
             }
             if (!IPAddress.TryParse(PublicIp, out _) || !IPAddress.TryParse(PrivateIp, out _))
             {
-                MessageBox.Show("One of the IPs has an invalid format.",
-                    "Invalid IP", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                ShowToast("One of the IPs has an invalid format.");
                 return false;
             }
             return true;
         }
 
-        // ---------------- Settings ----------------
+        // ----- settings -----
 
         private void OnEnterSettingsPage()
         {
@@ -901,18 +974,18 @@ namespace Loader.Forms
             AdvertiseCheckBox.Checked = Advertise;
         }
 
-        // ---------------- Done ----------------
+        // ----- done -----
 
         private void OnEnterDonePage()
         {
             DoneSummaryLabel.Text =
-                "Game type:    " + GameType + "\n" +
-                "Server name:  " + ServerName + "\n" +
-                "Public IP:    " + PublicIp + "\n" +
-                "Private IP:   " + PrivateIp + "\n" +
-                "Advertise:    " + (Advertise ? "Yes (visible in master list)" : "No (hidden)") + "\n" +
-                "Password:     " + (string.IsNullOrEmpty(Password) ? "(none)" : "***") + "\n" +
-                "Release:      " + (string.IsNullOrEmpty(ResolvedReleaseTag) ? "(existing install)" : ResolvedReleaseTag);
+                "Game type    " + GameType + "\r\n" +
+                "Server name  " + ServerName + "\r\n" +
+                "Public IP    " + PublicIp + "\r\n" +
+                "Private IP   " + PrivateIp + "\r\n" +
+                "Advertise    " + (Advertise ? "Yes (visible in master list)" : "No (hidden)") + "\r\n" +
+                "Password     " + (string.IsNullOrEmpty(Password) ? "(none)" : "***") + "\r\n" +
+                "Release      " + (string.IsNullOrEmpty(ResolvedReleaseTag) ? "(existing install)" : ResolvedReleaseTag);
 
             UpdateServerStatusLabel();
         }
@@ -922,19 +995,19 @@ namespace Loader.Forms
             var st = LocalServerProcess.QueryStatus();
             if (st.Running)
             {
-                ServerStatusLabel.Text = "🟢 Running (PID " + st.Pid + ")";
-                ServerStatusLabel.ForeColor = Color.FromArgb(40, 130, 40);
+                ServerStatusLabel.Text = "● Running (PID " + st.Pid + ")";
+                ServerStatusLabel.ForeColor = OkGreen;
                 StartServerButton.Text = "Stop Server";
             }
             else
             {
-                ServerStatusLabel.Text = "🔴 Not running";
-                ServerStatusLabel.ForeColor = Color.IndianRed;
+                ServerStatusLabel.Text = "● Not running";
+                ServerStatusLabel.ForeColor = ErrRed;
                 StartServerButton.Text = "Start Server";
             }
         }
 
-        private void StartLocalServer()
+        private void ToggleLocalServer()
         {
             var st = LocalServerProcess.QueryStatus();
             if (st.Running)
@@ -969,32 +1042,22 @@ namespace Loader.Forms
             PrivateIp = cfg.ServerPrivateHostname;
         }
 
-        /// <summary>
-        /// Writes the wizard's in-memory settings into Server\Saved\default\config.json.
-        /// If the file doesn't exist yet, runs Server.exe once to generate the default
-        /// (then patches it). Returns true on success.
-        /// </summary>
         private bool ApplyConfig()
         {
             if (!LocalServerPaths.ServerInstalled)
             {
-                MessageBox.Show("Server is not installed. Go back to Step 2 and download it first.",
-                    "Server missing", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                ShowToast("Server is not installed. Go back to step 2 and download it.");
                 return false;
             }
 
-            // Make sure config.json exists. If not, run Server.exe briefly
-            // so it generates a default — then immediately stop it.
             if (!LocalServerPaths.ConfigExists)
             {
-                var ok = LocalServerProcess.Start(out string err);
-                if (!ok)
+                if (!LocalServerProcess.Start(out string err))
                 {
                     MessageBox.Show("Could not generate default config:\n\n" + err,
                         "Setup", MessageBoxButtons.OK, MessageBoxIcon.Error);
                     return false;
                 }
-                // Wait briefly for the default to be written.
                 for (int i = 0; i < 20 && !LocalServerPaths.ConfigExists; i++)
                 {
                     Thread.Sleep(150);
@@ -1023,9 +1086,262 @@ namespace Loader.Forms
 
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
-            // Don't allow closing mid-download — cancel it cleanly first.
             try { DownloadCts?.Cancel(); } catch { }
             base.OnFormClosing(e);
+        }
+
+        // ============================================================
+        //  Visual helpers
+        // ============================================================
+
+        private static Label MakeHeading(string text)
+        {
+            return new Label
+            {
+                Text = text,
+                AutoSize = false,
+                Bounds = new Rectangle(0, 0, FormW - PadX * 2, 30),
+                Font = new Font("Segoe UI Semibold", 13F),
+                ForeColor = TextPrimary,
+                BackColor = BodyBg,
+                TextAlign = ContentAlignment.MiddleLeft,
+            };
+        }
+
+        private static Label MakeBody(string text)
+        {
+            return new Label
+            {
+                Text = text,
+                AutoSize = true,
+                MaximumSize = new Size(FormW - PadX * 2, 0),
+                Font = new Font("Segoe UI", 10F),
+                ForeColor = TextPrimary,
+                BackColor = BodyBg,
+            };
+        }
+
+        private static Label MakeLabel(string text, bool semibold = false)
+        {
+            return new Label
+            {
+                Text = text,
+                AutoSize = true,
+                Font = new Font("Segoe UI" + (semibold ? " Semibold" : ""), 10F),
+                ForeColor = TextPrimary,
+                BackColor = BodyBg,
+            };
+        }
+
+        private static Label MakeNote(string text)
+        {
+            return new Label
+            {
+                Text = text,
+                AutoSize = true,
+                MaximumSize = new Size(FormW - PadX * 2, 0),
+                Font = new Font("Segoe UI", 9F, FontStyle.Italic),
+                ForeColor = TextSubtle,
+                BackColor = BodyBg,
+            };
+        }
+
+        private void ShowToast(string text)
+        {
+            // Quick non-blocking message; could be a custom popup later.
+            MessageBox.Show(this, text, "Setup", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        // ============================================================
+        //  StepIndicator — horizontal numbered circles connected by a line
+        // ============================================================
+        private class StepIndicator : Control
+        {
+            public Color ActiveColor = Color.Orange;
+            public Color DoneColor = Color.DimGray;
+            public Color FutureColor = Color.LightGray;
+            public Color LabelColor = Color.White;
+
+            private readonly string[] Labels;
+            private int ActiveIndex = 0;
+
+            public StepIndicator(string[] labels)
+            {
+                Labels = labels ?? new string[0];
+                DoubleBuffered = true;
+                SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint, true);
+            }
+
+            public void SetActiveStep(int idx)
+            {
+                ActiveIndex = Math.Max(0, Math.Min(Labels.Length - 1, idx));
+                Invalidate();
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                var g = e.Graphics;
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+                g.Clear(BackColor);
+
+                if (Labels.Length == 0) return;
+
+                int circleD = 20;
+                int circleR = circleD / 2;
+                int W = ClientSize.Width;
+                int H = ClientSize.Height;
+
+                // X centre for each circle.
+                float[] cx = new float[Labels.Length];
+                for (int i = 0; i < Labels.Length; i++)
+                {
+                    if (Labels.Length == 1) cx[i] = W / 2f;
+                    else cx[i] = circleR + i * (float)(W - circleD) / (Labels.Length - 1);
+                }
+                float cy = circleR + 1;
+
+                using (var donePen = new Pen(DoneColor, 2))
+                using (var futurePen = new Pen(FutureColor, 2))
+                {
+                    // connector segments
+                    for (int i = 0; i < Labels.Length - 1; i++)
+                    {
+                        var pen = i < ActiveIndex ? donePen : futurePen;
+                        g.DrawLine(pen, cx[i] + circleR, cy, cx[i + 1] - circleR, cy);
+                    }
+                }
+
+                using (var labelFont = new Font("Segoe UI", 8F))
+                using (var labelBrush = new SolidBrush(LabelColor))
+                using (var fmt = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Near })
+                {
+                    for (int i = 0; i < Labels.Length; i++)
+                    {
+                        Color fill;
+                        Color text;
+                        if (i < ActiveIndex)      { fill = DoneColor;   text = Color.White; }
+                        else if (i == ActiveIndex){ fill = ActiveColor; text = Color.White; }
+                        else                      { fill = FutureColor; text = Color.White; }
+
+                        var rect = new RectangleF(cx[i] - circleR, cy - circleR, circleD, circleD);
+                        using (var brush = new SolidBrush(fill))
+                            g.FillEllipse(brush, rect);
+
+                        // step number inside the circle
+                        using (var numFont = new Font("Segoe UI Semibold", 8F))
+                        using (var numBrush = new SolidBrush(text))
+                        {
+                            string num = (i + 1).ToString();
+                            var size = g.MeasureString(num, numFont);
+                            g.DrawString(num, numFont, numBrush,
+                                cx[i] - size.Width / 2f, cy - size.Height / 2f);
+                        }
+
+                        // label below
+                        var labelRect = new RectangleF(cx[i] - 60, cy + circleR + 1, 120, H - cy - circleR);
+                        g.DrawString(Labels[i], labelFont, labelBrush, labelRect, fmt);
+                    }
+                }
+            }
+        }
+
+        // ============================================================
+        //  FlatButton — owner-drawn button with primary/secondary/ghost styles
+        // ============================================================
+        private class FlatButton : Control
+        {
+            public enum ButtonStyle { Primary, Secondary, Ghost }
+
+            public event EventHandler Clicked;
+            public ButtonStyle Style { get; set; } = ButtonStyle.Secondary;
+
+            private bool Hover, Down;
+
+            public FlatButton(string text)
+            {
+                Text = text;
+                Font = new Font("Segoe UI Semibold", 10F);
+                Cursor = Cursors.Hand;
+                DoubleBuffered = true;
+                SetStyle(ControlStyles.OptimizedDoubleBuffer | ControlStyles.AllPaintingInWmPaint | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
+                MouseEnter += (s, e) => { Hover = true; Invalidate(); };
+                MouseLeave += (s, e) => { Hover = false; Down = false; Invalidate(); };
+                MouseDown += (s, e) => { Down = true; Invalidate(); };
+                MouseUp += (s, e) =>
+                {
+                    bool wasDown = Down;
+                    Down = false;
+                    Invalidate();
+                    if (wasDown && Enabled && ClientRectangle.Contains(e.Location))
+                    {
+                        Clicked?.Invoke(this, EventArgs.Empty);
+                    }
+                };
+            }
+
+            protected override void OnEnabledChanged(EventArgs e)
+            {
+                base.OnEnabledChanged(e);
+                Invalidate();
+            }
+
+            protected override void OnPaint(PaintEventArgs e)
+            {
+                var g = e.Graphics;
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.TextRenderingHint = System.Drawing.Text.TextRenderingHint.ClearTypeGridFit;
+
+                Color bg, fg, border;
+                switch (Style)
+                {
+                    case ButtonStyle.Primary:
+                        bg = Enabled ? (Down ? Color.FromArgb(170, 110, 35) : (Hover ? AccentHover : Accent))
+                                     : Color.FromArgb(220, 200, 175);
+                        fg = AccentText;
+                        border = bg;
+                        break;
+                    case ButtonStyle.Ghost:
+                        bg = Hover ? Color.FromArgb(238, 235, 226) : Color.Transparent;
+                        fg = Enabled ? TextPrimary : Color.Gray;
+                        border = Color.Transparent;
+                        break;
+                    default: // Secondary
+                        bg = Hover ? Color.FromArgb(245, 243, 235) : Color.White;
+                        fg = Enabled ? TextPrimary : Color.Gray;
+                        border = Color.FromArgb(200, 195, 185);
+                        break;
+                }
+
+                var rect = ClientRectangle;
+                var bgRect = new Rectangle(0, 0, rect.Width - 1, rect.Height - 1);
+
+                using (var path = RoundedRect(bgRect, 4))
+                {
+                    using (var brush = new SolidBrush(bg))
+                        g.FillPath(brush, path);
+                    if (border.A > 0)
+                    {
+                        using (var pen = new Pen(border, 1))
+                            g.DrawPath(pen, path);
+                    }
+                }
+
+                TextRenderer.DrawText(g, Text, Font, rect, fg,
+                    TextFormatFlags.HorizontalCenter | TextFormatFlags.VerticalCenter | TextFormatFlags.SingleLine);
+            }
+
+            private static GraphicsPath RoundedRect(Rectangle r, int radius)
+            {
+                var path = new GraphicsPath();
+                int d = radius * 2;
+                path.AddArc(r.X, r.Y, d, d, 180, 90);
+                path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+                path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+                path.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+                path.CloseFigure();
+                return path;
+            }
         }
     }
 }
