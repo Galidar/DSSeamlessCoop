@@ -1,0 +1,46 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <RootNamespace>Bonfire.Service</RootNamespace>
+    <AssemblyName>BonfireService</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <PlatformTarget>x64</PlatformTarget>
+    <Platforms>x64</Platforms>
+    <UseWindowsForms>false</UseWindowsForms>
+    <PublishSingleFile>true</PublishSingleFile>
+    <SelfContained>true</SelfContained>
+    <RuntimeIdentifier>win-x64</RuntimeIdentifier>
+    <IncludeNativeLibrariesForSelfExtract>true</IncludeNativeLibrariesForSelfExtract>
+    <Version>0.1.0</Version>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="System.Text.Json" Version="8.0.5" />
+  </ItemGroup>
+
+  <!-- Reuse the proven Win32 / Steam / patching code from the original Loader.
+       Each file ships under namespace `Loader` and is pure logic (no WinForms
+       refs). We link it with <Link> so Visual Studio shows them grouped under
+       a single virtual folder. -->
+  <ItemGroup>
+    <Compile Include="..\Loader\Utils\WinAPI.cs"          Link="External\WinAPI.cs" />
+    <Compile Include="..\Loader\Utils\ExeUtils.cs"        Link="External\ExeUtils.cs" />
+    <Compile Include="..\Loader\Utils\EncryptionUtils.cs" Link="External\EncryptionUtils.cs" />
+    <Compile Include="..\Loader\Utils\PatchingUtils.cs"   Link="External\PatchingUtils.cs" />
+    <Compile Include="..\Loader\Utils\SteamUtils.cs"      Link="External\SteamUtils.cs" />
+    <Compile Include="..\Loader\Utils\NetUtils.cs"        Link="External\NetUtils.cs" />
+    <Compile Include="..\Loader\Config\BuildConfig.cs"    Link="External\BuildConfig.cs" />
+    <Compile Include="..\Loader\Config\InjectionConfig.cs" Link="External\InjectionConfig.cs" />
+    <Compile Include="..\Loader\Config\ServerConfig.cs"   Link="External\LoaderServerConfig.cs" />
+  </ItemGroup>
+
+</Project>

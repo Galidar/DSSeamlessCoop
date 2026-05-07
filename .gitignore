@@ -78,3 +78,25 @@ result
 # Loader runtime artifacts created by the in-app Setup Wizard
 # (when running Loader.exe from the unpacked release zip)
 _release.zip
+
+# Flutter build outputs (Source/bonfire/)
+Source/bonfire/build/
+Source/bonfire/.dart_tool/
+Source/bonfire/windows/flutter/ephemeral/
+Source/bonfire/.flutter-plugins
+Source/bonfire/.flutter-plugins-dependencies
+Source/bonfire/pubspec.lock
+
+# BonfireService C# build outputs
+Source/BonfireService/bin/
+Source/BonfireService/obj/
+
+# Bonfire runtime test bundle (a personal sandbox, not part of the source)
+_bonfire_test/
+
+# Bonfire diagnostic logs (written by DebugListener at runtime)
+server.log
+bonfire.log
+boot.txt
+testlauncher.log
+testlauncher.log.err

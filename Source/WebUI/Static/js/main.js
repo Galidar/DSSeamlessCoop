@@ -570,8 +570,19 @@ function refreshSettingsTab()
     {        
         return response.json();
     })
-    .then(function (data) 
+    .then(function (data)
     {
+        // Re-brand the page header / window title based on the game the
+        // server is actually configured for. The static HTML has neutral
+        // "Dark Souls Open Server" as a fallback.
+        var prettyGame = "Dark Souls";
+        if (data.gameType === "DarkSouls2") prettyGame = "Dark Souls II";
+        else if (data.gameType === "DarkSouls3") prettyGame = "Dark Souls III";
+        var heading = prettyGame + " — Open Server";
+        document.title = heading;
+        var pageTitle = document.querySelector("#page-title");
+        if (pageTitle) pageTitle.textContent = heading;
+
         setMaterialTextField(document.querySelector("#server-name"), data.serverName);
         setMaterialTextField(document.querySelector("#server-description"), data.serverDescription);
         setMaterialTextField(document.querySelector("#server-password"), data.password);

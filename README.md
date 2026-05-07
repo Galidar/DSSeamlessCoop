@@ -12,7 +12,9 @@ The goal of this fork is to host my own modifications focused on **Dark Souls II
 
 ## What's different in this fork?
 
-- **Built-in Setup Wizard** inside the Loader — a single `Loader.exe` walks you through downloading the server, applying firewall rules, configuring the network (auto-detect or manual override for paid hosting), choosing server name/description/password, and starting the server. **No `.bat` files, no manual steps.**
+- **Bonfire** — a modern Flutter desktop app that replaces the original WinForms Loader. It handles install, firewall rules, network detection, multiple server profiles (DS II / DS III in separate tabs), and per-bonfire launch. Dark/amber Souls-themed UI.
+- **Multi-profile support** — keep separate "bonfires" for DS2 and DS3 (or several configs of the same game) and switch between them with one click. Each profile carries its own server config, RSA keypair, and database.
+- **WebUI credentials** are user-editable from the Bonfire UI (no more hunting in `config.json`).
 - **Self-hosted Windows builds** via GitHub Actions — releases are produced from this fork's source code, with no dependency on the upstream release page.
 - **Customizations** to the server behavior, focused on Dark Souls II SOTFS (work in progress).
 
@@ -20,10 +22,10 @@ The goal of this fork is to host my own modifications focused on **Dark Souls II
 
 1. Download the latest `windows.zip` from the [Releases page](https://github.com/Galidar/DSSeamlessCoop/releases/latest).
 2. Extract it anywhere (for example, `C:\DSSeamlessCoop\`).
-3. Open `Loader\Loader.exe`.
-4. Click **Setup Server** at the bottom of the window.
-5. Follow the wizard — Welcome → Download → Firewall → Network → Server Settings → Done.
-6. The wizard starts the server for you. Back in the main Loader window, refresh the list, select your server, and click **Launch Game**.
+3. Open `Bonfire.exe` (Windows asks for admin — required for DLL injection into the game).
+4. Pick the **Dark Souls II** or **Dark Souls III** tab.
+5. Click **+ New bonfire**, name it. Bonfire downloads the server (~115 MB), applies firewall rules, and saves a profile.
+6. Click **Light the bonfire** on the profile row → it starts the local server and launches the game pointed at it.
 
 That's the whole install. Steam must be running while the server is up — no Steam login required.
 
@@ -41,15 +43,17 @@ FROM SOFTWARE deserves your support too — please buy their games if you can.
 
 ## How does the server work?
 
-When you build the project, you'll get a `Bin/` folder with two relevant subfolders: `Loader/` and `Server/`.
+A release ships three things working together:
 
-- The **Loader** lets you launch Dark Souls 2/3 in a way that connects to an unofficial server. You can either create a server or join an existing one.
-- The **Server** is the actual game server. The first time it runs, it generates `Saved/default/config.json` with default matchmaking settings — you can edit this file and restart the server to apply changes.
-- Servers can be password-protected by setting a `Password` value in `config.json`.
+- **Bonfire.exe** — Flutter desktop UI. Spawns BonfireService.exe and talks to it over JSON-RPC.
+- **BonfireService.exe** — .NET 8 backend. Manages the local Server.exe lifecycle, downloads / installs releases, talks to the master server, configures Windows Firewall, writes Injector.config, spawns the game, and patches it via `WriteProcessMemory` + `CreateRemoteThread` (admin required).
+- **Server.exe** — the actual unofficial game server. First run generates `Server/Saved/default/config.json` with default matchmaking settings — Bonfire surfaces the user-relevant fields (name, description, password, IPs, advertise toggle, WebUI creds) in the **Tend the flame** panel.
 
-> **NOTE:** The Steam client (no login required) must be running when you launch `Server.exe`, otherwise it will fail to initialize.
+Bonfire's per-profile mode keeps **one Server.exe instance** alive; switching profiles stops, copies the chosen profile's `config.json` + RSA keypair into `Server/Saved/default/`, and restarts. Loader's WinForms UI is no longer shipped — its non-UI utilities (`Source/Loader/Utils/`, `Source/Loader/Config/`) are still linked into BonfireService since they implement the proven Win32 patching, RSA, and Steam-detection code.
 
-For users of this fork, all of this is automated by the built-in **Setup Wizard** in `Loader.exe`.
+> **NOTE:** The Steam client (no login required) must be running when you launch a bonfire, otherwise Server.exe will fail to initialize.
+
+For users of this fork, all of this is automated by **Bonfire** (download / firewall / network detection / per-profile config / server lifecycle / game launch).
 
 ## Feature support (from upstream)
 
@@ -88,17 +92,18 @@ DSOS uses its own save files. As long as you don't copy `.ds3os` saves back over
 
 ### How do I switch between Dark Souls 3 and Dark Souls 2?
 
-After running the server once, edit `Saved/default/config.json` and change `GameType` between `DarkSouls2` and `DarkSouls3`. This fork ships preconfigured for `DarkSouls2`.
+Each bonfire profile is fixed to one game (chosen by the tab you create it from). To play the other game, create a new bonfire under the corresponding tab — Bonfire keeps DS II and DS III profiles entirely separate.
 
 ### Why aren't my save files appearing?
 
-DSOS uses its own saves to avoid issues with retail. To transfer your retail saves to DSOS, click the settings (cog) icon at the bottom of the Loader and press **Copy Retail Saves to DSOS**. The reverse transfer is not provided automatically — for safety.
+DSOS uses its own saves to avoid issues with retail. The "Use separate saves" toggle (in Bonfire's Game Settings) is on by default and should stay on.
 
 ### I launch the game but it can't connect
 
-1. Make sure the Loader is running **as administrator** (it patches the game's memory).
-2. Make sure ports `50000`, `50010`, `50050`, `50020` (TCP and UDP) are open in your firewall and forwarded on your router. The Setup Wizard's **Firewall** step handles the firewall side automatically (UAC prompt).
-3. Verify `ServerHostname` (your WAN IP) and `ServerPrivateHostname` (your LAN IP) in `Saved/default/config.json`. The Setup Wizard's **Network** step detects them automatically, or you can override them manually if you use a paid hosting / VPN.
+1. Bonfire requires **admin** (the manifest enforces this — Windows asks at startup). Refusing UAC means DLL injection into the game silently fails and the game can't reach the local server.
+2. The firewall step inside Bonfire's installer adds rules for ports `50000`, `50010`, `50050`, `50020` (TCP+UDP) — accept the UAC prompt for `netsh` when asked.
+3. **Tend the flame** lets you override `ServerHostname` (WAN) / `ServerPrivateHostname` (LAN) for VPNs / paid hosting.
+4. Steam must be running. Bonfire's **Light the bonfire** button is disabled until the Steam check passes.
 
 ### What do all the properties in the config file mean?
 
@@ -117,10 +122,13 @@ For automated builds, this fork uses GitHub Actions (see `.github/workflows/`).
 ├── Protobuf/              Protobuf definitions used by the server's network traffic
 ├── Resources/             General resources for building and packaging
 ├── Source/                All source code for the project
+│   ├── bonfire/           Flutter desktop UI (Dart). Replaces the old Loader's WinForms UI.
+│   ├── BonfireService/    .NET 8 backend for Bonfire — server lifecycle, install/firewall/
+│   │                      network/profile management, JSON-RPC over stdio with Bonfire.exe.
+│   ├── Loader/            Legacy WinForms launcher (no longer shipped). Its Utils/ + Config/
+│   │                      classes are still linked into BonfireService — they implement the
+│   │                      proven Win32 patching, RSA, and Steam-detection code.
 │   ├── Injector/          DLL injected into the game to provide DS3OS functionality
-│   ├── Loader/            WinForms app — loads DS2/DS3 and ships the Setup Wizard for hosting
-│   │   ├── Forms/         UI forms (MainForm, SetupWizardDialog, etc.)
-│   │   └── LocalServer/   Setup Wizard backend (download, firewall, process, config)
 │   ├── MasterServer/      NodeJS API server for advertising and listing active servers
 │   ├── Server/            Source code for the main server
 │   ├── Server.DarkSouls3/ Code specific to Dark Souls 3 support

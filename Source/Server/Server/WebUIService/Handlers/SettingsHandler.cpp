@@ -41,6 +41,7 @@ bool SettingsHandler::handleGet(CivetServer* Server, struct mg_connection* Conne
     json["serverName"] = Config.ServerName;
     json["serverDescription"] = Config.ServerDescription;
     json["password"] = Config.Password;
+    json["gameType"] = Config.GameType;
     json["publicHostname"] = Config.ServerHostname;
     json["privateHostname"] = Config.ServerPrivateHostname;
     json["advertise"] = Config.Advertise;

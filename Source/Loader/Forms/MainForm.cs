@@ -847,7 +847,7 @@ namespace Loader
         {
             Process.Start(new ProcessStartInfo
             {
-                FileName = "https://github.com/tleonarduk/ds3os",
+                FileName = "https://github.com/Galidar/DSSeamlessCoop",
                 UseShellExecute = true
             });
         }

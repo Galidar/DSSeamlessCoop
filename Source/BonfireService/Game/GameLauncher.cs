@@ -1,0 +1,268 @@
+/*
+ * Headless replica of MainForm.PerformLaunch from the original C# Loader.
+ *
+ * Steps performed (in order, abort on failure):
+ *   1. Resolve the connection hostname for the server (LAN vs WAN vs loopback)
+ *   2. Hash the game .exe to look up the matching DarkSoulsLoadConfig
+ *   3. Write steam_appid.txt next to the .exe so Steam SDK initialises
+ *   4. CreateProcess the game (no suspended state — the C# Loader doesn't either)
+ *   5. If the build config wants the injector, allocate memory in the child,
+ *      write the path to Injector.dll, and CreateRemoteThread into LoadLibraryW
+ *   6. Otherwise, encrypt the server info block and WriteProcessMemory it to
+ *      the patch address (with retries — Steam stub unpacks asynchronously)
+ *
+ * No WinForms / MessageBox; all errors come back as a [LaunchResult] string.
+ */
+
+using System.Diagnostics;
+using System.Runtime.InteropServices;
+using System.Text;
+
+using Loader; // re-using the Loader-namespace utility classes (linked via csproj)
+
+namespace Bonfire.Service.Game;
+
+public sealed record LaunchRequest(
+    string ExePath,
+    string ServerId,
+    string ServerName,
+    string Hostname,
+    string PrivateHostname,
+    int Port,
+    string PublicKey,
+    string GameType,
+    bool EnableSeparateSaves);
+
+public sealed record LaunchResult(bool Ok, string Message, int? Pid);
+
+public static class GameLauncher
+{
+    public static LaunchResult Launch(LaunchRequest req,
+        string machinePublicIp, string machinePrivateIp,
+        string injectorDllPath)
+    {
+        // ── 1. Sanity ──────────────────────────────────────────────
+        if (string.IsNullOrEmpty(req.PublicKey))
+            return new(false, "Server's public key is missing.", null);
+        if (!File.Exists(req.ExePath))
+            return new(false, $"Game executable not found: {req.ExePath}", null);
+
+        // ── 2. Resolve which hostname to actually connect to ──────
+        var connectionHostname = ResolveConnectIp(req, machinePublicIp, machinePrivateIp);
+
+        // ── 3. Look up the build config for this exact .exe hash ──
+        if (!BuildConfig.ExeLoadConfiguration.TryGetValue(
+                ExeUtils.GetExeSimpleHash(req.ExePath), out var loadCfg))
+        {
+            return new(false,
+                "This game executable isn't a recognised version. " +
+                "BuildConfig has no patching offsets for it.", null);
+        }
+
+        // ── 4. Steam app ID file (next to the .exe) ───────────────
+        var exeDir = Path.GetDirectoryName(req.ExePath)!;
+        try
+        {
+            File.WriteAllText(Path.Combine(exeDir, "steam_appid.txt"),
+                loadCfg.SteamAppId.ToString());
+        }
+        catch (Exception ex)
+        {
+            return new(false, $"Could not write steam_appid.txt: {ex.Message}", null);
+        }
+
+        // ── 5. CreateProcess ───────────────────────────────────────
+        //
+        // Plain ZERO_FLAG, exactly like the original Loader's PerformLaunch
+        // (MainForm.cs:649). Earlier we tried CREATE_BREAKAWAY_FROM_JOB on
+        // the theory that BonfireService's job-object membership was
+        // breaking Steam IPC, but that flag actually severs the game from
+        // the parent process tree in a way Steam's overlay/auth machinery
+        // doesn't like (manifests as: login handshake passes, auth socket
+        // opens then immediately drops without sending RequestHandshake).
+        // Match Loader exactly.
+        var startup = new STARTUPINFO();
+        var pi = new PROCESS_INFORMATION();
+        var ok = WinAPI.CreateProcess(
+            null!, $"\"{req.ExePath}\"",
+            IntPtr.Zero, IntPtr.Zero, false,
+            ProcessCreationFlags.ZERO_FLAG,
+            IntPtr.Zero, exeDir,
+            ref startup, out pi);
+        if (!ok)
+            return new(false,
+                $"CreateProcess failed (GetLastError={Marshal.GetLastWin32Error()}).", null);
+        return Inject(pi, loadCfg, injectorDllPath, req, connectionHostname);
+    }
+
+    private static LaunchResult Inject(PROCESS_INFORMATION pi,
+        DarkSoulsLoadConfig loadCfg, string injectorDllPath,
+        LaunchRequest req, string connectionHostname)
+    {
+
+        try
+        {
+            // ── 6. Inject DLL or patch memory ────────────────────
+            if (loadCfg.UseInjector)
+            {
+                if (!InjectDll(pi, injectorDllPath, req, connectionHostname,
+                        out var injectErr))
+                {
+                    return new(false, injectErr, (int)pi.dwProcessId);
+                }
+            }
+            else
+            {
+                if (!PatchMemory(pi, loadCfg, connectionHostname, req.PublicKey,
+                        out var patchErr))
+                {
+                    return new(false, patchErr, (int)pi.dwProcessId);
+                }
+            }
+
+            return new(true, "Launched.", (int)pi.dwProcessId);
+        }
+        catch (Exception ex)
+        {
+            return new(false, $"Exception during patch/inject: {ex.Message}",
+                (int)pi.dwProcessId);
+        }
+    }
+
+    /// <summary>
+    /// Same heuristic as the original Loader: if the server's WAN IP matches
+    /// our WAN IP, we're behind the same NAT; prefer LAN or loopback.
+    /// </summary>
+    private static string ResolveConnectIp(
+        LaunchRequest req, string machinePublicIp, string machinePrivateIp)
+    {
+        var hostnameIp = NetUtils.HostnameToIPv4(req.Hostname);
+        var privateIp = NetUtils.HostnameToIPv4(req.PrivateHostname);
+
+        if (!string.IsNullOrEmpty(hostnameIp) &&
+            hostnameIp == machinePublicIp)
+        {
+            // Behind same NAT.
+            if (!string.IsNullOrEmpty(privateIp) &&
+                privateIp == machinePrivateIp)
+            {
+                return "127.0.0.1";
+            }
+            return string.IsNullOrEmpty(req.PrivateHostname)
+                ? req.Hostname
+                : req.PrivateHostname;
+        }
+        return req.Hostname;
+    }
+
+    private static bool InjectDll(
+        PROCESS_INFORMATION pi, string injectorPath, LaunchRequest req,
+        string connectionHostname, out string error)
+    {
+        error = "";
+        if (!File.Exists(injectorPath))
+        {
+            error = $"Injector.dll not found at {injectorPath}";
+            return false;
+        }
+
+        // Write the injector config file the DLL will read on attach.
+        var configPath = Path.Combine(Path.GetDirectoryName(injectorPath)!, "Injector.config");
+        var injectCfg = new InjectionConfig
+        {
+            ServerName = req.ServerName,
+            ServerPublicKey = req.PublicKey,
+            ServerHostname = connectionHostname,
+            ServerPort = req.Port,
+            ServerGameType = req.GameType,
+            EnableSeperateSaveFiles = req.EnableSeparateSaves,
+        };
+        File.WriteAllText(configPath, injectCfg.ToJson());
+
+        // Resolve the LoadLibraryW address we'll invoke on the remote thread.
+        var kernel32 = WinAPI.GetModuleHandle("kernel32.dll");
+        if (kernel32 == IntPtr.Zero)
+        {
+            error = $"GetModuleHandle(kernel32.dll) failed " +
+                    $"(GetLastError={Marshal.GetLastWin32Error()})";
+            return false;
+        }
+        var loadLibrary = WinAPI.GetProcAddress(kernel32, "LoadLibraryW");
+        if (loadLibrary == IntPtr.Zero)
+        {
+            error = $"GetProcAddress(LoadLibraryW) failed " +
+                    $"(GetLastError={Marshal.GetLastWin32Error()})";
+            return false;
+        }
+
+        // Allocate space for the path string in the target process. Steam
+        // stub unpacks the executable asynchronously, so VirtualAllocEx may
+        // fail for the first few hundred ms — retry up to ~16s.
+        var pathBytes = Encoding.Unicode.GetBytes(injectorPath + "\0");
+        var pathAddr = IntPtr.Zero;
+        for (var i = 0; i < 32 && pathAddr == IntPtr.Zero; i++)
+        {
+            pathAddr = WinAPI.VirtualAllocEx(
+                pi.hProcess, IntPtr.Zero, (uint)pathBytes.Length,
+                (uint)(AllocationType.Reserve | AllocationType.Commit),
+                (uint)MemoryProtection.ReadWrite);
+            if (pathAddr == IntPtr.Zero) Thread.Sleep(500);
+        }
+        if (pathAddr == IntPtr.Zero)
+        {
+            error = $"VirtualAllocEx failed (GetLastError={Marshal.GetLastWin32Error()})";
+            return false;
+        }
+
+        if (!WinAPI.WriteProcessMemory(pi.hProcess, pathAddr,
+                pathBytes, (uint)pathBytes.Length, out var written) ||
+            written != pathBytes.Length)
+        {
+            error = $"WriteProcessMemory failed " +
+                    $"(GetLastError={Marshal.GetLastWin32Error()})";
+            return false;
+        }
+
+        var thread = WinAPI.CreateRemoteThread(
+            pi.hProcess, IntPtr.Zero, 0, loadLibrary, pathAddr, 0, IntPtr.Zero);
+        if (thread == IntPtr.Zero)
+        {
+            error = $"CreateRemoteThread failed " +
+                    $"(GetLastError={Marshal.GetLastWin32Error()})";
+            return false;
+        }
+        return true;
+    }
+
+    private static bool PatchMemory(
+        PROCESS_INFORMATION pi, DarkSoulsLoadConfig loadCfg,
+        string connectionHostname, string publicKey, out string error)
+    {
+        error = "";
+        var dataBlock = PatchingUtils.MakeEncryptedServerInfo(
+            connectionHostname, publicKey, loadCfg.Key);
+        if (dataBlock is null)
+        {
+            error = "Failed to encode server info patch (hostname or key too long).";
+            return false;
+        }
+
+        for (var i = 0; i < 32; i++)
+        {
+            var baseAddr = WinAPI.GetProcessModuleBaseAddress(pi.hProcess);
+            var patchAddr = (IntPtr)loadCfg.ServerInfoAddress;
+            if (loadCfg.UsesASLR)
+                patchAddr = (IntPtr)((ulong)baseAddr + (ulong)patchAddr);
+
+            if (WinAPI.WriteProcessMemory(pi.hProcess, patchAddr,
+                    dataBlock, (uint)dataBlock.Length, out var written) &&
+                written == dataBlock.Length)
+            {
+                return true;
+            }
+            Thread.Sleep(500);
+        }
+        error = "Failed to write server info to game memory after 32 retries.";
+        return false;
+    }
+}
