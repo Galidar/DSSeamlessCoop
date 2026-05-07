@@ -358,34 +358,62 @@ namespace Loader.Forms
             DownloadPanel.Controls.Add(heading);
             y += heading.Height + 8;
 
+            // Status label — auto-sizes vertically based on text. We keep a
+            // reference to its initial Y; the rest of the page is positioned
+            // dynamically in LayoutDownloadPage() because the status text
+            // changes between 1 and 2 lines depending on install state.
             DownloadStatusLabel = MakeBody("Checking for the latest release…");
             DownloadStatusLabel.Location = new Point(0, y);
-            DownloadStatusLabel.Width = WelcomePanel.Width;
+            DownloadStatusLabel.MaximumSize = new Size(DownloadPanel.Width, 0);
             DownloadPanel.Controls.Add(DownloadStatusLabel);
-            y += 50;
 
             DownloadProgress = new ProgressBar
             {
-                Bounds = new Rectangle(0, y, WelcomePanel.Width, 22),
+                Width = DownloadPanel.Width,
+                Height = 22,
                 Style = ProgressBarStyle.Continuous,
                 Minimum = 0, Maximum = 100, Value = 0,
             };
             DownloadPanel.Controls.Add(DownloadProgress);
-            y += 30;
 
             DownloadDetailLabel = MakeNote("");
-            DownloadDetailLabel.Location = new Point(0, y);
-            DownloadDetailLabel.Width = WelcomePanel.Width;
+            DownloadDetailLabel.MaximumSize = new Size(DownloadPanel.Width, 0);
             DownloadPanel.Controls.Add(DownloadDetailLabel);
-            y += 36;
 
             DownloadButton = new FlatButton("Download && Install")
             {
-                Bounds = new Rectangle(0, y, 200, 36),
+                Size = new Size(220, 36),
                 Style = FlatButton.ButtonStyle.Secondary,
             };
             DownloadButton.Clicked += async (s, e) => await StartDownload();
             DownloadPanel.Controls.Add(DownloadButton);
+
+            LayoutDownloadPage();
+        }
+
+        // Reposition every control under the status label according to the
+        // status label's current actual height. Called after construction
+        // and any time DownloadStatusLabel.Text changes.
+        private void LayoutDownloadPage()
+        {
+            int y = DownloadStatusLabel.Bottom + 14;
+            DownloadProgress.Location = new Point(0, y);
+            y += DownloadProgress.Height + 10;
+
+            DownloadDetailLabel.Location = new Point(0, y);
+            // detail label is autosize — measure after positioning
+            y += Math.Max(DownloadDetailLabel.Height, 18) + 14;
+
+            DownloadButton.Location = new Point(0, y);
+        }
+
+        private void SetDownloadStatus(string text, Color? color = null)
+        {
+            DownloadStatusLabel.Text = text;
+            if (color.HasValue) DownloadStatusLabel.ForeColor = color.Value;
+            // AutoSize updates Height synchronously when Text changes,
+            // so subsequent controls can be repositioned right away.
+            LayoutDownloadPage();
         }
 
         private void BuildFirewallPage()
@@ -729,21 +757,21 @@ namespace Loader.Forms
         {
             if (LocalServerPaths.ServerInstalled)
             {
-                DownloadStatusLabel.Text = "The server is already installed on this machine. You can re-download to update or skip ahead.";
                 DownloadProgress.Value = 100;
                 DownloadDetailLabel.Text = "Installed at: " + LocalServerPaths.ServerDirectory;
                 DownloadButton.Text = "Re-download Latest";
                 DownloadButton.Enabled = true;
                 DownloadComplete = true;
+                SetDownloadStatus("The server is already installed. Re-download to update or skip ahead.");
                 return;
             }
 
-            DownloadStatusLabel.Text = "The server is not installed yet. Click Download to fetch the latest build (~115 MB).";
             DownloadProgress.Value = 0;
             DownloadDetailLabel.Text = "";
             DownloadButton.Text = "Download && Install";
             DownloadButton.Enabled = true;
             DownloadComplete = false;
+            SetDownloadStatus("The server is not installed yet. Click Download to fetch the latest build (~115 MB).");
         }
 
         private async Task StartDownload()
@@ -757,7 +785,7 @@ namespace Loader.Forms
             {
                 LocalServerProcess.Stop();
 
-                DownloadStatusLabel.Text = "Resolving the latest release from " + ReleaseRepo + "…";
+                SetDownloadStatus("Resolving the latest release from " + ReleaseRepo + "…", TextPrimary);
                 DownloadDetailLabel.Text = "";
                 DownloadProgress.Value = 0;
 
@@ -767,10 +795,9 @@ namespace Loader.Forms
 
                 if (info == null || string.IsNullOrEmpty(info.AssetUrl))
                 {
-                    DownloadStatusLabel.Text =
-                        "Could not resolve the latest release. Check your internet connection or that " +
-                        ReleaseRepo + " has a published release.";
-                    DownloadStatusLabel.ForeColor = ErrRed;
+                    SetDownloadStatus(
+                        "Could not resolve the latest release. Check your internet connection.",
+                        ErrRed);
                     DownloadButton.Enabled = true;
                     BackButton.Enabled = true;
                     NextButton.Enabled = true;
@@ -779,8 +806,7 @@ namespace Loader.Forms
                 }
 
                 ResolvedReleaseTag = info.TagName ?? "";
-                DownloadStatusLabel.Text = "Downloading release " + ResolvedReleaseTag + "…";
-                DownloadStatusLabel.ForeColor = TextPrimary;
+                SetDownloadStatus("Downloading release " + ResolvedReleaseTag + "…", TextPrimary);
 
                 var zipPath = Path.Combine(LocalServerPaths.InstallRoot, "_release.zip");
 
@@ -796,8 +822,7 @@ namespace Loader.Forms
 
                 if (!ok)
                 {
-                    DownloadStatusLabel.Text = "Download failed.";
-                    DownloadStatusLabel.ForeColor = ErrRed;
+                    SetDownloadStatus("Download failed.", ErrRed);
                     DownloadButton.Enabled = true;
                     BackButton.Enabled = true;
                     NextButton.Enabled = true;
@@ -805,7 +830,7 @@ namespace Loader.Forms
                     return;
                 }
 
-                DownloadStatusLabel.Text = "Extracting…";
+                SetDownloadStatus("Extracting…", TextPrimary);
                 DownloadDetailLabel.Text = "";
                 DownloadProgress.Style = ProgressBarStyle.Marquee;
                 bool extracted = await Task.Run(() => ReleaseDownloader.Extract(zipPath, LocalServerPaths.InstallRoot));
@@ -816,24 +841,21 @@ namespace Loader.Forms
 
                 if (!extracted)
                 {
-                    DownloadStatusLabel.Text = "Extraction failed.";
-                    DownloadStatusLabel.ForeColor = ErrRed;
+                    SetDownloadStatus("Extraction failed.", ErrRed);
                     DownloadButton.Enabled = true;
                 }
                 else
                 {
-                    DownloadStatusLabel.Text = "Done — release " + ResolvedReleaseTag + " installed.";
-                    DownloadStatusLabel.ForeColor = OkGreen;
                     DownloadDetailLabel.Text = "Installed at: " + LocalServerPaths.ServerDirectory;
                     DownloadComplete = true;
                     DownloadButton.Text = "Re-download Latest";
                     DownloadButton.Enabled = true;
+                    SetDownloadStatus("Done — release " + ResolvedReleaseTag + " installed.", OkGreen);
                 }
             }
             catch (Exception ex)
             {
-                DownloadStatusLabel.Text = "Error: " + ex.Message;
-                DownloadStatusLabel.ForeColor = ErrRed;
+                SetDownloadStatus("Error: " + ex.Message, ErrRed);
                 DownloadButton.Enabled = true;
             }
             finally
