@@ -581,12 +581,15 @@ namespace Loader.Forms
             SettingsPanel.Controls.Add(body);
             y += body.Height + 18;
 
+            // Label column wider (220) so longer field labels never collide
+            // with the input column at any DPI scale.
+            const int labelColW = 220;
             void AddRow(string label, Control control)
             {
                 var l = MakeLabel(label, semibold: true);
                 l.Location = new Point(0, y + 6);
                 SettingsPanel.Controls.Add(l);
-                control.Bounds = new Rectangle(180, y, FormW - PadX * 2 - 180, 28);
+                control.Bounds = new Rectangle(labelColW, y, FormW - PadX * 2 - labelColW, 28);
                 SettingsPanel.Controls.Add(control);
                 y += 38;
             }
@@ -601,7 +604,10 @@ namespace Loader.Forms
 
             PasswordTextBox = new TextBox { Font = new Font("Segoe UI", 10F), BorderStyle = BorderStyle.FixedSingle };
             PasswordTextBox.TextChanged += (s, e) => Password = PasswordTextBox.Text;
-            AddRow("Password (optional)", PasswordTextBox);
+            // Just "Password" — the empty-by-default state already implies it's
+            // optional; the checkbox/note below clarifies behaviour. Avoids the
+            // "(optional)" suffix overflowing the label column.
+            AddRow("Password", PasswordTextBox);
 
             y += 6;
             AdvertiseCheckBox = new CheckBox
