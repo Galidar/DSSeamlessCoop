@@ -54,9 +54,9 @@ namespace Loader.Forms
         //  Layout
         // ============================================================
         private const int FormW = 820;
-        private const int FormH = 600;
-        private const int HeaderH = 110;
-        private const int FooterH = 70;
+        private const int FormH = 620;
+        private const int HeaderH = 140;
+        private const int FooterH = 72;
         private const int PadX = 36;
         private const int PadY = 28;
 
@@ -76,7 +76,6 @@ namespace Loader.Forms
         // ----- top-level controls -----
         private Panel HeaderPanel, BodyPanel, FooterPanel;
         private Label TitleLabel;
-        private Label SubtitleLabel;
         private StepIndicator Stepper;
         private FlatButton NextButton, BackButton, CancelBtn;
 
@@ -146,6 +145,11 @@ namespace Loader.Forms
             Font = new Font("Segoe UI", 9.5F);
             BackColor = BodyBg;
             DoubleBuffered = true;
+            // Per-monitor DPI: scale based on font, which propagates correctly
+            // to child controls regardless of the user's display scaling.
+            AutoScaleMode = AutoScaleMode.Dpi;
+            AutoScaleDimensions = new SizeF(96F, 96F);
+            KeyPreview = true;
 
             BuildHeader();
             BuildFooter();
@@ -166,6 +170,8 @@ namespace Loader.Forms
                 BackColor = HeaderBg,
             };
 
+            // Title row — single line, plenty of vertical room so it never
+            // collides with the stepper at any DPI scale.
             TitleLabel = new Label
             {
                 Text = "Welcome",
@@ -173,33 +179,25 @@ namespace Loader.Forms
                 ForeColor = HeaderText,
                 AutoSize = false,
                 TextAlign = ContentAlignment.MiddleLeft,
-                Bounds = new Rectangle(PadX, 14, FormW - PadX * 2, 36),
+                Bounds = new Rectangle(PadX, 16, FormW - PadX * 2, 38),
                 BackColor = HeaderBg,
+                UseCompatibleTextRendering = false,
             };
 
-            SubtitleLabel = new Label
-            {
-                Text = "Get your private Dark Souls server up in a few clicks.",
-                Font = new Font("Segoe UI", 9.5F),
-                ForeColor = Color.FromArgb(190, 188, 180),
-                AutoSize = false,
-                TextAlign = ContentAlignment.MiddleLeft,
-                Bounds = new Rectangle(PadX, 50, FormW - PadX * 2, 20),
-                BackColor = HeaderBg,
-            };
-
+            // Stepper occupies the lower half of the header. 64px is enough
+            // for 24px circles, the connecting line, and the labels below.
             Stepper = new StepIndicator(StepTitles)
             {
-                Bounds = new Rectangle(PadX, 76, FormW - PadX * 2, 28),
+                Bounds = new Rectangle(PadX, 64, FormW - PadX * 2, 68),
                 BackColor = HeaderBg,
                 ActiveColor = StepActive,
                 DoneColor = StepDone,
                 FutureColor = StepFuture,
-                LabelColor = Color.FromArgb(220, 218, 210),
+                LabelColor = Color.FromArgb(225, 222, 215),
+                ActiveLabelColor = Color.White,
             };
 
             HeaderPanel.Controls.Add(TitleLabel);
-            HeaderPanel.Controls.Add(SubtitleLabel);
             HeaderPanel.Controls.Add(Stepper);
 
             // 1px hairline at the bottom of the header for separation.
@@ -210,6 +208,7 @@ namespace Loader.Forms
                 Dock = DockStyle.Bottom,
             };
             HeaderPanel.Controls.Add(hairline);
+
         }
 
         private void BuildFooter()
@@ -233,7 +232,7 @@ namespace Loader.Forms
             CancelBtn = new FlatButton("Cancel")
             {
                 Bounds = new Rectangle(PadX, 18, 100, 36),
-                Style = FlatButton.ButtonStyle.Ghost,
+                Style = FlatButton.ButtonStyle.Secondary,
             };
             CancelBtn.Clicked += (s, e) => { DialogResult = DialogResult.Cancel; Close(); };
 
@@ -1084,6 +1083,16 @@ namespace Loader.Forms
             return true;
         }
 
+        protected override void OnShown(EventArgs e)
+        {
+            base.OnShown(e);
+            // Move focus off the first input control so the combobox doesn't
+            // open with the selection highlighted in blue and so the Welcome
+            // page reads as a clean "press Next" prompt.
+            ActiveControl = NextButton;
+            NextButton.Focus();
+        }
+
         protected override void OnFormClosing(FormClosingEventArgs e)
         {
             try { DownloadCts?.Cancel(); } catch { }
@@ -1160,7 +1169,8 @@ namespace Loader.Forms
             public Color ActiveColor = Color.Orange;
             public Color DoneColor = Color.DimGray;
             public Color FutureColor = Color.LightGray;
-            public Color LabelColor = Color.White;
+            public Color LabelColor = Color.LightGray;
+            public Color ActiveLabelColor = Color.White;
 
             private readonly string[] Labels;
             private int ActiveIndex = 0;
@@ -1187,60 +1197,75 @@ namespace Loader.Forms
 
                 if (Labels.Length == 0) return;
 
-                int circleD = 20;
-                int circleR = circleD / 2;
+                // Layout zones: top zone has the circles+line; bottom zone has labels.
+                // Both adapt to the control's actual height so we never clip text.
                 int W = ClientSize.Width;
                 int H = ClientSize.Height;
+                int circleD = 24;
+                int circleR = circleD / 2;
+                float circleY = circleR + 4;          // circle centre Y
+                float labelTop = circleY + circleR + 8; // start of label band
 
-                // X centre for each circle.
+                // Reserve some side margin so labels don't run off the edge.
+                int sideMargin = 40;
+                int usableW = Math.Max(circleD, W - sideMargin * 2);
+
                 float[] cx = new float[Labels.Length];
                 for (int i = 0; i < Labels.Length; i++)
                 {
                     if (Labels.Length == 1) cx[i] = W / 2f;
-                    else cx[i] = circleR + i * (float)(W - circleD) / (Labels.Length - 1);
+                    else cx[i] = sideMargin + i * (float)usableW / (Labels.Length - 1);
                 }
-                float cy = circleR + 1;
 
+                // Connector segments (line between consecutive circles).
                 using (var donePen = new Pen(DoneColor, 2))
                 using (var futurePen = new Pen(FutureColor, 2))
                 {
-                    // connector segments
                     for (int i = 0; i < Labels.Length - 1; i++)
                     {
                         var pen = i < ActiveIndex ? donePen : futurePen;
-                        g.DrawLine(pen, cx[i] + circleR, cy, cx[i + 1] - circleR, cy);
+                        g.DrawLine(pen, cx[i] + circleR, circleY, cx[i + 1] - circleR, circleY);
                     }
                 }
 
-                using (var labelFont = new Font("Segoe UI", 8F))
-                using (var labelBrush = new SolidBrush(LabelColor))
-                using (var fmt = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Near })
+                // Circles + numbers + labels.
+                using (var numFont = new Font("Segoe UI Semibold", 9F))
+                using (var labelFont = new Font("Segoe UI Semibold", 8.25F))
+                using (var fmt = new StringFormat
+                {
+                    Alignment = StringAlignment.Center,
+                    LineAlignment = StringAlignment.Near,
+                    Trimming = StringTrimming.EllipsisCharacter,
+                    FormatFlags = StringFormatFlags.NoWrap,
+                })
                 {
                     for (int i = 0; i < Labels.Length; i++)
                     {
-                        Color fill;
-                        Color text;
-                        if (i < ActiveIndex)      { fill = DoneColor;   text = Color.White; }
-                        else if (i == ActiveIndex){ fill = ActiveColor; text = Color.White; }
-                        else                      { fill = FutureColor; text = Color.White; }
+                        Color fill = i < ActiveIndex ? DoneColor
+                                   : i == ActiveIndex ? ActiveColor
+                                   : FutureColor;
 
-                        var rect = new RectangleF(cx[i] - circleR, cy - circleR, circleD, circleD);
+                        // Filled circle.
+                        var rect = new RectangleF(cx[i] - circleR, circleY - circleR, circleD, circleD);
                         using (var brush = new SolidBrush(fill))
                             g.FillEllipse(brush, rect);
 
-                        // step number inside the circle
-                        using (var numFont = new Font("Segoe UI Semibold", 8F))
-                        using (var numBrush = new SolidBrush(text))
+                        // Step number inside the circle.
+                        using (var numBrush = new SolidBrush(Color.White))
                         {
                             string num = (i + 1).ToString();
                             var size = g.MeasureString(num, numFont);
                             g.DrawString(num, numFont, numBrush,
-                                cx[i] - size.Width / 2f, cy - size.Height / 2f);
+                                cx[i] - size.Width / 2f, circleY - size.Height / 2f);
                         }
 
-                        // label below
-                        var labelRect = new RectangleF(cx[i] - 60, cy + circleR + 1, 120, H - cy - circleR);
-                        g.DrawString(Labels[i], labelFont, labelBrush, labelRect, fmt);
+                        // Label below — bold for active, regular tone for others.
+                        Color tc = (i == ActiveIndex) ? ActiveLabelColor : LabelColor;
+                        using (var labelBrush = new SolidBrush(tc))
+                        {
+                            var labelRect = new RectangleF(cx[i] - 56, labelTop, 112, H - labelTop);
+                            g.DrawString(Labels[i], labelFont, labelBrush, labelRect, fmt);
+                        }
                     }
                 }
             }
