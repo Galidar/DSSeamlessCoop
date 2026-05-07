@@ -19,6 +19,9 @@ env:
   SOLUTION_FILE_PATH: ./intermediate/vs2022/ds3os.sln
   BUILD_CONFIGURATION: Release
 
+permissions:
+  contents: write
+
 jobs:
   build-windows:
     name: Build Windows
