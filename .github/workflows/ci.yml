@@ -10,6 +10,7 @@ on:
 env:
   SOLUTION_FILE_PATH: ./intermediate/vs2022/ds3os.sln
   BUILD_CONFIGURATION: Release
+  FLUTTER_VERSION: '3.27.x'
 
 jobs:
   build-windows:
@@ -27,14 +28,39 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v2
 
+      # ---- C++ (Server, Injector, Shared, ThirdParty) ----
       - name: Generate Solution
         shell: cmd
         working-directory: ${{ github.workspace }}/Tools
         run: ${{ github.workspace }}/Tools/generate_vs2022.bat
 
-      - name: Build
+      - name: Build C++ targets
         working-directory: ${{ github.workspace }}
         run: msbuild /m /p:Configuration=${{ env.BUILD_CONFIGURATION }} ${{ env.SOLUTION_FILE_PATH }} /t:Restore,Build
+
+      # ---- BonfireService (.NET 8) ----
+      - name: Build BonfireService
+        working-directory: ${{ github.workspace }}/Source/BonfireService
+        run: dotnet build -c Release
+
+      # ---- Bonfire (Flutter desktop) ----
+      - name: Pub get
+        working-directory: ${{ github.workspace }}/Source/bonfire
+        run: flutter pub get
+
+      - name: Flutter analyze
+        working-directory: ${{ github.workspace }}/Source/bonfire
+        run: flutter analyze --no-fatal-infos --no-fatal-warnings
+
+      - name: Build Bonfire (windows)
+        working-directory: ${{ github.workspace }}/Source/bonfire
+        run: flutter build windows --release

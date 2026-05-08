@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (e.g. 1.0.0.0)'
+        description: 'Version (e.g. 0.2.0)'
         required: true
-        default: '1.0.0.0'
+        default: '0.2.0'
       version_postfix:
         description: 'Version postfix (e.g. -galidar)'
         required: false
@@ -18,6 +18,7 @@ on:
 env:
   SOLUTION_FILE_PATH: ./intermediate/vs2022/ds3os.sln
   BUILD_CONFIGURATION: Release
+  FLUTTER_VERSION: '3.27.x'
 
 permissions:
   contents: write
@@ -56,9 +57,16 @@ jobs:
         with:
           dotnet-version: '8.0.x'
 
+      - name: Setup Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+
       - name: Add MSBuild to PATH
         uses: microsoft/setup-msbuild@v2
 
+      # ---- C++ (Server.exe + Injector.dll) ----
       - name: Generate Solution
         shell: cmd
         working-directory: ${{ github.workspace }}/Tools
@@ -68,13 +76,32 @@ jobs:
         working-directory: ${{ github.workspace }}
         run: msbuild /m /p:Configuration=${{ env.BUILD_CONFIGURATION }} ${{ env.SOLUTION_FILE_PATH }} /t:Restore
 
-      - name: Package Loader (.NET)
-        run: dotnet publish ./Source/Loader/Loader.csproj -r win-x64 -c Release --output ${{ github.workspace }}/Bin/Loader/Package/ /p:PublishSingleFile=true /p:IncludeNativeLibrariesForSelfExtract=true /p:Version=${{ steps.version.outputs.full }} /p:FileVersion=${{ steps.version.outputs.version }} /p:AssemblyVersion=${{ steps.version.outputs.version }}
-
-      - name: Build
+      - name: Build C++ (Server, Injector, …)
         working-directory: ${{ github.workspace }}
         run: msbuild /m /p:Configuration=${{ env.BUILD_CONFIGURATION }} ${{ env.SOLUTION_FILE_PATH }} /t:Build
 
+      # ---- BonfireService (.NET 8 self-contained single-file) ----
+      - name: Publish BonfireService
+        run: >
+          dotnet publish ./Source/BonfireService/BonfireService.csproj
+          -c Release -r win-x64 --self-contained true
+          -p:PublishSingleFile=true
+          -p:IncludeNativeLibrariesForSelfExtract=true
+          -p:Version=${{ steps.version.outputs.full }}
+          -p:FileVersion=${{ steps.version.outputs.version }}
+          -p:AssemblyVersion=${{ steps.version.outputs.version }}
+          -o ${{ github.workspace }}/Source/bonfire/build/bonfire_service/
+
+      # ---- Bonfire (Flutter desktop) ----
+      - name: Bonfire — pub get
+        working-directory: ${{ github.workspace }}/Source/bonfire
+        run: flutter pub get
+
+      - name: Bonfire — build windows release
+        working-directory: ${{ github.workspace }}/Source/bonfire
+        run: flutter build windows --release
+
+      # ---- Assemble release zip ----
       - name: Package Release
         shell: cmd
         working-directory: ${{ github.workspace }}
@@ -83,7 +110,7 @@ jobs:
       - name: Zip Release
         uses: vimtor/action-zip@v1.2
         with:
-          files: DS3OS/
+          files: DSSeamlessCoop/
           dest: windows.zip
 
       - name: Upload Build Artifact
@@ -101,7 +128,12 @@ jobs:
             Automated build from `${{ github.sha }}`.
 
             ## How to install
-            See [Setup/README.md](https://github.com/${{ github.repository }}/blob/main/Setup/README.md) — `Setup/setup.bat` will download this release automatically.
+            1. Download `windows.zip` below.
+            2. Extract anywhere (e.g. `C:\DSSeamlessCoop\`).
+            3. Run `Bonfire.exe` (accept the UAC prompt — admin is required for DLL injection).
+            4. Pick the **Dark Souls II** or **Dark Souls III** tab → **+ New bonfire** → follow the install / firewall prompts → **Light the bonfire**.
+
+            See the [README](https://github.com/${{ github.repository }}/blob/main/README.md) for full setup details.
           draft: false
           prerelease: ${{ contains(steps.version.outputs.full, '-') }}
           files: ./windows.zip
