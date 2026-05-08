@@ -12,6 +12,7 @@
  */
 
 using System;
+using System.Reflection;
 using System.Threading.Tasks;
 using Bonfire.Service.Rpc;
 
@@ -19,6 +20,8 @@ namespace Bonfire.Service;
 
 public static class Program
 {
+    public static string ServiceVersion { get; } = ResolveServiceVersion();
+
     public static async Task<int> Main(string[] args)
     {
         // --version is a CLI affordance the Flutter app uses to verify it
@@ -26,7 +29,7 @@ public static class Program
         // session.
         if (args.Length >= 1 && args[0] == "--version")
         {
-            Console.WriteLine("Bonfire.Service 0.1.0");
+            Console.WriteLine($"Bonfire.Service {ServiceVersion}");
             return 0;
         }
 
@@ -34,5 +37,20 @@ public static class Program
         Methods.Register(server);
         await server.RunAsync();
         return 0;
+    }
+
+    private static string ResolveServiceVersion()
+    {
+        var assembly = typeof(Program).Assembly;
+        var informationalVersion = assembly
+            .GetCustomAttribute<AssemblyInformationalVersionAttribute>()
+            ?.InformationalVersion;
+        if (!string.IsNullOrWhiteSpace(informationalVersion))
+        {
+            // The SDK appends the git SHA as SemVer build metadata in local builds.
+            return informationalVersion.Split('+', 2)[0];
+        }
+
+        return assembly.GetName().Version?.ToString() ?? "unknown";
     }
 }

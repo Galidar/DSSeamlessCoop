@@ -22,7 +22,11 @@ public static class Methods
         server.Register("ping", async (_, _) =>
         {
             await Task.Yield();
-            return new JsonObject { ["pong"] = true, ["version"] = "0.1.0" };
+            return new JsonObject
+            {
+                ["pong"] = true,
+                ["version"] = Bonfire.Service.Program.ServiceVersion,
+            };
         });
 
         // ----- network -----

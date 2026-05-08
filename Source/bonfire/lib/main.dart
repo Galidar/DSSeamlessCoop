@@ -15,13 +15,6 @@ import 'state/app_state.dart';
 import 'theme.dart';
 
 Future<void> main() async {
-  // Hard-coded smoke test: prove main() runs at all and we have file write
-  // permissions on this machine.
-  try {
-    File(r'C:\Users\Diux\Desktop\_bonfire_test\boot.txt').writeAsStringSync(
-        'main() reached at ${DateTime.now()}\n');
-  } catch (_) {}
-
   WidgetsFlutterBinding.ensureInitialized();
   BonfireLog.init();
   BonfireLog.write('main: started, log path = ${BonfireLog.diagPath()}');
