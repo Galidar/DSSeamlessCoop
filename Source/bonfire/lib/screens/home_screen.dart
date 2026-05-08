@@ -26,6 +26,7 @@ import '../widgets/status_dot.dart';
 import 'about_dialog.dart';
 import 'config_panel.dart';
 import 'game_settings_panel.dart';
+import 'help_dialog.dart';
 import 'install_panel.dart';
 
 class HomeScreen extends StatefulWidget {
@@ -233,6 +234,11 @@ class _Header extends StatelessWidget {
           const Spacer(),
           // Per-profile status + actions live in the MY BONFIRES rows;
           // header is reserved for app-wide affordances only.
+          _IconBtn(
+            icon: Icons.help_outline,
+            tooltip: 'How to use Bonfire',
+            onTap: () => showBonfireHelp(context),
+          ),
           _IconBtn(
             icon: Icons.tune,
             tooltip: 'Game settings',
