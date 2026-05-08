@@ -578,7 +578,13 @@ function refreshSettingsTab()
         var prettyGame = "Dark Souls";
         if (data.gameType === "DarkSouls2") prettyGame = "Dark Souls II";
         else if (data.gameType === "DarkSouls3") prettyGame = "Dark Souls III";
-        var heading = prettyGame + " — Open Server";
+        // — is em-dash (—). Use the JS unicode escape (not the
+        // literal character) so the heading still renders correctly
+        // even if the browser decodes this file as Latin-1 / Windows-
+        // 1252 because the response didn't carry an explicit
+        // charset=utf-8 — the literal byte sequence shows as mojibake
+        // ("â€\"") under that scenario, the escape never does.
+        var heading = prettyGame + " \u2014 Open Server";
         document.title = heading;
         var pageTitle = document.querySelector("#page-title");
         if (pageTitle) pageTitle.textContent = heading;

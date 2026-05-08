@@ -1,7 +1,7 @@
 name: bonfire
 description: Bonfire — Dark Souls Open Server companion (Galidar fork).
 publish_to: 'none'
-version: 0.2.1+1
+version: 0.2.2+1
 
 environment:
   sdk: ^3.5.4

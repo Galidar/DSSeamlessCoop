@@ -83,6 +83,19 @@ bool WebUIService::Init()
     Options.push_back("additional_header");
     Options.push_back("Cache-Control: no-store, no-cache, must-revalidate");
 
+    // Force charset=utf-8 on text MIME types so non-ASCII characters in
+    // index.html / main.js (em-dashes, accented strings, etc.) render
+    // correctly. Without this civetweb sends Content-Type without a
+    // charset parameter and browsers fall back to Latin-1 / Windows-
+    // 1252, turning U+2014 into "â€\"" mojibake.
+    Options.push_back("extra_mime_types");
+    Options.push_back(
+        ".html=text/html; charset=utf-8,"
+        ".htm=text/html; charset=utf-8,"
+        ".js=application/javascript; charset=utf-8,"
+        ".css=text/css; charset=utf-8,"
+        ".json=application/json; charset=utf-8");
+
     try
     {
         WebServer = std::make_shared<CivetServer>(Options);
