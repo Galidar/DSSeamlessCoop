@@ -72,6 +72,16 @@ bool WebUIService::Init()
     Options.push_back(StringFormat("%i", Port));
     Options.push_back("num_threads");
     Options.push_back("5");
+    // Disable browser caching of WebUI assets. The HTML and JS get
+    // updated whenever the server is, and an admin re-opening the WebUI
+    // after an upgrade should NOT see a stale page from cache. Set
+    // static_file_max_age=0 (civetweb sends Cache-Control: max-age=0)
+    // and additionally send a no-store header for full belt-and-braces
+    // — Chrome will revalidate on every reload.
+    Options.push_back("static_file_max_age");
+    Options.push_back("0");
+    Options.push_back("additional_header");
+    Options.push_back("Cache-Control: no-store, no-cache, must-revalidate");
 
     try
     {
