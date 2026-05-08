@@ -1,44 +1,49 @@
 -------------------------------------------------------------------------
- Dark Souls - Open Server
- https://github.com/TLeonardUK/ds3os
+ DSSeamlessCoop / Bonfire — Galidar fork of TLeonardUK/ds3os
+ https://github.com/Galidar/DSSeamlessCoop
 -------------------------------------------------------------------------
 
-Before running any executables, please install the files in Prerequisites 
-first, these are C++ runtimes required to run the executables, without 
-them they may not run.
+Before running anything, install the C++ runtimes from the Prerequisites/
+folder. Bonfire and Server.exe may fail to start without them.
 
-For up to date documentation please read the information on the github readme.
+== How to use ==
+
+1. Run Bonfire.exe.
+   Windows will ask for admin permission — accept it. Bonfire needs admin
+   to inject Bonfire's code into the Dark Souls process at launch (this is
+   how the game gets pointed at the unofficial server instead of the
+   shut-down retail one).
+
+2. Pick the Dark Souls II or Dark Souls III tab.
+
+3. Click "+ New bonfire", give the profile a name, and follow the install
+   steps. Bonfire downloads the server, applies the firewall rules, and
+   detects your WAN/LAN IPs automatically.
+
+4. Click "Light the bonfire" on your profile. Bonfire starts the local
+   server and launches the game pointed at it.
+
+Steam must be running while the server is up. No Steam login is required
+on the server side.
+
+== What's in this folder ==
+
+  Bonfire.exe              Flutter desktop app (the launcher)
+  BonfireService.exe       Backend the launcher talks to (admin)
+  flutter_windows.dll      Flutter runtime
+  data/                    Flutter assets and compiled Dart code
+  Server/                  The actual unofficial game server (Server.exe)
+                           and its WebUI/static files. Server.exe writes
+                           Saved/default/config.json on first run.
+  Loader/                  Injector.dll (the C++ DLL injected into the
+                           game). Despite the folder name, the legacy
+                           Loader.exe is no longer shipped — Bonfire
+                           replaces it.
+  Prerequisites/           Visual C++ redistributables.
+
+For the full setup guide and troubleshooting, see the README on GitHub:
+https://github.com/Galidar/DSSeamlessCoop
+
+This fork stands on the shoulders of the upstream DS3OS project by
+TLeonardUK and contributors. Please support the original:
 https://github.com/TLeonardUK/ds3os
-
-Contained within are 2 folders:
-
--- Loader --
-This tool allows you to launch Dark Souls 2/3 in a way that allows you to join 
-an unofficial server. All you need to do is open the Loader, set the path 
-to your game's exe path (normally somewhere in your steam directory).
-
-Be warned, while it does not currently seem to occur, no guarantee is made that 
-your account will not be soft-banned on offical servers if you use this tool.
-It would be wise to use a family-share account or a similar disposable account 
-when using this.
-
--- Server --
-When run this will launch a dark souls 2/3 server. 
-
-We do not advise people to use this directly, instead join an existing server 
-or create a server from the loader, this will be much simpler and avoid needing
-to handle port-forwarding/firewalls/etc.
-
-If you really want to run a dedicated server yourself;- when launched it will save 
-a file to Saved\default\config.json, this file contains configuration settings 
-for the server users to join the server. You should open this file and modify 
-the appropriate settings to your preferences.
-If you do not have a hostname that points to your computer use your 
-external IP address (the one you find from visiting sites like 
-https://www.whatismyip.com/).
-
-The server accepts connections on ports 50050, 50000 and 50010 by default. If 
-the computer you are running the server on is behind a router you will likely
-need to modify your router to port-forward TCP and UDP on all of those ports to
-allow external people to connect. Guides to doing this are numerous and available
-online.
