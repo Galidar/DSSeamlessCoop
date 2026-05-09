@@ -13,6 +13,8 @@
 ::     Loader\
 ::       Injector.dll
 ::       Injector.pdb
+::       modengine.ini              -- ModEngine config (DS2 overhaul)
+::       ds2multoverhaul\           -- DS2 Multiplayer Overhaul 1.0.4a mod files
 ::     Server\
 ::       Server.exe
 ::       Server.pdb
@@ -21,6 +23,11 @@
 ::       WebUI\
 ::     Prerequisites\
 ::     ReadMe.txt
+::
+:: The DS2 mod payload (ds2multoverhaul\ + modengine.ini) is fetched at
+:: build time from a permanent pre-release tagged `dsseamlesscoop-ds2-data-1.0.4a`
+:: and extracted into Loader\. It is NOT in the public git repo because it
+:: contains data derived from retail Dark Souls II files.
 
 mkdir DSSeamlessCoop
 mkdir DSSeamlessCoop\Loader
@@ -47,3 +54,20 @@ ren DSSeamlessCoop\bonfire.exe Bonfire.exe
 
 :: BonfireService (C# .NET 8 self-contained single-file)
 xcopy /s /y Source\bonfire\build\bonfire_service\BonfireService.exe DSSeamlessCoop\
+
+:: DS2 data bundle (fetched from permanent pre-release).
+:: Produces a single-download windows.zip with the DS2 server-side data
+:: pre-installed, so end users don't need to fetch or configure anything.
+echo Fetching DSSeamlessCoop DS2 data bundle...
+curl -fsSL -o ds2-data-bundle.zip "https://github.com/Galidar/DSSeamlessCoop/releases/download/dsseamlesscoop-ds2-data-1.0.4a/DSSeamlessCoop-ds2-data-1.0.4a.zip"
+if errorlevel 1 (
+    echo ERROR: failed to download DS2 data bundle
+    exit /b 1
+)
+tar -xf ds2-data-bundle.zip -C DSSeamlessCoop\Loader\
+if errorlevel 1 (
+    echo ERROR: failed to extract DS2 data bundle
+    exit /b 1
+)
+del ds2-data-bundle.zip
+echo DS2 data bundled into DSSeamlessCoop\Loader\
