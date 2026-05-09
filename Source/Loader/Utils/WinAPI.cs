@@ -319,11 +319,20 @@ namespace Loader
         [DllImport("kernel32.dll", SetLastError=true, ExactSpelling=true)]
         public static extern IntPtr VirtualAllocEx(IntPtr hProcess, IntPtr lpAddress, uint dwSize, uint flAllocationType, uint flProtect);
 
+        [DllImport("kernel32.dll", SetLastError=true, ExactSpelling=true)]
+        public static extern bool VirtualFreeEx(IntPtr hProcess, IntPtr lpAddress, uint dwSize, uint dwFreeType);
+
         [DllImport("psapi.dll", SetLastError = true)]
         static extern bool GetModuleInformation(IntPtr hProcess, IntPtr hModule, out MODULEINFO lpmodinfo, uint cb);
 
+        [DllImport("psapi.dll", SetLastError = true, CharSet = CharSet.Auto)]
+        public static extern uint GetModuleFileNameEx(IntPtr hProcess, IntPtr hModule, StringBuilder lpFilename, int nSize);
+
         [DllImport("kernel32.dll")]
         public static extern IntPtr CreateRemoteThread(IntPtr hProcess, IntPtr lpThreadAttributes, uint dwStackSize, IntPtr lpStartAddress, IntPtr lpParameter, uint dwCreationFlags, IntPtr lpThreadId);
+
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern uint WaitForSingleObject(IntPtr hHandle, uint dwMilliseconds);
 
         public static IntPtr GetProcessModuleBaseAddress(IntPtr hProcess)
         {

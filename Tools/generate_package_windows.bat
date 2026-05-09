@@ -16,7 +16,6 @@
 ::       modengine.ini              -- DS2 runtime data loader config
 ::       ds2multoverhaul\           -- DS2 online unlock data
 ::       SeamlessCoop\              -- DS3 online unlock runtime
-::       ds3sc_launcher.exe
 ::     Server\
 ::       Server.exe
 ::       Server.pdb

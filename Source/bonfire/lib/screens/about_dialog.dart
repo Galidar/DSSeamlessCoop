@@ -46,7 +46,7 @@ class _AboutDialog extends StatelessWidget {
                               fontWeight: FontWeight.w600,
                               letterSpacing: 0.6,
                               color: p.textPrimary)),
-                      Text('v1.3.0',
+                      Text('v1.4.0',
                           style: TextStyle(
                               fontSize: 12,
                               color: p.textMuted,

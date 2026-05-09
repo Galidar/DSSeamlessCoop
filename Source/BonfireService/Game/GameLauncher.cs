@@ -43,8 +43,7 @@ public sealed record LaunchResult(bool Ok, string Message, int? Pid);
 public static class GameLauncher
 {
     private sealed record Ds3SeamlessLaunchPlan(
-        string DllPath,
-        string? LauncherPath);
+        string DllPath);
 
     public static LaunchResult Launch(LaunchRequest req,
         string machinePublicIp, string machinePrivateIp,
@@ -84,48 +83,71 @@ public static class GameLauncher
         if (!string.IsNullOrEmpty(ds3PrepareErr))
             return new(false, ds3PrepareErr, null);
 
-        var launchExe = ds3SeamlessPlan?.LauncherPath ?? req.ExePath;
-        var launchedViaDs3SeamlessLauncher =
-            ds3SeamlessPlan?.LauncherPath is not null;
+        var launchExe = req.ExePath;
+        var launchFlags = ds3SeamlessPlan is not null
+            ? ProcessCreationFlags.CREATE_SUSPENDED | ProcessCreationFlags.DETACHED_PROCESS
+            : ProcessCreationFlags.ZERO_FLAG;
 
         // ── 5. CreateProcess ───────────────────────────────────────
         //
-        // Plain ZERO_FLAG, exactly like the original Loader's PerformLaunch
-        // (MainForm.cs:649). Earlier we tried CREATE_BREAKAWAY_FROM_JOB on
-        // the theory that BonfireService's job-object membership was
-        // breaking Steam IPC, but that flag actually severs the game from
-        // the parent process tree in a way Steam's overlay/auth machinery
-        // doesn't like (manifests as: login handshake passes, auth socket
-        // opens then immediately drops without sending RequestHandshake).
-        // Match Loader exactly.
+        // DS3 Seamless must be present before DarkSoulsIII.exe starts its
+        // game code. Yui's launcher does this by creating the game suspended,
+        // injecting SeamlessCoop\ds3sc.dll, then resuming the main thread.
+        //
+        // For non-Seamless launches, keep the original Loader behavior:
+        // plain ZERO_FLAG. Earlier we tried CREATE_BREAKAWAY_FROM_JOB on the
+        // theory that BonfireService's job-object membership was breaking
+        // Steam IPC, but that flag severs the game from the parent process
+        // tree in a way Steam's overlay/auth machinery doesn't like.
         var startup = new STARTUPINFO();
         var pi = new PROCESS_INFORMATION();
-        var launchStartedAt = DateTime.Now;
-        var ok = WinAPI.CreateProcess(
-            null!, $"\"{launchExe}\"",
-            IntPtr.Zero, IntPtr.Zero, false,
-            ProcessCreationFlags.ZERO_FLAG,
-            IntPtr.Zero, exeDir,
-            ref startup, out pi);
-        if (!ok)
-            return new(false,
-                $"CreateProcess failed (GetLastError={Marshal.GetLastWin32Error()}).", null);
-
-        var targetPi = pi;
-        if (launchedViaDs3SeamlessLauncher)
+        var previousSteamAppId = Environment.GetEnvironmentVariable("SteamAppId");
+        try
         {
-            if (!WaitForGameProcess(req.ExePath, launchStartedAt, out targetPi, out var waitErr))
-                return new(false, waitErr, (int)pi.dwProcessId);
+            if (ds3SeamlessPlan is not null)
+                Environment.SetEnvironmentVariable("SteamAppId", loadCfg.SteamAppId.ToString());
+
+            var ok = WinAPI.CreateProcess(
+                null!, $"\"{launchExe}\"",
+                IntPtr.Zero, IntPtr.Zero, false,
+                launchFlags,
+                IntPtr.Zero, exeDir,
+                ref startup, out pi);
+            if (!ok)
+                return new(false,
+                    $"CreateProcess failed (GetLastError={Marshal.GetLastWin32Error()}).", null);
+        }
+        finally
+        {
+            if (ds3SeamlessPlan is not null)
+                Environment.SetEnvironmentVariable("SteamAppId", previousSteamAppId);
+        }
+
+        if (ds3SeamlessPlan is not null)
+        {
+            if (!InjectDs3SeamlessBeforeResume(pi, ds3SeamlessPlan, out var ds3SeamlessErr))
+            {
+                TryTerminateProcess(pi);
+                return new(false, ds3SeamlessErr, (int)pi.dwProcessId);
+            }
+
+            if (WinAPI.ResumeThread(pi.hThread) == uint.MaxValue)
+            {
+                var error = "DS3 Seamless runtime loaded, but ResumeThread failed " +
+                            $"(GetLastError={Marshal.GetLastWin32Error()}).";
+                TryTerminateProcess(pi);
+                return new(false, error, (int)pi.dwProcessId);
+            }
         }
 
         return Inject(
-            targetPi,
+            pi,
             loadCfg,
             injectorDllPath,
             req,
             connectionHostname,
             ds3SeamlessPlan,
-            ds3SeamlessAlreadyLoaded: launchedViaDs3SeamlessLauncher);
+            ds3SeamlessAlreadyLoaded: ds3SeamlessPlan is not null);
     }
 
     private static LaunchResult Inject(PROCESS_INFORMATION pi,
@@ -271,7 +293,7 @@ public static class GameLauncher
                 req.ExePath,
                 BuildDs3SeamlessPassword(req),
                 out var dllPath,
-                out var launcherPath,
+                out _,
                 out var prepareErr))
         {
             if (string.IsNullOrWhiteSpace(req.Ds3SeamlessPath) &&
@@ -284,7 +306,7 @@ public static class GameLauncher
             return null;
         }
 
-        return new Ds3SeamlessLaunchPlan(dllPath, launcherPath);
+        return new Ds3SeamlessLaunchPlan(dllPath);
     }
 
     private static bool InjectDs3Seamless(
@@ -293,63 +315,30 @@ public static class GameLauncher
         return LoadLibraryIntoProcess(pi, plan.DllPath, "DS3 Seamless runtime", out error);
     }
 
-    private static bool WaitForGameProcess(
-        string gameExePath,
-        DateTime launchStartedAt,
-        out PROCESS_INFORMATION pi,
-        out string error)
+    private static bool InjectDs3SeamlessBeforeResume(
+        PROCESS_INFORMATION pi, Ds3SeamlessLaunchPlan plan, out string error)
     {
-        pi = new PROCESS_INFORMATION();
-        error = "";
-
-        var exeName = Path.GetFileNameWithoutExtension(gameExePath);
-        var expectedPath = Path.GetFullPath(gameExePath);
-        var minStartTime = launchStartedAt.AddSeconds(-5);
-
-        for (var attempt = 0; attempt < 80; attempt++)
+        if (!LoadLibraryIntoProcess(
+                pi,
+                plan.DllPath,
+                "DS3 Seamless runtime",
+                out error,
+                waitForLoad: true,
+                verifyLoadedModule: true))
         {
-            foreach (var process in Process.GetProcessesByName(exeName))
-            {
-                try
-                {
-                    if (process.StartTime < minStartTime)
-                        continue;
-
-                    var processPath = process.MainModule?.FileName;
-                    if (string.IsNullOrEmpty(processPath) ||
-                        !SamePath(processPath, expectedPath))
-                    {
-                        continue;
-                    }
-
-                    var handle = WinAPI.OpenProcess(
-                        ProcessAccessFlags.All, false, process.Id);
-                    if (handle == IntPtr.Zero)
-                        continue;
-
-                    pi = new PROCESS_INFORMATION
-                    {
-                        hProcess = handle,
-                        dwProcessId = (uint)process.Id,
-                    };
-                    return true;
-                }
-                catch
-                {
-                    // The process can exit or deny module reads while the
-                    // launcher is still starting the game. Keep polling.
-                }
-            }
-
-            Thread.Sleep(250);
+            return false;
         }
 
-        error = "DS3 Seamless launcher started, but DarkSoulsIII.exe did not appear.";
-        return false;
+        return true;
     }
 
     private static bool LoadLibraryIntoProcess(
-        PROCESS_INFORMATION pi, string dllPath, string label, out string error)
+        PROCESS_INFORMATION pi,
+        string dllPath,
+        string label,
+        out string error,
+        bool waitForLoad = false,
+        bool verifyLoadedModule = false)
     {
         error = "";
         if (!File.Exists(dllPath))
@@ -411,7 +400,82 @@ public static class GameLauncher
                     $"(GetLastError={Marshal.GetLastWin32Error()})";
             return false;
         }
+
+        if (waitForLoad)
+        {
+            var waitResult = WinAPI.WaitForSingleObject(thread, 10_000);
+            WinAPI.VirtualFreeEx(pi.hProcess, pathAddr, 0, (uint)AllocationType.Release);
+            WinAPI.CloseHandle(thread);
+
+            if (waitResult != 0)
+            {
+                error = $"{label}: LoadLibrary did not finish in time " +
+                        $"(WaitForSingleObject={waitResult}, GetLastError={Marshal.GetLastWin32Error()})";
+                return false;
+            }
+
+            if (verifyLoadedModule && !IsModuleLoaded(pi.hProcess, dllPath))
+            {
+                error = $"{label}: LoadLibrary returned but the module was not found in the target process.";
+                return false;
+            }
+        }
         return true;
+    }
+
+    private static bool IsModuleLoaded(IntPtr processHandle, string expectedPath)
+    {
+        var modules = new IntPtr[1024];
+        var handle = GCHandle.Alloc(modules, GCHandleType.Pinned);
+        try
+        {
+            var bytes = (uint)(IntPtr.Size * modules.Length);
+            if (!WinAPI.EnumProcessModulesEx(
+                    processHandle,
+                    handle.AddrOfPinnedObject(),
+                    bytes,
+                    out var needed,
+                    DwFilterFlag.LIST_MODULES_ALL))
+            {
+                return false;
+            }
+
+            var count = Math.Min((int)(needed / (uint)IntPtr.Size), modules.Length);
+            var modulePath = new StringBuilder(32_768);
+            for (var i = 0; i < count; i++)
+            {
+                modulePath.Clear();
+                if (WinAPI.GetModuleFileNameEx(
+                        processHandle,
+                        modules[i],
+                        modulePath,
+                        modulePath.Capacity) == 0)
+                {
+                    continue;
+                }
+
+                if (SamePath(modulePath.ToString(), expectedPath))
+                    return true;
+            }
+
+            return false;
+        }
+        finally
+        {
+            handle.Free();
+        }
+    }
+
+    private static void TryTerminateProcess(PROCESS_INFORMATION pi)
+    {
+        try
+        {
+            Process.GetProcessById((int)pi.dwProcessId).Kill();
+        }
+        catch
+        {
+            // Best-effort cleanup after a failed suspended launch.
+        }
     }
 
     private static bool ShouldAttemptDs3Seamless(LaunchRequest req) =>

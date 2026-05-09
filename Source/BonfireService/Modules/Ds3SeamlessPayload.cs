@@ -3,7 +3,6 @@ namespace Bonfire.Service.Modules;
 public sealed record Ds3SeamlessPayload(
     string SourceRoot,
     string SourceDll,
-    string? SourceLauncher,
     bool IsBundled);
 
 public static class Ds3SeamlessPayloadResolver
@@ -11,6 +10,8 @@ public static class Ds3SeamlessPayloadResolver
     public const string RootDirectoryName = "SeamlessCoop";
     public const string DllName = "ds3sc.dll";
     public const string LauncherName = "ds3sc_launcher.exe";
+    private const string LegacyLauncherSha256 =
+        "EE7C8F74751154DF84E587F6A8204CF257744A813A3D3F43FACED7B502678A48";
 
     public static Ds3SeamlessPayload? Resolve(string configuredPath, string ds3ExePath)
     {
@@ -64,10 +65,7 @@ public static class Ds3SeamlessPayloadResolver
                 CopyDirectory(payload.SourceRoot, targetRoot);
             }
 
-            if (!string.IsNullOrEmpty(payload.SourceLauncher))
-            {
-                CopyFileIfDifferent(payload.SourceLauncher, targetLauncher);
-            }
+            RemoveLegacyStagedLauncher(targetLauncher);
 
             EnsureCrashDumpDirectories(targetRoot);
             WriteSessionPassword(targetRoot, sessionPassword);
@@ -85,8 +83,21 @@ public static class Ds3SeamlessPayloadResolver
         }
 
         injectedDll = targetDll;
-        launcherExe = File.Exists(targetLauncher) ? targetLauncher : null;
+        launcherExe = null;
         return true;
+    }
+
+    private static void RemoveLegacyStagedLauncher(string targetLauncher)
+    {
+        if (!File.Exists(targetLauncher))
+        {
+            return;
+        }
+
+        using var stream = File.OpenRead(targetLauncher);
+        var hash = Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(stream));
+        if (string.Equals(hash, LegacyLauncherSha256, StringComparison.OrdinalIgnoreCase))
+            File.Delete(targetLauncher);
     }
 
     private static void EnsureCrashDumpDirectories(string targetRoot)
@@ -171,8 +182,6 @@ public static class Ds3SeamlessPayloadResolver
         }
 
         string? root = null;
-        string? launcher = null;
-
         if (File.Exists(path) &&
             string.Equals(Path.GetFileName(path), DllName, StringComparison.OrdinalIgnoreCase))
         {
@@ -191,9 +200,6 @@ public static class Ds3SeamlessPayloadResolver
             else if (File.Exists(nestedDll))
             {
                 root = nestedRoot;
-                var packageLauncher = Path.Combine(path, LauncherName);
-                if (File.Exists(packageLauncher))
-                    launcher = packageLauncher;
             }
         }
 
@@ -204,30 +210,11 @@ public static class Ds3SeamlessPayloadResolver
         if (!File.Exists(dll))
             return null;
 
-        launcher ??= ResolveLauncher(root);
         var bundledRoot = Path.Combine(Paths.InstallRoot, "Loader", RootDirectoryName);
         return new Ds3SeamlessPayload(
             root,
             dll,
-            launcher,
             SamePath(root, bundledRoot));
-    }
-
-    private static string? ResolveLauncher(string root)
-    {
-        var parent = Path.GetDirectoryName(root);
-        if (!string.IsNullOrEmpty(parent))
-        {
-            var sibling = Path.Combine(parent, LauncherName);
-            if (File.Exists(sibling))
-                return sibling;
-        }
-
-        var loaderSibling = Path.Combine(Paths.InstallRoot, "Loader", LauncherName);
-        if (File.Exists(loaderSibling))
-            return loaderSibling;
-
-        return null;
     }
 
     private static void CopyDirectory(string sourceDir, string targetDir)
