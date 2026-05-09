@@ -124,16 +124,14 @@ class _JoinerGuide extends StatelessWidget {
       _Step(
         n: 1,
         title: 'Have the game on Steam',
-        body:
-            'Buy and install Dark Souls II: Scholar of the First Sin or '
-            'Dark Souls III on Steam. Bonfire finds the .exe automatically '
+        body: 'Buy and install Dark Souls Remastered, Dark Souls II: Scholar '
+            'of the First Sin, or Dark Souls III on Steam. Bonfire finds the .exe automatically '
             'from your Steam library — no path picking by hand.',
       ),
       _Step(
         n: 2,
         title: 'Open Bonfire (admin)',
-        body:
-            'Windows asks for admin permission. Say yes — Bonfire needs it '
+        body: 'Windows asks for admin permission. Say yes — Bonfire needs it '
             'to inject the redirect code into the game so it talks to the '
             'unofficial server instead of the (long-shut-down) retail one.',
       ),
@@ -141,15 +139,14 @@ class _JoinerGuide extends StatelessWidget {
         n: 3,
         title: 'Pick your tab',
         body:
-            'Dark Souls II or Dark Souls III at the top. Bonfire shows the '
+            'Dark Souls Remastered, Dark Souls II, or Dark Souls III at the top. Bonfire shows the '
             'public fires of that game in the PUBLIC BONFIRES list, '
             'refreshed live from the master server.',
       ),
       _Step(
         n: 4,
         title: 'Travel to a fire',
-        body:
-            'Click "Travel to this fire" on any unsealed (open) bonfire. '
+        body: 'Click "Travel to this fire" on any unsealed (open) bonfire. '
             'Sealed ones need a password — ask the host. Bonfire fetches '
             'the server\'s key, launches the game and patches it on the '
             'fly. The first time the game tries to go online you should '
@@ -203,8 +200,7 @@ class _HostGuide extends StatelessWidget {
       _Step(
         n: 2,
         title: 'Apply firewall rules',
-        body:
-            'During first install Bonfire offers to add Windows Firewall '
+        body: 'During first install Bonfire offers to add Windows Firewall '
             'rules (TCP+UDP on 50000/50010/50020/50050) and accept '
             'inbound for Server.exe. Accept the UAC prompt — without these '
             'rules outside players can\'t reach you.',
@@ -212,8 +208,7 @@ class _HostGuide extends StatelessWidget {
       _Step(
         n: 3,
         title: 'Tend the flame',
-        body:
-            'Open Tend the flame to set: server name, description, '
+        body: 'Open Tend the flame to set: server name, description, '
             'optional password (locks your bonfire — only people with the '
             'password can join), and the WAN/LAN IPs. Auto-detect is '
             'usually right; switch to Manual only if you\'re behind paid '
@@ -223,8 +218,7 @@ class _HostGuide extends StatelessWidget {
       _Step(
         n: 4,
         title: 'Light the bonfire',
-        body:
-            'The button on your profile row starts the local Server.exe, '
+        body: 'The button on your profile row starts the local Server.exe, '
             'registers it with the master server (so others see it in '
             'their public list), and launches your game pointed at it. '
             'You can play on your own server — being the host doesn\'t '
@@ -233,8 +227,7 @@ class _HostGuide extends StatelessWidget {
       _Step(
         n: 5,
         title: 'Manage from the WebUI',
-        body:
-            'http://localhost:50005/ shows live stats, players online, '
+        body: 'http://localhost:50005/ shows live stats, players online, '
             'matchmaking knobs, and a ban list. Use the credentials you '
             'set in Tend the flame.',
       ),
@@ -279,9 +272,7 @@ class _Scroll extends StatelessWidget {
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          ...children
-              .expand((c) => [c, const SizedBox(height: Sp.md)])
-              .toList()
+          ...children.expand((c) => [c, const SizedBox(height: Sp.md)]).toList()
             ..removeLast(),
         ],
       ),
@@ -340,12 +331,10 @@ class _Step extends StatelessWidget {
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
             children: [
-              Text(title,
-                  style: BT.heading.copyWith(color: p.textPrimary)),
+              Text(title, style: BT.heading.copyWith(color: p.textPrimary)),
               const SizedBox(height: 4),
               Text(body,
-                  style: BT.body
-                      .copyWith(color: p.textSecondary, height: 1.5)),
+                  style: BT.body.copyWith(color: p.textSecondary, height: 1.5)),
             ],
           ),
         ),
@@ -392,8 +381,7 @@ class _Bullet extends StatelessWidget {
           ),
           Expanded(
             child: Text(text,
-                style: BT.body
-                    .copyWith(color: p.textSecondary, height: 1.5)),
+                style: BT.body.copyWith(color: p.textSecondary, height: 1.5)),
           ),
         ],
       ),

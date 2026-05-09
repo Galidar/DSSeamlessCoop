@@ -150,6 +150,11 @@ bool Server::Init()
     // Create game interface for this server.
     switch (ServerGameType)
     {
+        case GameType::DarkSouls1:
+        {
+            GameInterface = std::make_unique<DS1_Game>();
+            break;
+        }
         case GameType::DarkSouls2:
         {
             GameInterface = std::make_unique<DS2_Game>();

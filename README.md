@@ -3,9 +3,9 @@
 # Bonfire
 
 Bonfire is Galidar's Dark Souls online server hub for Windows. It gives
-**Dark Souls II: Scholar of the First Sin** and **Dark Souls III** a guided
-private online flow: download one release, open the Flutter interface, choose a
-fire, and play.
+**Dark Souls I**, **Dark Souls II: Scholar of the First Sin**, and
+**Dark Souls III** a guided private online flow: download one release, open the
+Flutter interface, choose a fire, and play.
 
 Bonfire is built for a different experience than older manual private-server
 setups. It combines server management, automatic WAN/LAN detection, firewall
@@ -22,6 +22,8 @@ flows that were previously painful or unreachable.
 
 - **Created by Galidar.** Bonfire is its own product direction: a Dark Souls
   online hub focused on speed, comfort, and unlocks that feel natural to use.
+- **The trilogy in one place.** Host and join fires for Dark Souls I, Dark
+  Souls II, and Dark Souls III from the same interface.
 - **One release, a few clicks.** Download `windows.zip`, extract it, run
   `Bonfire.exe`, and use the interface.
 - **Fast hosting.** Create a fire, set its name/password/visibility, and click
@@ -32,9 +34,9 @@ flows that were previously painful or unreachable.
   the selected private server.
 - **Automatic IP detection.** Bonfire detects public WAN and private LAN
   addresses so normal hosts do not have to hunt through network settings.
-- **DS2 unlock layer included.** The Windows release already contains the
-  required DS2 online layer. Users do not install extra packages after
-  downloading Bonfire.
+- **Runtime unlocks included.** The Windows release already contains the
+  supported game runtime data Bonfire needs. Users do not install extra
+  packages after downloading Bonfire.
 - **Separate saves by default.** Private-server play stays away from retail save
   files.
 
@@ -45,7 +47,7 @@ flows that were previously painful or unreachable.
 2. Extract it anywhere, for example `C:\Bonfire\`.
 3. Run `Bonfire.exe` and accept the UAC prompt.
 4. Make sure Steam is running and logged in.
-5. Pick **Dark Souls II** or **Dark Souls III**.
+5. Pick **Dark Souls I**, **Dark Souls II**, or **Dark Souls III**.
 6. To join: click **Travel to this fire** on a listed public fire.
 7. To host: click **+ New bonfire**, configure it, then click
    **Light the bonfire**.
@@ -68,8 +70,24 @@ technical:
 - Starts and stops the private server from the UI.
 - Publishes public fires to the master list.
 - Retrieves server keys for sealed and public fires.
-- Launches DS2/DS3 through the Bonfire runtime bridge.
+- Launches Dark Souls I/II/III through the Bonfire runtime bridge.
 - Keeps private-server saves separate from retail saves.
+
+## Dark Souls I Unlocks
+
+For Dark Souls Remastered, Bonfire ships with the runtime layer required for
+the Dark Souls I online experience. Bonfire prepares the local client during
+launch, writes the fire password into the runtime settings, and starts
+`DarkSoulsRemastered.exe` directly through its native bridge.
+
+Expected Dark Souls I behavior:
+
+- The visible tab is **Dark Souls I**.
+- The supported Steam executable is `DarkSoulsRemastered.exe`.
+- The Windows release includes `Loader\Ds1SeamlessCoop\`.
+- The client runtime is staged into the game `SeamlessCoop\` folder when
+  launched through Bonfire.
+- Dark Souls I runtime saves use `.co2`.
 
 ## Dark Souls II Unlocks
 
@@ -89,6 +107,19 @@ Expected DS2 behavior:
 - Server address, port, public key, save path, and DS2 unlock data are prepared
   during launch.
 
+## Dark Souls III Unlocks
+
+For Dark Souls III, Bonfire ships with the supported runtime layer and prepares
+it automatically during launch. Users launch from Bonfire, choose a fire, and
+Bonfire handles the runtime preparation and password wiring.
+
+Expected Dark Souls III behavior:
+
+- The Windows release includes `Loader\SeamlessCoop\`.
+- The client runtime is staged into the game `SeamlessCoop\` folder when
+  launched through Bonfire.
+- Dark Souls III runtime saves use `.co2`.
+
 ## Hosting A Fire
 
 1. Choose the game tab.
@@ -106,7 +137,7 @@ needed to join.
 ## Joining A Fire
 
 1. Open Bonfire.
-2. Pick the DS2 or DS3 tab.
+2. Pick the Dark Souls I, Dark Souls II, or Dark Souls III tab.
 3. Browse or filter public fires.
 4. Click **Travel to this fire**.
 5. Enter the password if the fire is sealed.
@@ -118,8 +149,9 @@ command lines, manual IP entry, or extra installers.
 
 Keep **Use separate saves** enabled.
 
+- Dark Souls I runtime saves use `.co2`.
 - DS2 private-server saves use `.sl3`.
-- DS3 private-server saves use `.ds3os`.
+- Dark Souls III runtime saves use `.co2`.
 
 Do not copy private-server saves over retail saves. Do not connect
 Bonfire-prepared clients to FromSoftware official servers.
@@ -148,6 +180,11 @@ auth flow depends on Steam tickets.
 
 Apply Bonfire's firewall rules from the UI. If players are outside your LAN,
 also forward the required ports on your router or hosting provider.
+
+### Dark Souls I or III launches without the online runtime
+
+Make sure you are launching through the current Bonfire release, not directly
+through Steam. The release must contain the `Loader\` folder from `windows.zip`.
 
 ### DS2 launches without the unlock behavior
 

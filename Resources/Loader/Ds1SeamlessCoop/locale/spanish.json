@@ -1,0 +1,61 @@
+{
+	"GENERIC_INVALID": "Nada insteresante sucedió",
+
+	"GOODSNAME_HOSTINGITEM": "Orbe del Ojo Bendecido",	
+	"GOODSNAME_JOININGITEM": "Orbe del Ojo de Cristal",	
+	"GOODSNAME_BREAKINITEM": "Orbe del Ojo del Caos",	
+	"GOODSNAME_LEAVINGITEM": "Orbe del Ojo Abisal",	
+	"GOODSNAME_GAMERULECHANGEITEM": "Tomo Ominoso",	
+	"GOODSNAME_DRIEDFINGERITEM": "Dedos Secos",	
+	"GOODSNAME_INFECTIONITEM": "Colgante Maldito",
+	"GOODSNAME_CURSESIGILITEM": "Flor Carmesí",
+	"GOODSNAME_SAVEREPAIRITEM": "Pergamino de la Liberación",
+	
+	"GOODSINFO_HOSTINGITEM": "Crea una sesión cooperativa",	
+	"GOODSINFO_JOININGITEM": "Únete a una sesión cooperativa",	
+	"GOODSINFO_BREAKINITEM": "Invade una sesión cooperativa",	
+	"GOODSINFO_LEAVINGITEM": "Disuelve la sesión cooperativa",	
+	"GOODSINFO_GAMERULECHANGEITEM": "Cambia las reglas del mundo",	
+	"GOODSINFO_DRIEDFINGERITEM": "Provoca a los invasores para que se unan",	
+	"GOODSINFO_INFECTIONITEM": "Causa desastres en el mundo propio",
+	"GOODSINFO_CURSESIGILITEM": "Acumula maldición",
+	"GOODSINFO_SAVEREPAIRITEM": "Revive a los aliados del mundo",
+	
+	"GOODSDESC_HOSTINGITEM": "Un pequeño orbe ocular blanco. Se siente ligeramente cálido\nal tacto.\n\nMirar directamente al ojo llena el alma de pensamientos\nde alegre cooperación.",	
+	"GOODSDESC_JOININGITEM": "Un pequeño orbe ocular cristalino azul. Emite un leve\nsonido zumbante.\n\nMirar directamente al ojo llena el alma de pensamientos\nde alegre cooperación.",	
+	"GOODSDESC_BREAKINITEM": "Un pequeño orbe ocular rojo y ardiente. Quién sabe qué\nmalvados actos habrá presenciado este ojo.\n\nMirar directamente al ojo llena el alma con el deseo\nprimitivo del caos.",	
+	"GOODSDESC_LEAVINGITEM": "Un pequeño orbe ocular negro. El ojo mira directamente a\ntu alma.\n\nMirar directamente al ojo llena el alma con\nrecuerdos del hogar.",	
+	"GOODSDESC_GAMERULECHANGEITEM": "Un montón de papeles sueltos y desordenados. La escritura\nes tenue.\n\nLos papeles describen un ritual para invocar la verdadera\nnaturaleza de una personaentre sus aliados.",	
+	"GOODSDESC_DRIEDFINGERITEM": "Un dedo seco",	
+	"GOODSDESC_INFECTIONITEM": "Un viejo colgante, rayado, de uso desconocido.\n\nEl origen de este colgante es incierto, pero algunas fuentes\nmencionan un colgante desaparecido de las catacumbas\nde Nito Rey del Cementerio.",
+	"GOODSDESC_CURSESIGILITEM": "Una flor roja sangre creciendo alrededor del\nsello oscuro.\n\nPuedes sentir las raíces de esta flor alimentándose\ndirectamente de ti.",
+	"GOODSDESC_SAVEREPAIRITEM": "Permite revivir a ciertos NPC que han muerto",
+	
+	"MODMSG_WELCOMEGUEST": "¡{} se ha unido!",
+	"MODMSG_WELCOMEBREAKIN": "¡El espíritu maligno {} te ha invadido!",
+	"MODMSG_LEAVEGUEST": "{} se ha ido",
+	"MODMSG_LEAVEBREAKIN": "El espíritu maligno {} se ha ido",
+	"MODMSG_DEADGUEST": "{} ha muerto",
+	"MODMSG_DEADBREAKIN": "El espíritu maligno {} ha muerto",
+	
+	"MODMSG_GUESTSTART": "Uniendose a otro mundo como invitado...",
+	"MODMSG_GUESTMISSION": "¡Te has unido a otro mundo!",
+	
+	"MODMSG_HOSTWARPOUT": "El poder del hueso de regreso te consume...",
+	
+	"MODMSG_BREAKINSTART": "Invadiendo otro mundo como espíritu maligno",
+	"MODMSG_BREAKINMISSION": "¡Has invadido otro mundo! Derrota a {} jugadores",
+	"MODMSG_BREAKINSUCCESS": "¡Invasión exitosa! Regresando a tu mundo",
+	"MODMSG_BREAKINFAILED": "Invasión fallida... Regresando a tu mundo",
+	
+	"MODMSG_HOSTTIMEOUT": "No se pudo crear la sesión",
+	"MODMSG_JOINTIMEOUT": "No se pudo encontrar la sesión",
+	"MODMSG_BREAKINTIMEOUT": "No se pudo encontrar una sesión para invadir",
+	"MODMSG_CONNECTTIMEOUT": "No se pudo establecer la conexión",
+	"MODMSG_JOINNOONE": "No se encontraron sesiones",
+	"MODMSG_INVADENOONE": "No se encontraron sesiones",
+	
+	"ACTIONEVENT_EXONERATE":"¿Revivir a los aliados del mundo?",
+	
+	"CREDITS": "Sergioba99"
+}

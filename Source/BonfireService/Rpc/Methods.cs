@@ -447,10 +447,17 @@ public static class Methods
                     Loader.ExeUtils.GetExeSimpleHash(path));
             return new JsonObject
             {
+                ["ds1_exe_path"] = s.Ds1ExePath,
                 ["ds2_exe_path"] = s.Ds2ExePath,
                 ["ds3_exe_path"] = s.Ds3ExePath,
+                ["ds1_exe_valid"] = IsRecognised(s.Ds1ExePath),
                 ["ds2_exe_valid"] = IsRecognised(s.Ds2ExePath),
                 ["ds3_exe_valid"] = IsRecognised(s.Ds3ExePath),
+                ["ds1_seamless_path"] = s.Ds1SeamlessPath,
+                ["ds1_seamless_enabled"] = s.EnableDs1Seamless,
+                ["ds1_seamless_valid"] = string.IsNullOrWhiteSpace(s.Ds1SeamlessPath)
+                    ? Bonfire.Service.Modules.Ds1SeamlessPayloadResolver.Resolve("", s.Ds1ExePath) is not null
+                    : Bonfire.Service.Modules.Ds1SeamlessPayloadResolver.IsValidPath(s.Ds1SeamlessPath),
                 ["ds2_overhaul_path"] = s.Ds2OverhaulPath,
                 ["ds2_overhaul_valid"] = string.IsNullOrWhiteSpace(s.Ds2OverhaulPath) ||
                     !string.IsNullOrEmpty(Loader.Ds2ModEngineSettings.Resolve(
@@ -473,7 +480,9 @@ public static class Methods
                 throw new Exception("File does not exist: " + path);
 
             var s = GameSettings.Load();
-            if (string.Equals(gameType, "DarkSouls3", StringComparison.OrdinalIgnoreCase))
+            if (string.Equals(gameType, "DarkSouls1", StringComparison.OrdinalIgnoreCase))
+                s.Ds1ExePath = path;
+            else if (string.Equals(gameType, "DarkSouls3", StringComparison.OrdinalIgnoreCase))
                 s.Ds3ExePath = path;
             else
                 s.Ds2ExePath = path;
@@ -511,6 +520,39 @@ public static class Methods
             {
                 ["ok"] = true,
                 ["path"] = path,
+            };
+        });
+
+        server.Register("game.set_ds1_seamless_path", async (@params, _) =>
+        {
+            await Task.Yield();
+            var path = @params.GetString("path") ?? "";
+            if (!string.IsNullOrWhiteSpace(path) &&
+                !Bonfire.Service.Modules.Ds1SeamlessPayloadResolver.IsValidPath(path))
+            {
+                throw new Exception("Not a valid DS1 Seamless payload directory: " + path);
+            }
+
+            var s = GameSettings.Load();
+            s.Ds1SeamlessPath = path;
+            s.Save();
+            return new JsonObject
+            {
+                ["ok"] = true,
+                ["path"] = path,
+            };
+        });
+
+        server.Register("game.set_ds1_seamless_enabled", async (@params, _) =>
+        {
+            await Task.Yield();
+            var s = GameSettings.Load();
+            s.EnableDs1Seamless = @params.GetBool("enabled") ?? true;
+            s.Save();
+            return new JsonObject
+            {
+                ["ok"] = true,
+                ["enabled"] = s.EnableDs1Seamless,
             };
         });
 
@@ -619,6 +661,8 @@ public static class Methods
                 GameType: serverEntry.GameType,
                 EnableSeparateSaves: settings.UseSeparateSaves,
                 Ds2OverhaulPath: settings.Ds2OverhaulPath,
+                EnableDs1Seamless: settings.EnableDs1Seamless,
+                Ds1SeamlessPath: settings.Ds1SeamlessPath,
                 EnableDs3Seamless: settings.EnableDs3Seamless,
                 Ds3SeamlessPath: settings.Ds3SeamlessPath);
 
@@ -752,6 +796,8 @@ public static class Methods
                 GameType: meta.GameType,
                 EnableSeparateSaves: settings.UseSeparateSaves,
                 Ds2OverhaulPath: settings.Ds2OverhaulPath,
+                EnableDs1Seamless: settings.EnableDs1Seamless,
+                Ds1SeamlessPath: settings.Ds1SeamlessPath,
                 EnableDs3Seamless: settings.EnableDs3Seamless,
                 Ds3SeamlessPath: settings.Ds3SeamlessPath);
 

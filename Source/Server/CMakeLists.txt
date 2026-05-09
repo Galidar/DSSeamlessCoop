@@ -23,6 +23,8 @@ SET(SOURCES
         
     Server/Game.cpp
     Server/Game.h
+    Server/DarkSouls1/DS1_Game.cpp
+    Server/DarkSouls1/DS1_Game.h
     Server/ServerManager.cpp
     Server/ServerManager.h
     Server/Server.cpp

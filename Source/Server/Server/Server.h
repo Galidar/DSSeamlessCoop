@@ -21,6 +21,7 @@
 
 #include "Config/RuntimeConfig.h"
 
+#include "Server/DarkSouls1/DS1_Game.h"
 #include "Server.DarkSouls3/Server/DS3_Game.h"
 #include "Server.DarkSouls2/Server/DS2_Game.h"
 

@@ -35,6 +35,8 @@ public sealed record LaunchRequest(
     string GameType,
     bool EnableSeparateSaves,
     string Ds2OverhaulPath,
+    bool EnableDs1Seamless,
+    string Ds1SeamlessPath,
     bool EnableDs3Seamless,
     string Ds3SeamlessPath);
 
@@ -42,15 +44,17 @@ public sealed record LaunchResult(bool Ok, string Message, int? Pid);
 
 public static class GameLauncher
 {
-    private sealed record Ds3SeamlessLaunchPlan(
-        string DllPath);
+    private sealed record SeamlessLaunchPlan(
+        string DllPath,
+        string Label,
+        bool SkipBonfireInjector);
 
     public static LaunchResult Launch(LaunchRequest req,
         string machinePublicIp, string machinePrivateIp,
         string injectorDllPath)
     {
         // ── 1. Sanity ──────────────────────────────────────────────
-        if (string.IsNullOrEmpty(req.PublicKey))
+        if (string.IsNullOrEmpty(req.PublicKey) && !IsDs1Seamless(req))
             return new(false, "Server's public key is missing.", null);
         if (!File.Exists(req.ExePath))
             return new(false, $"Game executable not found: {req.ExePath}", null);
@@ -79,20 +83,20 @@ public static class GameLauncher
             return new(false, $"Could not write steam_appid.txt: {ex.Message}", null);
         }
 
-        var ds3SeamlessPlan = PrepareDs3Seamless(req, out var ds3PrepareErr);
-        if (!string.IsNullOrEmpty(ds3PrepareErr))
-            return new(false, ds3PrepareErr, null);
+        var seamlessPlan = PrepareSeamless(req, out var seamlessPrepareErr);
+        if (!string.IsNullOrEmpty(seamlessPrepareErr))
+            return new(false, seamlessPrepareErr, null);
 
         var launchExe = req.ExePath;
-        var launchFlags = ds3SeamlessPlan is not null
+        var launchFlags = seamlessPlan is not null
             ? ProcessCreationFlags.CREATE_SUSPENDED | ProcessCreationFlags.DETACHED_PROCESS
             : ProcessCreationFlags.ZERO_FLAG;
 
         // ── 5. CreateProcess ───────────────────────────────────────
         //
-        // DS3 Seamless must be present before DarkSoulsIII.exe starts its
-        // game code. Yui's launcher does this by creating the game suspended,
-        // injecting SeamlessCoop\ds3sc.dll, then resuming the main thread.
+        // Seamless Co-op must be present before the game starts its game
+        // code. Yui's launchers do this by creating the game suspended,
+        // injecting SeamlessCoop\<game>sc.dll, then resuming the main thread.
         //
         // For non-Seamless launches, keep the original Loader behavior:
         // plain ZERO_FLAG. Earlier we tried CREATE_BREAKAWAY_FROM_JOB on the
@@ -104,7 +108,7 @@ public static class GameLauncher
         var previousSteamAppId = Environment.GetEnvironmentVariable("SteamAppId");
         try
         {
-            if (ds3SeamlessPlan is not null)
+            if (seamlessPlan is not null)
                 Environment.SetEnvironmentVariable("SteamAppId", loadCfg.SteamAppId.ToString());
 
             var ok = WinAPI.CreateProcess(
@@ -119,21 +123,21 @@ public static class GameLauncher
         }
         finally
         {
-            if (ds3SeamlessPlan is not null)
+            if (seamlessPlan is not null)
                 Environment.SetEnvironmentVariable("SteamAppId", previousSteamAppId);
         }
 
-        if (ds3SeamlessPlan is not null)
+        if (seamlessPlan is not null)
         {
-            if (!InjectDs3SeamlessBeforeResume(pi, ds3SeamlessPlan, out var ds3SeamlessErr))
+            if (!InjectSeamlessBeforeResume(pi, seamlessPlan, out var seamlessErr))
             {
                 TryTerminateProcess(pi);
-                return new(false, ds3SeamlessErr, (int)pi.dwProcessId);
+                return new(false, seamlessErr, (int)pi.dwProcessId);
             }
 
             if (WinAPI.ResumeThread(pi.hThread) == uint.MaxValue)
             {
-                var error = "DS3 Seamless runtime loaded, but ResumeThread failed " +
+                var error = $"{seamlessPlan.Label} loaded, but ResumeThread failed " +
                             $"(GetLastError={Marshal.GetLastWin32Error()}).";
                 TryTerminateProcess(pi);
                 return new(false, error, (int)pi.dwProcessId);
@@ -146,21 +150,25 @@ public static class GameLauncher
             injectorDllPath,
             req,
             connectionHostname,
-            ds3SeamlessPlan,
-            ds3SeamlessAlreadyLoaded: ds3SeamlessPlan is not null);
+            seamlessPlan,
+            seamlessAlreadyLoaded: seamlessPlan is not null);
     }
 
     private static LaunchResult Inject(PROCESS_INFORMATION pi,
         DarkSoulsLoadConfig loadCfg, string injectorDllPath,
         LaunchRequest req, string connectionHostname,
-        Ds3SeamlessLaunchPlan? ds3SeamlessPlan,
-        bool ds3SeamlessAlreadyLoaded)
+        SeamlessLaunchPlan? seamlessPlan,
+        bool seamlessAlreadyLoaded)
     {
 
         try
         {
             // ── 6. Inject DLL or patch memory ────────────────────
-            if (loadCfg.UseInjector)
+            if (seamlessPlan?.SkipBonfireInjector == true)
+            {
+                return new(true, "Launched.", (int)pi.dwProcessId);
+            }
+            else if (loadCfg.UseInjector)
             {
                 if (!InjectDll(pi, injectorDllPath, req, connectionHostname,
                         out var injectErr))
@@ -177,11 +185,11 @@ public static class GameLauncher
                 }
             }
 
-            if (ds3SeamlessPlan is not null && !ds3SeamlessAlreadyLoaded)
+            if (seamlessPlan is not null && !seamlessAlreadyLoaded)
             {
-                if (!InjectDs3Seamless(pi, ds3SeamlessPlan, out var ds3SeamlessErr))
+                if (!InjectSeamless(pi, seamlessPlan, out var seamlessErr))
                 {
-                    return new(false, ds3SeamlessErr, (int)pi.dwProcessId);
+                    return new(false, seamlessErr, (int)pi.dwProcessId);
                 }
             }
 
@@ -244,7 +252,7 @@ public static class GameLauncher
             ServerPort = req.Port,
             ServerGameType = req.GameType,
             EnableSeperateSaveFiles =
-                !Ds3SeamlessOwnsSaveHook(req) &&
+                !SeamlessOwnsSaveHook(req) &&
                 (req.EnableSeparateSaves || ds2ModEngine.UseAlternateSaveFile),
             EnableModFileOverrides = ds2ModEngine.EnableModFileOverrides,
             ModOverrideDirectory = ds2ModEngine.ModOverrideDirectory,
@@ -281,17 +289,36 @@ public static class GameLauncher
             File.Exists(Path.Combine(gameDir, "DS2LE.log"));
     }
 
-    private static Ds3SeamlessLaunchPlan? PrepareDs3Seamless(
+    private static SeamlessLaunchPlan? PrepareSeamless(
         LaunchRequest req, out string error)
     {
         error = "";
+        if (ShouldAttemptDs1Seamless(req))
+        {
+            if (!Ds1SeamlessPayloadResolver.TryPrepareForGame(
+                    req.Ds1SeamlessPath,
+                    req.ExePath,
+                    BuildSeamlessPassword(req),
+                    out var ds1DllPath,
+                    out var ds1PrepareErr))
+            {
+                error = ds1PrepareErr;
+                return null;
+            }
+
+            return new SeamlessLaunchPlan(
+                ds1DllPath,
+                "DS1 Seamless runtime",
+                SkipBonfireInjector: true);
+        }
+
         if (!ShouldAttemptDs3Seamless(req))
             return null;
 
         if (!Ds3SeamlessPayloadResolver.TryPrepareForGame(
                 req.Ds3SeamlessPath,
                 req.ExePath,
-                BuildDs3SeamlessPassword(req),
+                BuildSeamlessPassword(req),
                 out var dllPath,
                 out _,
                 out var prepareErr))
@@ -306,22 +333,25 @@ public static class GameLauncher
             return null;
         }
 
-        return new Ds3SeamlessLaunchPlan(dllPath);
+        return new SeamlessLaunchPlan(
+            dllPath,
+            "DS3 Seamless runtime",
+            SkipBonfireInjector: false);
     }
 
-    private static bool InjectDs3Seamless(
-        PROCESS_INFORMATION pi, Ds3SeamlessLaunchPlan plan, out string error)
+    private static bool InjectSeamless(
+        PROCESS_INFORMATION pi, SeamlessLaunchPlan plan, out string error)
     {
-        return LoadLibraryIntoProcess(pi, plan.DllPath, "DS3 Seamless runtime", out error);
+        return LoadLibraryIntoProcess(pi, plan.DllPath, plan.Label, out error);
     }
 
-    private static bool InjectDs3SeamlessBeforeResume(
-        PROCESS_INFORMATION pi, Ds3SeamlessLaunchPlan plan, out string error)
+    private static bool InjectSeamlessBeforeResume(
+        PROCESS_INFORMATION pi, SeamlessLaunchPlan plan, out string error)
     {
         if (!LoadLibraryIntoProcess(
                 pi,
                 plan.DllPath,
-                "DS3 Seamless runtime",
+                plan.Label,
                 out error,
                 waitForLoad: true,
                 verifyLoadedModule: true))
@@ -478,15 +508,24 @@ public static class GameLauncher
         }
     }
 
+    private static bool ShouldAttemptDs1Seamless(LaunchRequest req) =>
+        req.EnableDs1Seamless &&
+        string.Equals(req.GameType, "DarkSouls1", StringComparison.OrdinalIgnoreCase);
+
     private static bool ShouldAttemptDs3Seamless(LaunchRequest req) =>
         req.EnableDs3Seamless &&
         string.Equals(req.GameType, "DarkSouls3", StringComparison.OrdinalIgnoreCase);
 
-    private static bool Ds3SeamlessOwnsSaveHook(LaunchRequest req) =>
-        ShouldAttemptDs3Seamless(req) &&
-        Ds3SeamlessPayloadResolver.Resolve(req.Ds3SeamlessPath, req.ExePath) is not null;
+    private static bool IsDs1Seamless(LaunchRequest req) =>
+        ShouldAttemptDs1Seamless(req) &&
+        Ds1SeamlessPayloadResolver.Resolve(req.Ds1SeamlessPath, req.ExePath) is not null;
 
-    private static string BuildDs3SeamlessPassword(LaunchRequest req)
+    private static bool SeamlessOwnsSaveHook(LaunchRequest req) =>
+        IsDs1Seamless(req) ||
+        (ShouldAttemptDs3Seamless(req) &&
+         Ds3SeamlessPayloadResolver.Resolve(req.Ds3SeamlessPath, req.ExePath) is not null);
+
+    private static string BuildSeamlessPassword(LaunchRequest req)
     {
         var seed = !string.IsNullOrWhiteSpace(req.ServerId)
             ? req.ServerId

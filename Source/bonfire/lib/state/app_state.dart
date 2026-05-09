@@ -119,29 +119,42 @@ class Profile {
 }
 
 class GameSettings {
+  final String ds1ExePath;
   final String ds2ExePath;
   final String ds3ExePath;
+  final bool ds1Valid;
   final bool ds2Valid;
   final bool ds3Valid;
   final bool useSeparateSaves;
   GameSettings({
+    required this.ds1ExePath,
     required this.ds2ExePath,
     required this.ds3ExePath,
+    required this.ds1Valid,
     required this.ds2Valid,
     required this.ds3Valid,
     required this.useSeparateSaves,
   });
   factory GameSettings.fromJson(Map<String, dynamic> j) => GameSettings(
+        ds1ExePath: j['ds1_exe_path'] as String? ?? '',
         ds2ExePath: j['ds2_exe_path'] as String? ?? '',
         ds3ExePath: j['ds3_exe_path'] as String? ?? '',
+        ds1Valid: j['ds1_exe_valid'] as bool? ?? false,
         ds2Valid: j['ds2_exe_valid'] as bool? ?? false,
         ds3Valid: j['ds3_exe_valid'] as bool? ?? false,
         useSeparateSaves: j['use_separate_saves'] as bool? ?? true,
       );
-  String pathFor(String gameType) =>
-      gameType == 'DarkSouls3' ? ds3ExePath : ds2ExePath;
-  bool validFor(String gameType) =>
-      gameType == 'DarkSouls3' ? ds3Valid : ds2Valid;
+  String pathFor(String gameType) {
+    if (gameType == 'DarkSouls1') return ds1ExePath;
+    if (gameType == 'DarkSouls3') return ds3ExePath;
+    return ds2ExePath;
+  }
+
+  bool validFor(String gameType) {
+    if (gameType == 'DarkSouls1') return ds1Valid;
+    if (gameType == 'DarkSouls3') return ds3Valid;
+    return ds2Valid;
+  }
 }
 
 class PublicServer {
@@ -297,9 +310,16 @@ class AppState extends ChangeNotifier {
       await refreshProfiles();
       final id = j['id'] as String?;
       if (id == null) return null;
-      return profiles.firstWhere((p) => p.id == id, orElse: () =>
-          Profile(id: id, name: name, gameType: gameType, createdAt: '', isActive: false));
-    } catch (_) { return null; }
+      return profiles.firstWhere((p) => p.id == id,
+          orElse: () => Profile(
+              id: id,
+              name: name,
+              gameType: gameType,
+              createdAt: '',
+              isActive: false));
+    } catch (_) {
+      return null;
+    }
   }
 
   Future<void> renameProfile(String id, String newName) async {
@@ -325,7 +345,9 @@ class AppState extends ChangeNotifier {
     try {
       final j = await _rpc.call('game.get_settings') as Map<String, dynamic>;
       gameSettings = GameSettings.fromJson(j);
-    } catch (_) { gameSettings = null; }
+    } catch (_) {
+      gameSettings = null;
+    }
     notifyListeners();
   }
 
@@ -333,7 +355,9 @@ class AppState extends ChangeNotifier {
     try {
       final j = await _rpc.call('game.steam_status') as Map<String, dynamic>;
       steamOk = j['ok'] as bool? ?? false;
-    } catch (_) { steamOk = false; }
+    } catch (_) {
+      steamOk = false;
+    }
     notifyListeners();
   }
 
@@ -345,7 +369,9 @@ class AppState extends ChangeNotifier {
       }) as Map<String, dynamic>;
       await refreshGameSettings();
       return (j['recognised'] as bool?) ?? false;
-    } catch (_) { return false; }
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<({bool ok, String? error, int? pid})> launchLocalGame({

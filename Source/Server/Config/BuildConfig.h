@@ -46,6 +46,13 @@ public:
         // Unknown
         {},
 
+        // Dark Souls Remastered
+        {
+            100,
+            100,
+            570940
+        },
+
         // Dark Souls 2
         {
             17039619, // We can support one version lower, but we have that disabled as we don't have RCE mitigation implemented for it.

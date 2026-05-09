@@ -3,7 +3,7 @@
 This folder contains Bonfire's Windows desktop interface. The app is the user's
 control room: it lists public fires, creates local fires, edits server settings,
 detects network addresses, applies firewall setup through the service, and
-launches DS2/DS3 through the Bonfire runtime path.
+launches Dark Souls I/II/III through the Bonfire runtime path.
 
 The Flutter app does not talk to the games directly. It starts
 `BonfireService.exe` and communicates with it through line-delimited JSON-RPC
@@ -17,7 +17,7 @@ Bonfire's UI exists to make private Souls online feel simple:
 - no manual WAN/LAN IP lookup for normal hosts;
 - no separate launcher workflow;
 - no direct user handling of server keys;
-- no manual DS2 unlock setup.
+- no manual game runtime setup.
 
 The user's main verbs are the same ones shown in the interface:
 
@@ -34,6 +34,9 @@ A packaged release keeps these pieces beside each other:
 Bonfire.exe
 BonfireService.exe
 Loader\
+  Ds1SeamlessCoop\
+  SeamlessCoop\
+  ds2multoverhaul\
 Server\
   Server.exe
 ```
@@ -103,4 +106,5 @@ flutter test
 ```
 
 Full launch validation also needs a packaged layout with `BonfireService.exe`,
-`Loader\`, `Server\Server.exe`, and the bundled DS2 online unlock layer.
+`Loader\`, `Server\Server.exe`, and the bundled runtime data for the supported
+games.

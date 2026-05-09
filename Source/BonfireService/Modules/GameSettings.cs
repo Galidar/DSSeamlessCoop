@@ -9,10 +9,13 @@ namespace Bonfire.Service.Modules;
 
 public sealed class GameSettings
 {
+    public string Ds1ExePath { get; set; } = "";
     public string Ds2ExePath { get; set; } = "";
     public string Ds3ExePath { get; set; } = "";
+    public string Ds1SeamlessPath { get; set; } = "";
     public string Ds2OverhaulPath { get; set; } = "";
     public string Ds3SeamlessPath { get; set; } = "";
+    public bool EnableDs1Seamless { get; set; } = true;
     public bool EnableDs3Seamless { get; set; } = true;
     public bool UseSeparateSaves { get; set; } = true;
 
@@ -65,6 +68,16 @@ public sealed class GameSettings
         var s = new GameSettings();
         try
         {
+            var ds1 = Loader.SteamUtils.GetGameInstallPath("DARK SOULS REMASTERED");
+            if (!string.IsNullOrEmpty(ds1))
+            {
+                var p = Path.Combine(ds1, "DarkSoulsRemastered.exe");
+                if (File.Exists(p)) s.Ds1ExePath = p;
+            }
+        }
+        catch { }
+        try
+        {
             var ds2 = Loader.SteamUtils.GetGameInstallPath(
                 "Dark Souls II Scholar of the First Sin");
             if (!string.IsNullOrEmpty(ds2))
@@ -89,13 +102,16 @@ public sealed class GameSettings
 
     private static GameSettings FillMissingDetectedPaths(GameSettings loaded)
     {
-        if (!string.IsNullOrWhiteSpace(loaded.Ds2ExePath) &&
+        if (!string.IsNullOrWhiteSpace(loaded.Ds1ExePath) &&
+            !string.IsNullOrWhiteSpace(loaded.Ds2ExePath) &&
             !string.IsNullOrWhiteSpace(loaded.Ds3ExePath))
         {
             return loaded;
         }
 
         var detected = AutoDetect();
+        if (string.IsNullOrWhiteSpace(loaded.Ds1ExePath))
+            loaded.Ds1ExePath = detected.Ds1ExePath;
         if (string.IsNullOrWhiteSpace(loaded.Ds2ExePath))
             loaded.Ds2ExePath = detected.Ds2ExePath;
         if (string.IsNullOrWhiteSpace(loaded.Ds3ExePath))
@@ -105,8 +121,10 @@ public sealed class GameSettings
 
     public string PathFor(string gameType)
     {
-        return string.Equals(gameType, "DarkSouls3", StringComparison.OrdinalIgnoreCase)
-            ? Ds3ExePath
-            : Ds2ExePath;
+        if (string.Equals(gameType, "DarkSouls1", StringComparison.OrdinalIgnoreCase))
+            return Ds1ExePath;
+        if (string.Equals(gameType, "DarkSouls3", StringComparison.OrdinalIgnoreCase))
+            return Ds3ExePath;
+        return Ds2ExePath;
     }
 }

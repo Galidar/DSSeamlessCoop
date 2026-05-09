@@ -172,8 +172,7 @@ class _ErrorState extends StatelessWidget {
             const Text('Could not contact the Bonfire keeper.',
                 style: BT.heading),
             Sp.gapXs,
-            Text(message,
-                textAlign: TextAlign.center, style: BT.caption),
+            Text(message, textAlign: TextAlign.center, style: BT.caption),
           ],
         ),
       ),
@@ -321,6 +320,11 @@ class _TabBarState extends State<_TabBar> {
       child: Row(
         children: [
           _TabItem(
+            label: Lore.ds1,
+            selected: app.publicListGameFilter == 'DarkSouls1',
+            onTap: () => app.setGameFilter('DarkSouls1'),
+          ),
+          _TabItem(
             label: Lore.ds2,
             selected: app.publicListGameFilter == 'DarkSouls2',
             onTap: () => app.setGameFilter('DarkSouls2'),
@@ -342,13 +346,11 @@ class _TabBarState extends State<_TabBar> {
               onChanged: (v) => app.setSearchQuery(v),
               decoration: InputDecoration(
                 hintText: 'Filter…  (press / to focus)',
-                hintStyle: BT.bodyMuted
-                    .copyWith(fontSize: 12, color: p.textMuted),
-                prefixIcon: Icon(Icons.search,
-                    size: IS.md, color: p.textMuted),
+                hintStyle:
+                    BT.bodyMuted.copyWith(fontSize: 12, color: p.textMuted),
+                prefixIcon: Icon(Icons.search, size: IS.md, color: p.textMuted),
                 isDense: true,
-                contentPadding:
-                    const EdgeInsets.symmetric(vertical: Sp.sm),
+                contentPadding: const EdgeInsets.symmetric(vertical: Sp.sm),
                 border: OutlineInputBorder(
                     borderRadius: BorderRadius.circular(R.sm),
                     borderSide: BorderSide(color: p.border)),
@@ -385,8 +387,7 @@ class _TabItem extends StatelessWidget {
       child: InkWell(
         onTap: onTap,
         child: Container(
-          padding:
-              const EdgeInsets.symmetric(horizontal: Sp.lg, vertical: 14),
+          padding: const EdgeInsets.symmetric(horizontal: Sp.lg, vertical: 14),
           decoration: BoxDecoration(
             border: Border(
               bottom: BorderSide(
@@ -433,7 +434,9 @@ class _ServerListView extends StatelessWidget {
         .toSet();
     final deduped = myNames.isEmpty
         ? all
-        : all.where((s) => !myNames.contains(s.name.trim().toLowerCase())).toList();
+        : all
+            .where((s) => !myNames.contains(s.name.trim().toLowerCase()))
+            .toList();
 
     // Apply optional filters: hide sealed (passworded) + minimum player count.
     final afterFilters = deduped
@@ -445,9 +448,7 @@ class _ServerListView extends StatelessWidget {
         ? afterFilters
         : afterFilters
             .where((s) =>
-                s.name
-                    .toLowerCase()
-                    .contains(app.searchQuery.toLowerCase()) ||
+                s.name.toLowerCase().contains(app.searchQuery.toLowerCase()) ||
                 s.description
                     .toLowerCase()
                     .contains(app.searchQuery.toLowerCase()))
@@ -467,8 +468,7 @@ class _ServerListView extends StatelessWidget {
               Text('· ${myProfiles.length}',
                   style: BT.caption.copyWith(color: p.textMuted)),
               const Spacer(),
-              if (installed)
-                _KindleButton(gameType: app.publicListGameFilter),
+              if (installed) _KindleButton(gameType: app.publicListGameFilter),
             ],
           );
         }),
@@ -510,7 +510,8 @@ class _ServerListView extends StatelessWidget {
         else if (app.publicServersLoading && all.isEmpty)
           ...List.generate(5, (_) => const _SkeletonRow())
         else if (filtered.isEmpty)
-          _EmptyListCard(query: app.searchQuery, gameTab: app.publicListGameFilter)
+          _EmptyListCard(
+              query: app.searchQuery, gameTab: app.publicListGameFilter)
         else
           ...filtered.map((s) => _PublicServerRow(server: s)),
       ],
@@ -525,7 +526,7 @@ class _KindleButton extends StatelessWidget {
   const _KindleButton({required this.gameType});
   @override
   Widget build(BuildContext context) {
-    final label = gameType == 'DarkSouls3' ? 'Dark Souls III' : 'Dark Souls II';
+    final label = Lore.gameLabel(gameType);
     return Tooltip(
       message: 'Create a new bonfire for $label',
       child: TextButton.icon(
@@ -575,8 +576,7 @@ class _CreateBonfireDialogState extends State<_CreateBonfireDialog> {
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
-    final gameLabel =
-        widget.gameType == 'DarkSouls3' ? 'Dark Souls III' : 'Dark Souls II';
+    final gameLabel = Lore.gameLabel(widget.gameType);
     return AlertDialog(
       backgroundColor: p.surface,
       title: const Text('New bonfire'),
@@ -666,7 +666,7 @@ class _NoProfilesCard extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
-    final label = gameType == 'DarkSouls2' ? Lore.ds2 : Lore.ds3;
+    final label = Lore.gameLabel(gameType);
     return BonfireCard(
       padding: const EdgeInsets.all(Sp.xl),
       child: Row(
@@ -703,14 +703,14 @@ class _LocalBonfireRowState extends State<_LocalBonfireRow> {
     // Pre-flight: game .exe configured?
     final gs = app.gameSettings;
     if (gs == null || !gs.validFor(widget.profile.gameType)) {
-      _toast('Set the ${widget.profile.gameType} game path in Game Settings.',
+      _toast(
+          'Set the ${Lore.gameLabel(widget.profile.gameType)} game path in Game Settings.',
           isError: true);
       return;
     }
 
     setState(() => _busy = true);
-    final res =
-        await app.launchLocalGame(profileId: widget.profile.id);
+    final res = await app.launchLocalGame(profileId: widget.profile.id);
     if (!mounted) return;
     setState(() => _busy = false);
     if (res.ok) {
@@ -766,18 +766,19 @@ class _LocalBonfireRowState extends State<_LocalBonfireRow> {
     await context.read<AppState>().deleteProfile(widget.profile.id);
   }
 
-  void _toast(String msg, {IconData icon = Icons.info_outline, bool isError = false}) {
+  void _toast(String msg,
+      {IconData icon = Icons.info_outline, bool isError = false}) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
       backgroundColor: isError ? BonfireColors.err : BonfireColors.surfaceHi,
       content: Row(children: [
-        Icon(icon, size: IS.md, color: isError ? Colors.white : BonfireColors.accent),
+        Icon(icon,
+            size: IS.md, color: isError ? Colors.white : BonfireColors.accent),
         const SizedBox(width: Sp.sm),
         Flexible(
             child: Text(msg,
                 style: TextStyle(
-                    color: isError
-                        ? Colors.white
-                        : BonfireColors.textPrimary))),
+                    color:
+                        isError ? Colors.white : BonfireColors.textPrimary))),
       ]),
     ));
   }
@@ -793,9 +794,8 @@ class _LocalBonfireRowState extends State<_LocalBonfireRow> {
 
     // Prefer the live config's name + description (what the server actually
     // advertises) when this profile is active. Fall back to profile metadata.
-    final displayName = (cfg != null && cfg.name.isNotEmpty)
-        ? cfg.name
-        : widget.profile.name;
+    final displayName =
+        (cfg != null && cfg.name.isNotEmpty) ? cfg.name : widget.profile.name;
     final displayDesc = cfg?.description ?? '';
 
     return Padding(
@@ -816,13 +816,11 @@ class _LocalBonfireRowState extends State<_LocalBonfireRow> {
               onTap: () => setState(() => _expanded = !_expanded),
               borderRadius: BorderRadius.circular(R.sm),
               child: Padding(
-                padding:
-                    const EdgeInsets.fromLTRB(Sp.lg, Sp.md, Sp.md, Sp.md),
+                padding: const EdgeInsets.fromLTRB(Sp.lg, Sp.md, Sp.md, Sp.md),
                 child: Row(
                   crossAxisAlignment: CrossAxisAlignment.center,
                   children: [
-                    StatusDot(
-                        color: running ? BonfireColors.ok : p.textMuted),
+                    StatusDot(color: running ? BonfireColors.ok : p.textMuted),
                     const SizedBox(width: Sp.md),
                     Expanded(
                       child: Column(
@@ -836,15 +834,14 @@ class _LocalBonfireRowState extends State<_LocalBonfireRow> {
                                   displayName.isEmpty
                                       ? '(unnamed)'
                                       : displayName,
-                                  style: BT.heading
-                                      .copyWith(color: p.textPrimary),
+                                  style:
+                                      BT.heading.copyWith(color: p.textPrimary),
                                   overflow: TextOverflow.ellipsis,
                                 ),
                               ),
                               if (isActive) ...[
                                 const SizedBox(width: Sp.sm),
-                                _StatePill(
-                                    text: running ? 'LIVE' : 'ACTIVE'),
+                                _StatePill(text: running ? 'LIVE' : 'ACTIVE'),
                               ],
                             ],
                           ),
@@ -853,8 +850,7 @@ class _LocalBonfireRowState extends State<_LocalBonfireRow> {
                               padding: const EdgeInsets.only(top: 2),
                               child: Text(
                                 displayDesc,
-                                style: BT.caption
-                                    .copyWith(color: p.textMuted),
+                                style: BT.caption.copyWith(color: p.textMuted),
                                 overflow: TextOverflow.ellipsis,
                               ),
                             ),
@@ -920,8 +916,8 @@ class _LocalBonfireRowState extends State<_LocalBonfireRow> {
                                     ? BonfireColors.accentDim
                                     : p.border)),
                       ),
-                      padding: const EdgeInsets.fromLTRB(
-                          Sp.lg, Sp.md, Sp.lg, Sp.md),
+                      padding:
+                          const EdgeInsets.fromLTRB(Sp.lg, Sp.md, Sp.lg, Sp.md),
                       child: Column(
                         crossAxisAlignment: CrossAxisAlignment.start,
                         children: [
@@ -932,21 +928,24 @@ class _LocalBonfireRowState extends State<_LocalBonfireRow> {
                             children: [
                               _InfoChip(
                                   label: 'Game',
-                                  value: widget.profile.gameType),
-                              if (isActive && (app.wanIp != null || cfg != null))
+                                  value:
+                                      Lore.gameLabel(widget.profile.gameType)),
+                              if (isActive &&
+                                  (app.wanIp != null || cfg != null))
                                 _InfoChip(
                                   label: 'WAN',
                                   value: app.wanIp ??
-                                      (cfg?.publicIp.replaceAll(
-                                              '__WAN_IP__', '?') ??
+                                      (cfg?.publicIp
+                                              .replaceAll('__WAN_IP__', '?') ??
                                           '?'),
                                 ),
-                              if (isActive && (app.lanIp != null || cfg != null))
+                              if (isActive &&
+                                  (app.lanIp != null || cfg != null))
                                 _InfoChip(
                                   label: 'LAN',
                                   value: app.lanIp ??
-                                      (cfg?.privateIp.replaceAll(
-                                              '__LAN_IP__', '?') ??
+                                      (cfg?.privateIp
+                                              .replaceAll('__LAN_IP__', '?') ??
                                           '?'),
                                 ),
                               if (cfg != null && cfg.password.isNotEmpty)
@@ -1019,8 +1018,7 @@ class _LocalBonfireRowState extends State<_LocalBonfireRow> {
                                 tooltip: 'Delete bonfire',
                                 onPressed: _busy ? null : _delete,
                                 icon: const Icon(Icons.delete_outline,
-                                    size: IS.md,
-                                    color: BonfireColors.err),
+                                    size: IS.md, color: BonfireColors.err),
                               ),
                             ],
                           ),
@@ -1070,8 +1068,8 @@ class _AccentBtn extends StatelessWidget {
       style: OutlinedButton.styleFrom(
         foregroundColor: BonfireColors.accent,
         side: const BorderSide(color: BonfireColors.accent),
-        padding: const EdgeInsets.symmetric(
-            horizontal: Sp.md, vertical: Sp.sm + 2),
+        padding:
+            const EdgeInsets.symmetric(horizontal: Sp.md, vertical: Sp.sm + 2),
       ),
       onPressed: onTap,
       icon: Icon(icon, size: IS.sm, color: BonfireColors.accent),
@@ -1093,8 +1091,8 @@ class _GhostBtn extends StatelessWidget {
     return TextButton.icon(
       style: TextButton.styleFrom(
         foregroundColor: p.textPrimary,
-        padding: const EdgeInsets.symmetric(
-            horizontal: Sp.md, vertical: Sp.sm + 2),
+        padding:
+            const EdgeInsets.symmetric(horizontal: Sp.md, vertical: Sp.sm + 2),
       ),
       onPressed: onTap,
       icon: Icon(icon, size: IS.sm, color: iconColor ?? p.textSecondary),
@@ -1138,8 +1136,7 @@ class _MyServerStripState extends State<_MyServerStrip> {
                       color: BonfireColors.accent, size: IS.md),
                   const SizedBox(width: Sp.sm),
                   Text(Lore.yourServerLabel,
-                      style: BT.eyebrow.copyWith(
-                          color: BonfireColors.accent)),
+                      style: BT.eyebrow.copyWith(color: BonfireColors.accent)),
                   const SizedBox(width: Sp.md),
                   Expanded(
                     child: Text(
@@ -1151,9 +1148,8 @@ class _MyServerStripState extends State<_MyServerStrip> {
                     ),
                   ),
                   StatusDot(
-                      color: running
-                          ? BonfireColors.ok
-                          : BonfireColors.textMuted),
+                      color:
+                          running ? BonfireColors.ok : BonfireColors.textMuted),
                   const SizedBox(width: Sp.sm),
                   Text(running ? Lore.yourServerRunning : Lore.yourServerIdle,
                       style: BT.caption),
@@ -1173,15 +1169,13 @@ class _MyServerStripState extends State<_MyServerStrip> {
             curve: Curves.easeOutCubic,
             child: _expanded
                 ? Padding(
-                    padding: const EdgeInsets.fromLTRB(
-                        Sp.lg, 0, Sp.lg, Sp.lg),
+                    padding: const EdgeInsets.fromLTRB(Sp.lg, 0, Sp.lg, Sp.lg),
                     child: Column(
                       crossAxisAlignment: CrossAxisAlignment.start,
                       children: [
                         if (widget.config.description.isNotEmpty)
                           Padding(
-                            padding:
-                                const EdgeInsets.only(bottom: Sp.md),
+                            padding: const EdgeInsets.only(bottom: Sp.md),
                             child: Text(widget.config.description,
                                 style: BT.bodyMuted),
                           ),
@@ -1192,46 +1186,39 @@ class _MyServerStripState extends State<_MyServerStrip> {
                             _InfoChip(
                               label: 'WAN',
                               value: app.wanIp ??
-                                  widget.config.publicIp.replaceAll(
-                                      '__WAN_IP__', '?'),
+                                  widget.config.publicIp
+                                      .replaceAll('__WAN_IP__', '?'),
                             ),
                             _InfoChip(
                               label: 'LAN',
                               value: app.lanIp ??
-                                  widget.config.privateIp.replaceAll(
-                                      '__LAN_IP__', '?'),
+                                  widget.config.privateIp
+                                      .replaceAll('__LAN_IP__', '?'),
                             ),
                             _InfoChip(
                                 label: 'Game',
-                                value: widget.config.gameType),
+                                value: Lore.gameLabel(widget.config.gameType)),
                             if (widget.config.password.isNotEmpty)
-                              const _InfoChip(
-                                  label: 'Password', value: 'set'),
+                              const _InfoChip(label: 'Password', value: 'set'),
                             _InfoChip(
                                 label: 'Listed',
-                                value: widget.config.advertise
-                                    ? 'yes'
-                                    : 'no'),
+                                value: widget.config.advertise ? 'yes' : 'no'),
                           ],
                         ),
                         const SizedBox(height: Sp.lg),
                         Row(
                           children: [
                             OutlinedButton.icon(
-                              onPressed: () =>
-                                  ConfigPanel.show(context),
-                              icon: const Icon(Icons.tune,
-                                  size: IS.sm),
+                              onPressed: () => ConfigPanel.show(context),
+                              icon: const Icon(Icons.tune, size: IS.sm),
                               label: const Text(Lore.configure),
                             ),
                             const SizedBox(width: Sp.sm),
                             if (!fwOk)
                               OutlinedButton.icon(
                                 onPressed: () => app.applyFirewall(),
-                                icon: const Icon(
-                                    Icons.shield_outlined,
-                                    size: IS.sm,
-                                    color: BonfireColors.warn),
+                                icon: const Icon(Icons.shield_outlined,
+                                    size: IS.sm, color: BonfireColors.warn),
                                 label: const Text(Lore.applyFirewall),
                               ),
                             if (running) ...[
@@ -1240,13 +1227,11 @@ class _MyServerStripState extends State<_MyServerStrip> {
                                 onPressed: () async {
                                   // Open the WebUI in the system browser.
                                   // ignore: use_build_context_synchronously
-                                  await _openUrl(
-                                      'http://localhost:50005');
+                                  await _openUrl('http://localhost:50005');
                                 },
-                                icon: const Icon(Icons.open_in_new,
-                                    size: IS.sm),
-                                label:
-                                    const Text('Open WebUI'),
+                                icon:
+                                    const Icon(Icons.open_in_new, size: IS.sm),
+                                label: const Text('Open WebUI'),
                               ),
                             ],
                             const Spacer(),
@@ -1255,8 +1240,8 @@ class _MyServerStripState extends State<_MyServerStrip> {
                                 if (running) {
                                   await app.stopServer();
                                   if (context.mounted) {
-                                    ScaffoldMessenger.of(context)
-                                        .showSnackBar(const SnackBar(
+                                    ScaffoldMessenger.of(context).showSnackBar(
+                                        const SnackBar(
                                             content: Text(
                                                 'The flame has been snuffed.')));
                                   }
@@ -1266,13 +1251,13 @@ class _MyServerStripState extends State<_MyServerStrip> {
                                     if (context.mounted) {
                                       ScaffoldMessenger.of(context)
                                           .showSnackBar(const SnackBar(
-                                              content: Text(
-                                                  'Bonfire kindled.')));
+                                              content:
+                                                  Text('Bonfire kindled.')));
                                     }
                                   } catch (e) {
                                     if (context.mounted) {
-                                      ScaffoldMessenger.of(context).showSnackBar(
-                                          SnackBar(
+                                      ScaffoldMessenger.of(context)
+                                          .showSnackBar(SnackBar(
                                               backgroundColor:
                                                   BonfireColors.err,
                                               content: Text(e.toString())));
@@ -1281,9 +1266,7 @@ class _MyServerStripState extends State<_MyServerStrip> {
                                 }
                               },
                               icon: Icon(
-                                  running
-                                      ? Icons.stop
-                                      : Icons.play_arrow,
+                                  running ? Icons.stop : Icons.play_arrow,
                                   size: IS.md),
                               label: Padding(
                                 padding: const EdgeInsets.symmetric(
@@ -1314,8 +1297,8 @@ class _InfoChip extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = Palette.of(context);
     return Container(
-      padding: const EdgeInsets.symmetric(
-          horizontal: Sp.md, vertical: Sp.xs + 2),
+      padding:
+          const EdgeInsets.symmetric(horizontal: Sp.md, vertical: Sp.xs + 2),
       decoration: BoxDecoration(
         color: p.surfaceHi,
         borderRadius: BorderRadius.circular(R.sm),
@@ -1325,8 +1308,8 @@ class _InfoChip extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(label,
-              style: BT.eyebrow.copyWith(
-                  letterSpacing: 0.8, color: p.textMuted)),
+              style:
+                  BT.eyebrow.copyWith(letterSpacing: 0.8, color: p.textMuted)),
           const SizedBox(width: Sp.sm),
           Text(value, style: BT.mono.copyWith(color: p.textPrimary)),
         ],
@@ -1363,9 +1346,7 @@ class _PublicServerRow extends StatelessWidget {
                   Icon(
                     server.passwordRequired ? Icons.lock : Icons.public,
                     size: IS.md,
-                    color: server.passwordRequired
-                        ? p.warn
-                        : p.textSecondary,
+                    color: server.passwordRequired ? p.warn : p.textSecondary,
                   ),
                   const SizedBox(width: Sp.md),
                   Expanded(
@@ -1377,8 +1358,8 @@ class _PublicServerRow extends StatelessWidget {
                           children: [
                             Flexible(
                               child: Text(server.name,
-                                  style: BT.heading
-                                      .copyWith(color: p.textPrimary),
+                                  style:
+                                      BT.heading.copyWith(color: p.textPrimary),
                                   overflow: TextOverflow.ellipsis),
                             ),
                             const SizedBox(width: Sp.sm),
@@ -1389,8 +1370,7 @@ class _PublicServerRow extends StatelessWidget {
                           Padding(
                             padding: const EdgeInsets.only(top: 2),
                             child: Text(server.description,
-                                style: BT.caption
-                                    .copyWith(color: p.textMuted),
+                                style: BT.caption.copyWith(color: p.textMuted),
                                 overflow: TextOverflow.ellipsis),
                           ),
                       ],
@@ -1407,7 +1387,9 @@ class _PublicServerRow extends StatelessWidget {
             AnimatedSize(
               duration: const Duration(milliseconds: 180),
               curve: Curves.easeOutCubic,
-              child: selected ? _DetailBlock(server: server) : const SizedBox.shrink(),
+              child: selected
+                  ? _DetailBlock(server: server)
+                  : const SizedBox.shrink(),
             ),
           ],
         ),
@@ -1435,7 +1417,7 @@ class _DetailBlock extends StatelessWidget {
         children: [
           _InfoChip(label: 'Host', value: server.hostname),
           _InfoChip(label: 'IP', value: server.ipAddress),
-          _InfoChip(label: 'Game', value: server.gameType),
+          _InfoChip(label: 'Game', value: Lore.gameLabel(server.gameType)),
           if (server.passwordRequired)
             const _InfoChip(label: 'Password', value: 'required'),
         ],
@@ -1505,22 +1487,20 @@ class _PlayerChip extends StatelessWidget {
     final p = Palette.of(context);
     final hot = count > 0;
     return Container(
-      padding: const EdgeInsets.symmetric(
-          horizontal: Sp.md, vertical: Sp.xs + 2),
+      padding:
+          const EdgeInsets.symmetric(horizontal: Sp.md, vertical: Sp.xs + 2),
       decoration: BoxDecoration(
         color: hot
             ? const Color(0x33D79447) // 20% accent
             : p.surfaceHi,
         borderRadius: BorderRadius.circular(R.pill),
-        border: Border.all(
-            color: hot ? p.accentDim : p.border),
+        border: Border.all(color: hot ? p.accentDim : p.border),
       ),
       child: Row(
         mainAxisSize: MainAxisSize.min,
         children: [
           Icon(hot ? Icons.local_fire_department : Icons.person_outline,
-              size: 12,
-              color: hot ? p.accent : p.textMuted),
+              size: 12, color: hot ? p.accent : p.textMuted),
           const SizedBox(width: Sp.xs),
           Text('$count',
               style: BT.caption.copyWith(
@@ -1563,8 +1543,8 @@ class _SkeletonRowState extends State<_SkeletonRow>
       animation: _c,
       builder: (_, __) {
         final t = 0.6 + (_c.value * 0.4);
-        final c = Color.lerp(
-            BonfireColors.surface, BonfireColors.surfaceHi, t)!;
+        final c =
+            Color.lerp(BonfireColors.surface, BonfireColors.surfaceHi, t)!;
         return Padding(
           padding: const EdgeInsets.only(bottom: Sp.sm),
           child: Container(
@@ -1589,10 +1569,9 @@ class _EmptyListCard extends StatelessWidget {
   const _EmptyListCard({required this.query, required this.gameTab});
   @override
   Widget build(BuildContext context) {
-    final label = gameTab == 'DarkSouls2' ? Lore.ds2 : Lore.ds3;
-    final msg = query.isNotEmpty
-        ? 'No bonfires match "$query".'
-        : Lore.noFires(label);
+    final label = Lore.gameLabel(gameTab);
+    final msg =
+        query.isNotEmpty ? 'No bonfires match "$query".' : Lore.noFires(label);
     return BonfireCard(
       padding: const EdgeInsets.fromLTRB(Sp.xl, Sp.xxl, Sp.xl, Sp.xxl),
       child: Column(
@@ -1600,8 +1579,7 @@ class _EmptyListCard extends StatelessWidget {
           const AnimatedFlame(size: 36),
           const SizedBox(height: Sp.md),
           Text(msg,
-              style: BT.body
-                  .copyWith(color: Palette.of(context).textPrimary),
+              style: BT.body.copyWith(color: Palette.of(context).textPrimary),
               textAlign: TextAlign.center),
           const SizedBox(height: Sp.md),
           // Souls-flavoured aside.
@@ -1669,8 +1647,8 @@ class _BottomBar extends StatelessWidget {
         color: p.surface,
         border: Border(top: BorderSide(color: p.border)),
       ),
-      padding: const EdgeInsets.symmetric(
-          horizontal: Sp.xl, vertical: Sp.sm + 2),
+      padding:
+          const EdgeInsets.symmetric(horizontal: Sp.xl, vertical: Sp.sm + 2),
       child: Row(
         children: [
           Text('Bonfire v0.1.0',
@@ -1686,8 +1664,7 @@ class _BottomBar extends StatelessWidget {
                   const SizedBox(width: Sp.xs),
                   Flexible(
                       child: Text('Selected · ${selected.name}',
-                          style: BT.caption
-                              .copyWith(color: p.textSecondary),
+                          style: BT.caption.copyWith(color: p.textSecondary),
                           overflow: TextOverflow.ellipsis)),
                 ],
               ),
@@ -1734,9 +1711,7 @@ class _FilterBar extends StatelessWidget {
                 const SizedBox(width: 6),
                 Text('Hide sealed',
                     style: BT.caption.copyWith(
-                        color: app.hideSealed
-                            ? p.textPrimary
-                            : p.textMuted)),
+                        color: app.hideSealed ? p.textPrimary : p.textMuted)),
               ],
             ),
           ),
@@ -1762,16 +1737,12 @@ class _FilterBar extends StatelessWidget {
                             : Colors.transparent,
                         borderRadius: BorderRadius.circular(R.pill),
                         border: Border.all(
-                            color: app.minPlayers == n
-                                ? p.accent
-                                : p.border),
+                            color: app.minPlayers == n ? p.accent : p.border),
                       ),
                       child: Text(
                         n == 0 ? 'any' : '$n+',
                         style: BT.caption.copyWith(
-                          color: app.minPlayers == n
-                              ? p.accent
-                              : p.textMuted,
+                          color: app.minPlayers == n ? p.accent : p.textMuted,
                           fontWeight: FontWeight.w600,
                         ),
                       ),
@@ -1797,7 +1768,7 @@ Future<void> _openUrl(String url) async {
     } else {
       await Process.start('xdg-open', [url]);
     }
-  } catch (_) { /* best effort */ }
+  } catch (_) {/* best effort */}
 }
 
 // ────────────── Launch button with full pre-flight ──────────────
@@ -1847,8 +1818,8 @@ class _LaunchButtonState extends State<_LaunchButton> {
 
     // 4. Launch.
     setState(() => _busy = true);
-    final res = await app.launchGame(
-        serverId: widget.server.id, password: password);
+    final res =
+        await app.launchGame(serverId: widget.server.id, password: password);
     if (!mounted) return;
     setState(() => _busy = false);
 
@@ -1864,23 +1835,20 @@ class _LaunchButtonState extends State<_LaunchButton> {
     // Manual entry — Flutter on this dev box can't load file_picker plugin
     // (no symlink support). Plain dialog with monospace input.
     final ctrl = TextEditingController();
-    final hint = gameType == 'DarkSouls3'
-        ? r'C:\Program Files (x86)\Steam\steamapps\common\DARK SOULS III\Game\DarkSoulsIII.exe'
-        : r'C:\Program Files (x86)\Steam\steamapps\common\Dark Souls II Scholar of the First Sin\Game\DarkSoulsII.exe';
+    final hint = Lore.gameExeHint(gameType);
     return showDialog<String>(
       context: context,
       builder: (_) => AlertDialog(
         backgroundColor: BonfireColors.surface,
-        title: Text(
-            'Path to ${gameType == "DarkSouls3" ? "DarkSoulsIII.exe" : "DarkSoulsII.exe"}'),
+        title: Text('Path to ${Lore.gameExeName(gameType)}'),
         content: SizedBox(
           width: 580,
           child: TextField(
             controller: ctrl,
             autofocus: true,
             style: BT.mono,
-            decoration: InputDecoration(
-                hintText: hint, hintStyle: BT.monoMuted),
+            decoration:
+                InputDecoration(hintText: hint, hintStyle: BT.monoMuted),
           ),
         ),
         actions: [
@@ -1888,8 +1856,7 @@ class _LaunchButtonState extends State<_LaunchButton> {
               onPressed: () => Navigator.of(context).pop(null),
               child: const Text('Cancel')),
           FilledButton(
-              onPressed: () =>
-                  Navigator.of(context).pop(ctrl.text.trim()),
+              onPressed: () => Navigator.of(context).pop(ctrl.text.trim()),
               child: const Text('Save')),
         ],
       ),
@@ -1929,14 +1896,12 @@ class _LaunchButtonState extends State<_LaunchButton> {
       {IconData icon = Icons.info_outline, bool isError = false}) {
     ScaffoldMessenger.of(context).showSnackBar(
       SnackBar(
-        backgroundColor:
-            isError ? BonfireColors.err : BonfireColors.surfaceHi,
+        backgroundColor: isError ? BonfireColors.err : BonfireColors.surfaceHi,
         content: Row(
           children: [
             Icon(icon,
                 size: IS.md,
-                color:
-                    isError ? Colors.white : BonfireColors.accent),
+                color: isError ? Colors.white : BonfireColors.accent),
             const SizedBox(width: Sp.sm),
             Flexible(
                 child: Text(message,
@@ -1962,8 +1927,7 @@ class _LaunchButtonState extends State<_LaunchButton> {
                   strokeWidth: 2, color: Colors.black))
           : const Icon(Icons.local_fire_department, size: IS.md),
       label: Padding(
-        padding:
-            const EdgeInsets.symmetric(horizontal: Sp.sm, vertical: 2),
+        padding: const EdgeInsets.symmetric(horizontal: Sp.sm, vertical: 2),
         child: Text(_busy ? 'Travelling…' : Lore.launchGame),
       ),
     );

@@ -64,18 +64,16 @@ class BT {
       color: BonfireColors.textPrimary);
 
   // Body — default reading size
-  static const TextStyle body = TextStyle(
-      fontSize: 13, height: 1.4, color: BonfireColors.textPrimary);
+  static const TextStyle body =
+      TextStyle(fontSize: 13, height: 1.4, color: BonfireColors.textPrimary);
 
   // Body secondary — descriptions, hints
-  static const TextStyle bodyMuted = TextStyle(
-      fontSize: 13,
-      height: 1.4,
-      color: BonfireColors.textSecondary);
+  static const TextStyle bodyMuted =
+      TextStyle(fontSize: 13, height: 1.4, color: BonfireColors.textSecondary);
 
   // Caption — small print, status text
-  static const TextStyle caption = TextStyle(
-      fontSize: 11, color: BonfireColors.textMuted);
+  static const TextStyle caption =
+      TextStyle(fontSize: 11, color: BonfireColors.textMuted);
 
   // Eyebrow — section label above content (UPPERCASE TRACKED)
   static const TextStyle eyebrow = TextStyle(
@@ -86,18 +84,14 @@ class BT {
 
   // Mono — IPs, ports, identifiers
   static const TextStyle mono = TextStyle(
-      fontSize: 12,
-      fontFamily: 'Consolas',
-      color: BonfireColors.textPrimary);
+      fontSize: 12, fontFamily: 'Consolas', color: BonfireColors.textPrimary);
 
   static const TextStyle monoMuted = TextStyle(
-      fontSize: 11,
-      fontFamily: 'Consolas',
-      color: BonfireColors.textMuted);
+      fontSize: 11, fontFamily: 'Consolas', color: BonfireColors.textMuted);
 
   // Button — labels on filled / outlined buttons
-  static const TextStyle button = TextStyle(
-      fontSize: 13, fontWeight: FontWeight.w600, letterSpacing: 0.3);
+  static const TextStyle button =
+      TextStyle(fontSize: 13, fontWeight: FontWeight.w600, letterSpacing: 0.3);
 }
 
 // ───── Souls-themed copy ─────
@@ -130,8 +124,7 @@ class Lore {
   static const String masterUnreachable =
       'The master keeper does not answer. Check your connection or try again.';
   static const String queryingMaster = 'Reaching out to the master keeper…';
-  static String fireCount(int n) =>
-      n == 1 ? '1 bonfire' : '$n bonfires';
+  static String fireCount(int n) => n == 1 ? '1 bonfire' : '$n bonfires';
 
   // Actions
   static const String installServer = 'Kindle your bonfire';
@@ -141,8 +134,7 @@ class Lore {
   static const String launchGame = 'Travel to this fire';
   static const String configure = 'Tend the flame';
   static const String applyFirewall = 'Open the gates';
-  static const String selectPrompt =
-      'Choose a bonfire above to travel to it.';
+  static const String selectPrompt = 'Choose a bonfire above to travel to it.';
 
   // Setup flow
   static const String setupComplete = 'The flame is yours';
@@ -152,6 +144,29 @@ class Lore {
   static const String settingsHeading = 'Inscribe the flame';
 
   // Game labels
+  static const String ds1 = 'Dark Souls I';
   static const String ds2 = 'Dark Souls II';
   static const String ds3 = 'Dark Souls III';
+
+  static String gameLabel(String gameType) {
+    if (gameType == 'DarkSouls1') return ds1;
+    if (gameType == 'DarkSouls3') return ds3;
+    return ds2;
+  }
+
+  static String gameExeName(String gameType) {
+    if (gameType == 'DarkSouls1') return 'DarkSoulsRemastered.exe';
+    if (gameType == 'DarkSouls3') return 'DarkSoulsIII.exe';
+    return 'DarkSoulsII.exe';
+  }
+
+  static String gameExeHint(String gameType) {
+    if (gameType == 'DarkSouls1') {
+      return r'C:\Program Files (x86)\Steam\steamapps\common\DARK SOULS REMASTERED\DarkSoulsRemastered.exe';
+    }
+    if (gameType == 'DarkSouls3') {
+      return r'C:\Program Files (x86)\Steam\steamapps\common\DARK SOULS III\Game\DarkSoulsIII.exe';
+    }
+    return r'C:\Program Files (x86)\Steam\steamapps\common\Dark Souls II Scholar of the First Sin\Game\DarkSoulsII.exe';
+  }
 }

@@ -47,7 +47,8 @@ class _Host extends StatelessWidget {
         ),
         child: SingleChildScrollView(
           controller: scrollCtrl,
-          padding: const EdgeInsets.fromLTRB(Sp.xl + 4, Sp.lg, Sp.xl + 4, Sp.xl),
+          padding:
+              const EdgeInsets.fromLTRB(Sp.xl + 4, Sp.lg, Sp.xl + 4, Sp.xl),
           child: const GameSettingsPanel(),
         ),
       ),
@@ -56,6 +57,7 @@ class _Host extends StatelessWidget {
 }
 
 class _GameSettingsPanelState extends State<GameSettingsPanel> {
+  late final TextEditingController _ds1Ctrl;
   late final TextEditingController _ds2Ctrl;
   late final TextEditingController _ds3Ctrl;
 
@@ -63,15 +65,24 @@ class _GameSettingsPanelState extends State<GameSettingsPanel> {
   void initState() {
     super.initState();
     final gs = context.read<AppState>().gameSettings;
+    _ds1Ctrl = TextEditingController(text: gs?.ds1ExePath ?? '');
     _ds2Ctrl = TextEditingController(text: gs?.ds2ExePath ?? '');
     _ds3Ctrl = TextEditingController(text: gs?.ds3ExePath ?? '');
   }
 
   @override
   void dispose() {
+    _ds1Ctrl.dispose();
     _ds2Ctrl.dispose();
     _ds3Ctrl.dispose();
     super.dispose();
+  }
+
+  Future<void> _saveDs1() async {
+    final ok = await context
+        .read<AppState>()
+        .setGameExe('DarkSouls1', _ds1Ctrl.text.trim());
+    if (mounted) _toast(ok ? 'DS1 path saved.' : 'Path not recognised.', !ok);
   }
 
   Future<void> _saveDs2() async {
@@ -90,8 +101,7 @@ class _GameSettingsPanelState extends State<GameSettingsPanel> {
 
   void _toast(String message, bool isError) {
     ScaffoldMessenger.of(context).showSnackBar(SnackBar(
-      backgroundColor:
-          isError ? BonfireColors.err : BonfireColors.surfaceHi,
+      backgroundColor: isError ? BonfireColors.err : BonfireColors.surfaceHi,
       content: Text(message),
     ));
   }
@@ -124,7 +134,15 @@ class _GameSettingsPanelState extends State<GameSettingsPanel> {
           style: BT.bodyMuted,
         ),
         const SizedBox(height: Sp.xl),
-
+        _GameRow(
+          title: 'Dark Souls Remastered',
+          steamFolder:
+              r'\Steam\steamapps\common\DARK SOULS REMASTERED\DarkSoulsRemastered.exe',
+          controller: _ds1Ctrl,
+          isValid: gs?.ds1Valid ?? false,
+          onSave: _saveDs1,
+        ),
+        const SizedBox(height: Sp.lg),
         _GameRow(
           title: 'Dark Souls II — Scholar of the First Sin',
           steamFolder:
@@ -142,7 +160,6 @@ class _GameSettingsPanelState extends State<GameSettingsPanel> {
           isValid: gs?.ds3Valid ?? false,
           onSave: _saveDs3,
         ),
-
         const SizedBox(height: Sp.xl),
         const Divider(),
         const SizedBox(height: Sp.lg),
@@ -205,9 +222,7 @@ class _GameRow extends StatelessWidget {
               Text(
                 isValid ? 'Recognised' : 'Not configured',
                 style: BT.caption.copyWith(
-                    color: isValid
-                        ? BonfireColors.ok
-                        : BonfireColors.warn),
+                    color: isValid ? BonfireColors.ok : BonfireColors.warn),
               ),
             ],
           ),

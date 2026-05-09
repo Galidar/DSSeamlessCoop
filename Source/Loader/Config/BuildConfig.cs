@@ -47,6 +47,22 @@ namespace Loader
         public static Dictionary<string, DarkSoulsLoadConfig> ExeLoadConfiguration = new Dictionary<string, DarkSoulsLoadConfig>()
         {
             // -------------------------------------------------------------------------------------------
+            // Dark Souls Remastered
+            // -------------------------------------------------------------------------------------------
+            {
+                ExeUtils.MakeSimpleExeHash("1,0,0,0", 50286344),
+                new DarkSoulsLoadConfig
+                {
+                    VersionName = "Dark Souls Remastered - 1.0.0.0 (Steam)",
+                    ServerInfoAddress = 0x0,
+                    UseInjector = false,
+                    UsesASLR = true,
+                    Key = new uint[0] { },
+                    SteamAppId = 570940
+                }
+            },
+
+            // -------------------------------------------------------------------------------------------
             // Dark Souls III
             // -------------------------------------------------------------------------------------------
             { 

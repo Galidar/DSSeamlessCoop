@@ -130,8 +130,8 @@ jobs:
             ## How to install
             1. Download `windows.zip` below.
             2. Extract anywhere (e.g. `C:\DSSeamlessCoop\`).
-            3. Run `Bonfire.exe` (accept the UAC prompt — admin is required for DLL injection).
-            4. Pick the **Dark Souls II** or **Dark Souls III** tab → **+ New bonfire** → follow the install / firewall prompts → **Light the bonfire**.
+            3. Run `Bonfire.exe` (accept the UAC prompt — admin is required for firewall and runtime preparation).
+            4. Pick the **Dark Souls I**, **Dark Souls II**, or **Dark Souls III** tab → **+ New bonfire** → follow the firewall/runtime prompts → **Light the bonfire**.
 
             See the [README](https://github.com/${{ github.repository }}/blob/main/README.md) for full setup details.
           draft: false

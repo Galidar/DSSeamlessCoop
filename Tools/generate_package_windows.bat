@@ -15,6 +15,7 @@
 ::       Injector.pdb
 ::       modengine.ini              -- DS2 runtime data loader config
 ::       ds2multoverhaul\           -- DS2 online unlock data
+::       Ds1SeamlessCoop\           -- DS1 online unlock runtime
 ::       SeamlessCoop\              -- DS3 online unlock runtime
 ::     Server\
 ::       Server.exe

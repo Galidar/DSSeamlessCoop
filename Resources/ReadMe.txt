@@ -5,8 +5,8 @@
 -------------------------------------------------------------------------
 
 Bonfire is a Dark Souls online server hub for Windows. It lets you host or
-join Dark Souls II: Scholar of the First Sin and Dark Souls III fires from one
-desktop interface.
+join Dark Souls I, Dark Souls II: Scholar of the First Sin, and Dark Souls III
+fires from one desktop interface.
 
 == Quick start ==
 
@@ -19,7 +19,7 @@ desktop interface.
 
 3. Make sure Steam is running and logged in.
 
-4. Pick the Dark Souls II or Dark Souls III tab.
+4. Pick the Dark Souls I, Dark Souls II, or Dark Souls III tab.
 
 5. To join a public fire, click "Travel to this fire".
    To host, click "+ New bonfire", configure it, then click
@@ -36,14 +36,14 @@ selected fire.
   flutter_windows.dll      Flutter runtime.
   data/                    Flutter assets and compiled Dart code.
   Server/                  Private multiplayer server and WebUI files.
-  Loader/                  Runtime bridge and DS2 online unlock layer.
+  Loader/                  Runtime bridge and game online unlock data.
   Prerequisites/           Visual C++ redistributables.
 
-The DS2 online unlock layer is already included. Users do not need extra files
-after downloading this release.
+The supported online runtime data is already included. Users do not need extra
+files after downloading this release.
 
-Keep separate saves enabled. DS2 private-server saves use .sl3 and DS3
-private-server saves use .ds3os.
+Keep separate saves enabled. Dark Souls I and Dark Souls III runtime saves use
+.co2, and DS2 private-server saves use .sl3.
 
 Full guide:
 https://github.com/Galidar/DSSeamlessCoop
