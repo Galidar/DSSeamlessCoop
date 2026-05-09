@@ -1,158 +1,147 @@
-![Dark Souls - Open Server](./Resources/banner.png?raw=true)
+![Bonfire](./Resources/banner.png?raw=true)
 
-[![Discord](https://img.shields.io/discord/937318023495303188?label=Discord)](https://discord.gg/pBmquc9Jkj)
+# Bonfire
 
-# DSSeamlessCoop — Fork of DS3OS
+Private multiplayer for **Dark Souls II: Scholar of the First Sin** and **Dark Souls III** — runs on your own machine, no Steam login, retail-account safe (separate saves), and the **DS2 Multiplayer Overhaul** mod is bundled inside the release. One download, one click, you play.
 
-This repository is a personal fork of [TLeonardUK/ds3os](https://github.com/TLeonardUK/ds3os), the **Dark Souls Open Server** project — an open-source implementation of the game servers for Dark Souls 2 (SOTFS) and Dark Souls 3.
+Players join your local server. You and your friends play with mods, custom rules, and zero exposure to FromSoftware's official servers.
 
-The goal of this fork is to host my own modifications focused on **Dark Souls II: Scholar of the First Sin**, with a streamlined installation experience. All server-side functionality is built on top of the original DS3OS codebase.
+## Why Bonfire
 
-> **Full credit** for the underlying server implementation goes to **TLeonardUK** and the DS3OS contributors. This fork would not exist without their work. Please support the original project: https://github.com/TLeonardUK/ds3os
-
-## What's different in this fork?
-
-- **Bonfire** — a modern Flutter desktop app that replaces the original WinForms Loader. It handles install, firewall rules, network detection, multiple server profiles (DS II / DS III in separate tabs), and per-bonfire launch. Dark/amber Souls-themed UI.
-- **Multi-profile support** — keep separate "bonfires" for DS2 and DS3 (or several configs of the same game) and switch between them with one click. Each profile carries its own server config, RSA keypair, and database.
-- **WebUI credentials** are user-editable from the Bonfire UI (no more hunting in `config.json`).
-- **Self-hosted Windows builds** via GitHub Actions — releases are produced from this fork's source code, with no dependency on the upstream release page.
-- **Customizations** to the server behavior, focused on Dark Souls II SOTFS (work in progress).
+- **One download, one click.** Grab `windows.zip` from the [Releases page](https://github.com/Galidar/DSSeamlessCoop/releases/latest), extract anywhere, run `Bonfire.exe`. The DS2 multiplayer overhaul is already inside — no separate mod fetching, no ModEngine `dinput8.dll`, no batch files.
+- **DS2 multiplayer mod, native.** Bonfire's own injector loads the Overhaul 1.0.4a server-side data at runtime. No third-party loader chained in, no `modengine.ini` for the user to wrangle.
+- **Multi-profile Souls hub.** Keep several "bonfires" per game and per ruleset, switch between them with a click. Each profile carries its own server config, RSA keypair, and database.
+- **Flutter desktop UI.** Dark/amber Souls-themed interface for everything: install, firewall rules, network detection, server management, in-app help, profile management.
+- **Built for players, not engineers.** No `config.json` editing, no command-line setup, no manual install steps. WebUI credentials are user-editable from the UI. Steam check, UAC, firewall, and DLL injection are all handled transparently.
 
 ## Quick start
 
 1. Download the latest `windows.zip` from the [Releases page](https://github.com/Galidar/DSSeamlessCoop/releases/latest).
-2. Extract it anywhere (for example, `C:\DSSeamlessCoop\`).
-3. Open `Bonfire.exe` (Windows asks for admin — required for DLL injection into the game).
+2. Extract anywhere — for example `C:\Bonfire\`.
+3. Run `Bonfire.exe` (Windows asks for admin — required for DLL injection into the game).
 4. Pick the **Dark Souls II** or **Dark Souls III** tab.
-5. Click **+ New bonfire**, name it. Bonfire downloads the server (~115 MB), applies firewall rules, and saves a profile.
-6. Click **Light the bonfire** on the profile row → it starts the local server and launches the game pointed at it.
+5. Click **+ New bonfire**, name it. Bonfire downloads the server, applies firewall rules, and saves a profile.
+6. Click **Light the bonfire** on the profile row → it starts your local server and launches the game pointed at it.
 
 That's the whole install. Steam must be running while the server is up — no Steam login required.
 
-## What is the underlying project?
+## Won't this ban my retail account?
 
-DS3OS is an open-source implementation of the game servers for Dark Souls 2 (SOTFS) and Dark Souls 3. It exists to provide an alternative for playing online with mods without the risk of being banned, or for people who simply want to play privately without cheaters or invasions.
+No. Bonfire keeps its own save files (`.sl3` for DS2, `.ds3os` for DS3). As long as you don't copy them back over your retail saves, your account is fine. The **Use separate saves** toggle is on by default — leave it on.
 
-If you have any trouble, the upstream Discord is the best place for tech support: https://discord.gg/pBmquc9Jkj
+## Pirated games
 
-## Can I use it with a pirated game?
+Not supported. The server authenticates Steam tickets. Don't ask about Steam emulators or cracked builds — neither Bonfire nor its underlying networking layer will help you.
 
-No. The server authenticates Steam tickets. Please do not ask about piracy or Steam emulators — neither this fork nor the upstream project supports them.
+FromSoftware deserves your support. Buy their games.
 
-FROM SOFTWARE deserves your support too — please buy their games if you can.
+## How it works under the hood
 
-## How does the server work?
+A release ships these working together inside one ZIP:
 
-A release ships three things working together:
+| Component | Tech | Role |
+|-----------|------|------|
+| `Bonfire.exe` | Flutter (Dart) | Desktop UI. Spawns BonfireService and talks to it over JSON-RPC. |
+| `BonfireService.exe` | .NET 8 (C#) | Backend daemon. Manages local Server.exe, downloads/installs releases, talks to the master server, configures Windows Firewall, writes `Injector.config`, spawns the game, and patches it via `WriteProcessMemory` + `CreateRemoteThread`. |
+| `Loader/Injector.dll` | Native C++ | Injected into the game on launch. Hooks server-address resolution, port replacement, save filename, DS2 file overrides, ModEngine-style mod-file resolution, and DS2 shadow-map patches. |
+| `Server/Server.exe` | Native C++ | Local game server. Implements the Dark Souls 2/3 multiplayer protocols (matchmaking, summoning, invasions, ghosts, blood messages, covenants, etc.). |
+| `Loader/ds2multoverhaul/` + `modengine.ini` | Game data | DS2 Multiplayer Overhaul 1.0.4a — Param/, map/, menu/, regulation overrides. Loaded at runtime via Bonfire's ModEngine-compatible file resolver. |
 
-- **Bonfire.exe** — Flutter desktop UI. Spawns BonfireService.exe and talks to it over JSON-RPC.
-- **BonfireService.exe** — .NET 8 backend. Manages the local Server.exe lifecycle, downloads / installs releases, talks to the master server, configures Windows Firewall, writes Injector.config, spawns the game, and patches it via `WriteProcessMemory` + `CreateRemoteThread` (admin required).
-- **Server.exe** — the actual unofficial game server. First run generates `Server/Saved/default/config.json` with default matchmaking settings — Bonfire surfaces the user-relevant fields (name, description, password, IPs, advertise toggle, WebUI creds) in the **Tend the flame** panel.
+Bonfire keeps **one Server.exe alive at a time**. Switching profiles stops it, swaps `Server/Saved/default/config.json` + RSA keypair for the chosen profile, and restarts.
 
-Bonfire's per-profile mode keeps **one Server.exe instance** alive; switching profiles stops, copies the chosen profile's `config.json` + RSA keypair into `Server/Saved/default/`, and restarts. Loader's WinForms UI is no longer shipped — its non-UI utilities (`Source/Loader/Utils/`, `Source/Loader/Config/`) are still linked into BonfireService since they implement the proven Win32 patching, RSA, and Steam-detection code.
+> **Note:** Steam (no login required) must be running when you light a bonfire — Server.exe initializes against the Steam SDK.
 
-> **NOTE:** The Steam client (no login required) must be running when you launch a bonfire, otherwise Server.exe will fail to initialize.
+## Game features
 
-For users of this fork, all of this is automated by **Bonfire** (download / firewall / network detection / per-profile config / server lifecycle / game launch).
+|  | DS3 | DS2 SOTFS |
+|---|---|---|
+| Stable enough for use | ✅ | Experimental |
+| Network transport | ✅ | ✅ |
+| Blood messages, bloodstains, ghosts | ✅ | ✅ |
+| Summoning, invasions, co-op | ✅ | ✅ |
+| Auto-summoning (covenants) | ✅ | ✅ |
+| Quick Matches (Arenas) | ✅ | ✅ |
+| Matchmaking + leaderboards | ✅ | ✅ |
+| Bell Ringing | ✅ | n/a |
+| Mirror Knight | n/a | ✅ |
+| Discord Activity Feed | ✅ | — |
+| **DS2 Multiplayer Overhaul 1.0.4a (bundled)** | n/a | ✅ |
 
-## Feature support (from upstream)
+## I launch the game but it can't connect
 
-:bangbang: Dark Souls 2 SOTFS support is still marked **experimental** by the upstream project — some features may misbehave.
-
-| Feature | Dark Souls 3 | Dark Souls 2 SOTFS |
-| --- | --- | --- |
-| Stable enough for use | :heavy_check_mark: | Experimental |
-| Network transport | :heavy_check_mark: | :heavy_check_mark: |
-| Announcement messages | :heavy_check_mark: | :heavy_check_mark: |
-| Profile management | :heavy_check_mark: | :heavy_check_mark: |
-| Blood messages | :heavy_check_mark: | :heavy_check_mark: |
-| Bloodstains | :heavy_check_mark: | :heavy_check_mark: |
-| Ghosts | :heavy_check_mark: | :heavy_check_mark: |
-| Summoning | :heavy_check_mark: | :heavy_check_mark: |
-| Invasions | :heavy_check_mark: | :heavy_check_mark: |
-| Auto-Summoning (Covenants) | :heavy_check_mark: | :heavy_check_mark: |
-| Mirror Knight | n/a | :heavy_check_mark: |
-| Matchmaking | :heavy_check_mark: | :heavy_check_mark: |
-| Leaderboards | :heavy_check_mark: | :heavy_check_mark: |
-| Bell Ringing | :heavy_check_mark: | n/a |
-| Quick Matches (Arenas) | :heavy_check_mark: | :heavy_check_mark: |
-| Telemetry/Misc | :heavy_check_mark: | :heavy_check_mark: |
-| Ticket Authentication | :heavy_check_mark: | :heavy_check_mark: |
-| Master Server Support | :heavy_check_mark: | :heavy_check_mark: |
-| Loader Support | :heavy_check_mark: | :heavy_check_mark: |
-| WebUI For Admin | :heavy_check_mark: | :heavy_check_mark: |
-| Sharding Support | :heavy_check_mark: | :heavy_check_mark: |
-| Discord Activity Feed | :heavy_check_mark: | |
-
-## Will this ban my retail account?
-
-DSOS uses its own save files. As long as you don't copy `.ds3os` saves back over your retail saves, you should be fine.
-
-## FAQ
-
-### How do I switch between Dark Souls 3 and Dark Souls 2?
-
-Each bonfire profile is fixed to one game (chosen by the tab you create it from). To play the other game, create a new bonfire under the corresponding tab — Bonfire keeps DS II and DS III profiles entirely separate.
-
-### Why aren't my save files appearing?
-
-DSOS uses its own saves to avoid issues with retail. The "Use separate saves" toggle (in Bonfire's Game Settings) is on by default and should stay on.
-
-### I launch the game but it can't connect
-
-1. Bonfire requires **admin** (the manifest enforces this — Windows asks at startup). Refusing UAC means DLL injection into the game silently fails and the game can't reach the local server.
+1. Bonfire requires **admin** — the manifest enforces it, Windows asks at startup. Refusing UAC means DLL injection silently fails and the game can't reach the local server.
 2. The firewall step inside Bonfire's installer adds rules for ports `50000`, `50010`, `50050`, `50020` (TCP+UDP) — accept the UAC prompt for `netsh` when asked.
-3. **Tend the flame** lets you override `ServerHostname` (WAN) / `ServerPrivateHostname` (LAN) for VPNs / paid hosting.
-4. Steam must be running. Bonfire's **Light the bonfire** button is disabled until the Steam check passes.
-
-### What do all the properties in the config file mean?
-
-They are documented in the source: [Source/Server/Config/RuntimeConfig.h](./Source/Server/Config/RuntimeConfig.h)
+3. **Tend the flame** lets you override `ServerHostname` (WAN) and `ServerPrivateHostname` (LAN) for VPNs or paid hosting.
+4. Steam must be running. Bonfire's **Light the bonfire** button stays disabled until the Steam check passes.
 
 ## Building from source
 
-This project uses Visual Studio 2022 and C++17. CMake generates the project files — either use the CMake GUI or run one of the `generate_*` scripts inside `Tools/`. Generated project files are stored in the `intermediate/` folder.
+Toolchain: **Visual Studio 2022**, **C++17**, **.NET 8 SDK**, **Flutter 3.27.x**.
 
-For automated builds, this fork uses GitHub Actions (see `.github/workflows/`).
+```bat
+:: 1. Generate VS solution (Server, Injector C++)
+Tools\generate_vs2022.bat
 
-## Repository structure
+:: 2. Build C++
+msbuild /m /p:Configuration=Release intermediate\vs2022\ds3os.sln
+
+:: 3. Publish BonfireService (.NET 8 self-contained single-file)
+dotnet publish Source\BonfireService\BonfireService.csproj ^
+    -c Release -r win-x64 --self-contained true ^
+    -p:PublishSingleFile=true -p:IncludeNativeLibrariesForSelfExtract=true
+
+:: 4. Build Bonfire (Flutter)
+cd Source\bonfire && flutter pub get && flutter build windows --release && cd ..\..
+
+:: 5. Assemble release ZIP
+Tools\generate_package_windows.bat
+```
+
+CI does all of the above automatically on every tag push (`v*`) — see [.github/workflows/release.yml](./.github/workflows/release.yml). To cut a release: bump version in `Source/bonfire/pubspec.yaml`, `Source/BonfireService/BonfireService.csproj`, and `Source/bonfire/lib/screens/about_dialog.dart`, commit, then `git tag vX.Y.Z && git push origin vX.Y.Z`.
+
+## Repository layout
 
 ```
 /
-├── Protobuf/              Protobuf definitions used by the server's network traffic
-├── Resources/             General resources for building and packaging
-├── Source/                All source code for the project
-│   ├── bonfire/           Flutter desktop UI (Dart). Replaces the old Loader's WinForms UI.
-│   ├── BonfireService/    .NET 8 backend for Bonfire — server lifecycle, install/firewall/
-│   │                      network/profile management, JSON-RPC over stdio with Bonfire.exe.
-│   ├── Loader/            Legacy WinForms launcher (no longer shipped). Its Utils/ + Config/
-│   │                      classes are still linked into BonfireService — they implement the
-│   │                      proven Win32 patching, RSA, and Steam-detection code.
-│   ├── Injector/          DLL injected into the game to provide DS3OS functionality
-│   ├── MasterServer/      NodeJS API server for advertising and listing active servers
-│   ├── Server/            Source code for the main server
-│   ├── Server.DarkSouls3/ Code specific to Dark Souls 3 support
-│   ├── Server.DarkSouls2/ Code specific to Dark Souls 2 support
-│   ├── Shared/            Code shared between the server and injector
-│   ├── ThirdParty/        Third-party libraries
-│   └── WebUI/             Static resources for the management web page
-└── Tools/                 Build scripts, cheat engine tables, and analysis utilities
+├── Protobuf/              Protobuf definitions for the network protocol
+├── Resources/             Banner, ReadMe, prerequisites, Loader/ (DS2 mod data bundled)
+├── Source/
+│   ├── bonfire/           Flutter desktop UI (Dart)
+│   ├── BonfireService/    .NET 8 backend (C#) — JSON-RPC over stdio with Bonfire.exe
+│   ├── Loader/            Linked-in Win32 / RSA / Steam utilities (legacy WinForms UI not shipped)
+│   ├── Injector/          DLL injected into the game (C++) — hooks, mod-file resolution
+│   ├── MasterServer/      Node.js master server for advertising and listing servers
+│   ├── Server/            Local game server (C++)
+│   ├── Server.DarkSouls3/ DS3 protocol-specific code
+│   ├── Server.DarkSouls2/ DS2 protocol-specific code
+│   ├── Shared/            Shared code (server + injector)
+│   ├── ThirdParty/        Vendored libraries
+│   └── WebUI/             Static admin web UI
+└── Tools/                 Build scripts, packaging, analysis utilities
 ```
+
+## Contributing
+
+Issues and pull requests welcome. For deeper protocol / RE questions, the souls modding Discord is a great resource.
+
+---
 
 ## Credits
 
-This fork stands on the shoulders of significant prior work:
+Bonfire stands on significant prior work:
 
-- **Original project:** [TLeonardUK/ds3os](https://github.com/TLeonardUK/ds3os) — MIT License
+- **DS3OS** — [TLeonardUK/ds3os](https://github.com/TLeonardUK/ds3os) — original Dark Souls 2/3 server protocol implementation, master server, and injector blueprint. MIT.
+- **DS2 Multiplayer Overhaul 1.0.4a** — bundled with Bonfire. Original mod authors and the SOTFS modding community.
+- **ModEngine** — [katalash/ModEngine](https://github.com/katalash/ModEngine) — the loose-file override mechanism that Bonfire's injector reimplements natively for DS2.
 - **Reverse engineering & community knowledge:**
-  - https://github.com/garyttierney/ds3-open-re
-  - https://github.com/Jellybaby34/DkS3-Server-Emulator-Rust-Edition
-  - https://github.com/AmirBohd/ModEngine2
-- **Community:** Members of the souls modding Discord
-- **Graphics & icons:**
-  - Campfire icon by ultimatearm from www.flaticon.com
-  - UI icons by Mark James from http://www.famfamfam.com/lab/icons/silk/
+  - [garyttierney/ds3-open-re](https://github.com/garyttierney/ds3-open-re)
+  - [Jellybaby34/DkS3-Server-Emulator-Rust-Edition](https://github.com/Jellybaby34/DkS3-Server-Emulator-Rust-Edition)
+  - [AmirBohd/ModEngine2](https://github.com/AmirBohd/ModEngine2)
+- **Souls modding Discord community.**
+- **Graphics:**
+  - Campfire icon by ultimatearm — flaticon.com
+  - UI icons by Mark James — famfamfam silk icons
 
 ## License
 
-This fork preserves the [MIT License](./LICENSE) of the upstream project.
+[MIT](./LICENSE)
