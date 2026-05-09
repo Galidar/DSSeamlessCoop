@@ -31,7 +31,8 @@ public sealed record LaunchRequest(
     int Port,
     string PublicKey,
     string GameType,
-    bool EnableSeparateSaves);
+    bool EnableSeparateSaves,
+    string Ds2OverhaulPath);
 
 public sealed record LaunchResult(bool Ok, string Message, int? Pid);
 
@@ -168,6 +169,8 @@ public static class GameLauncher
 
         // Write the injector config file the DLL will read on attach.
         var configPath = Path.Combine(Path.GetDirectoryName(injectorPath)!, "Injector.config");
+        var ds2ModEngine = Ds2ModEngineSettings.Resolve(
+            req.ExePath, injectorPath, req.GameType, req.Ds2OverhaulPath);
         var injectCfg = new InjectionConfig
         {
             ServerName = req.ServerName,
@@ -175,7 +178,16 @@ public static class GameLauncher
             ServerHostname = connectionHostname,
             ServerPort = req.Port,
             ServerGameType = req.GameType,
-            EnableSeperateSaveFiles = req.EnableSeparateSaves,
+            EnableSeperateSaveFiles = req.EnableSeparateSaves || ds2ModEngine.UseAlternateSaveFile,
+            EnableModFileOverrides = ds2ModEngine.EnableModFileOverrides,
+            ModOverrideDirectory = ds2ModEngine.ModOverrideDirectory,
+            CacheModFilePaths = ds2ModEngine.CacheModFilePaths,
+            SaveFileExtension = ds2ModEngine.UseAlternateSaveFile ? ".sl3" : ".ds3os",
+            EnableDs2ShadowResolutionPatches = ds2ModEngine.EnableShadowResolutionPatches,
+            Ds2DirectionalShadowResolution = ds2ModEngine.DirectionalShadowResolution,
+            Ds2DynamicAtlasShadowResolution = ds2ModEngine.DynamicAtlasShadowResolution,
+            Ds2DynamicPointShadowResolution = ds2ModEngine.DynamicPointShadowResolution,
+            Ds2DynamicSpotShadowResolution = ds2ModEngine.DynamicSpotShadowResolution,
         };
         File.WriteAllText(configPath, injectCfg.ToJson());
 

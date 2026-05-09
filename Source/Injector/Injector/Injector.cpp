@@ -21,6 +21,7 @@
 
 #include "Injector/Hooks/DarkSouls3/DS3_ReplaceServerAddressHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_ReplaceServerAddressHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_ModFileOverrideHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_LogProtobufsHook.h"
 #include "Injector/Hooks/Shared/ReplaceServerPortHook.h"
 #include "Injector/Hooks/Shared/ChangeSaveGameFilenameHook.h"
@@ -145,6 +146,13 @@ bool Injector::Init()
                 Hooks.push_back(std::make_unique<DS2_ReplaceServerAddressHook>());
             }
 
+            if (Config.EnableModFileOverrides ||
+                Config.EnableSeperateSaveFiles ||
+                Config.EnableDs2ShadowResolutionPatches)
+            {
+                Hooks.push_back(std::make_unique<DS2_ModFileOverrideHook>());
+            }
+
 #ifdef _DEBUG
             Hooks.push_back(std::make_unique<DS2_LogProtobufsHook>());
 #endif
@@ -157,7 +165,7 @@ bool Injector::Init()
         Hooks.push_back(std::make_unique<ReplaceServerPortHook>());
     }
 
-    if (Config.EnableSeperateSaveFiles)
+    if (Config.EnableSeperateSaveFiles && CurrentGameType != GameType::DarkSouls2)
     {
         if (!BuildConfig::DO_NOT_REDIRECT)
         {

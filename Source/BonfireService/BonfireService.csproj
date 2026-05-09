@@ -39,6 +39,7 @@
     <Compile Include="..\Loader\Utils\SteamUtils.cs"      Link="External\SteamUtils.cs" />
     <Compile Include="..\Loader\Utils\NetUtils.cs"        Link="External\NetUtils.cs" />
     <Compile Include="..\Loader\Config\BuildConfig.cs"    Link="External\BuildConfig.cs" />
+    <Compile Include="..\Loader\Config\Ds2ModEngineSettings.cs" Link="External\Ds2ModEngineSettings.cs" />
     <Compile Include="..\Loader\Config\InjectionConfig.cs" Link="External\InjectionConfig.cs" />
     <Compile Include="..\Loader\Config\ServerConfig.cs"   Link="External\LoaderServerConfig.cs" />
   </ItemGroup>

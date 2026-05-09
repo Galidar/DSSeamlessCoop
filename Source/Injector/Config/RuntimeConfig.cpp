@@ -151,6 +151,15 @@ bool RuntimeConfig::Serialize(nlohmann::json& Json, bool Loading)
     SERIALIZE_VAR(EnableSeperateSaveFiles);
     SERIALIZE_VAR(ServerPort);
     SERIALIZE_VAR(ServerGameType);
+    SERIALIZE_VAR(EnableModFileOverrides);
+    SERIALIZE_VAR(ModOverrideDirectory);
+    SERIALIZE_VAR(CacheModFilePaths);
+    SERIALIZE_VAR(SaveFileExtension);
+    SERIALIZE_VAR(EnableDs2ShadowResolutionPatches);
+    SERIALIZE_VAR(Ds2DirectionalShadowResolution);
+    SERIALIZE_VAR(Ds2DynamicAtlasShadowResolution);
+    SERIALIZE_VAR(Ds2DynamicPointShadowResolution);
+    SERIALIZE_VAR(Ds2DynamicSpotShadowResolution);
 
     return true;
 }

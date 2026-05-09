@@ -11,6 +11,7 @@ public sealed class GameSettings
 {
     public string Ds2ExePath { get; set; } = "";
     public string Ds3ExePath { get; set; } = "";
+    public string Ds2OverhaulPath { get; set; } = "";
     public bool UseSeparateSaves { get; set; } = true;
 
     public static string SettingsPath

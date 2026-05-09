@@ -28,6 +28,15 @@ namespace Loader
         public string ServerGameType        { get; set; }
         public int ServerPort               { get; set; }
         public bool EnableSeperateSaveFiles { get; set; }
+        public bool EnableModFileOverrides  { get; set; }
+        public string ModOverrideDirectory  { get; set; } = "";
+        public bool CacheModFilePaths       { get; set; } = true;
+        public string SaveFileExtension     { get; set; } = ".ds3os";
+        public bool EnableDs2ShadowResolutionPatches { get; set; }
+        public int Ds2DirectionalShadowResolution    { get; set; }
+        public int Ds2DynamicAtlasShadowResolution   { get; set; }
+        public int Ds2DynamicPointShadowResolution   { get; set; }
+        public int Ds2DynamicSpotShadowResolution    { get; set; }
 
         public string ToJson()
         {

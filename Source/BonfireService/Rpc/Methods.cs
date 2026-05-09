@@ -451,6 +451,10 @@ public static class Methods
                 ["ds3_exe_path"] = s.Ds3ExePath,
                 ["ds2_exe_valid"] = IsRecognised(s.Ds2ExePath),
                 ["ds3_exe_valid"] = IsRecognised(s.Ds3ExePath),
+                ["ds2_overhaul_path"] = s.Ds2OverhaulPath,
+                ["ds2_overhaul_valid"] = string.IsNullOrWhiteSpace(s.Ds2OverhaulPath) ||
+                    !string.IsNullOrEmpty(Loader.Ds2ModEngineSettings.Resolve(
+                        s.Ds2ExePath, "", "DarkSouls2", s.Ds2OverhaulPath).ModOverrideDirectory),
                 ["use_separate_saves"] = s.UseSeparateSaves,
             };
         });
@@ -479,6 +483,29 @@ public static class Methods
                 ["path"] = path,
                 ["recognised"] = known,
                 ["hash"] = hash,
+            };
+        });
+
+        server.Register("game.set_ds2_overhaul_path", async (@params, _) =>
+        {
+            await Task.Yield();
+            var path = @params.GetString("path") ?? "";
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                var resolved = Loader.Ds2ModEngineSettings.Resolve(
+                    "", "", "DarkSouls2", path);
+                if (string.IsNullOrEmpty(resolved.ModOverrideDirectory))
+                    throw new Exception("Not a valid DS2 overhaul directory: " + path);
+                path = resolved.ModOverrideDirectory;
+            }
+
+            var s = GameSettings.Load();
+            s.Ds2OverhaulPath = path;
+            s.Save();
+            return new JsonObject
+            {
+                ["ok"] = true,
+                ["path"] = path,
             };
         });
 
@@ -552,7 +579,8 @@ public static class Methods
                 Port: serverEntry.Port,
                 PublicKey: publicKey,
                 GameType: serverEntry.GameType,
-                EnableSeparateSaves: settings.UseSeparateSaves);
+                EnableSeparateSaves: settings.UseSeparateSaves,
+                Ds2OverhaulPath: settings.Ds2OverhaulPath);
 
             // Heavy P/Invoke — push it onto a worker.
             var result = await Task.Run(() => Bonfire.Service.Game.GameLauncher.Launch(
@@ -682,7 +710,8 @@ public static class Methods
                 Port: port,
                 PublicKey: publicKey,
                 GameType: meta.GameType,
-                EnableSeparateSaves: settings.UseSeparateSaves);
+                EnableSeparateSaves: settings.UseSeparateSaves,
+                Ds2OverhaulPath: settings.Ds2OverhaulPath);
 
             var result = await Task.Run(() => Bonfire.Service.Game.GameLauncher.Launch(
                 req, wan, lan, injectorPath));

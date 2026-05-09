@@ -682,13 +682,25 @@ namespace Loader
                 byte[] InjectorPathBuffer = System.Text.Encoding.Unicode.GetBytes(InjectorPath + "\0");
 
                 // Write the config file which the injector will read everything from.
+                Ds2ModEngineSettings ds2ModEngine = Ds2ModEngineSettings.Resolve(
+                    ExeLocation, InjectorPath, Config.GameType);
                 InjectionConfig injectConfig = new InjectionConfig();
                 injectConfig.ServerName = Config.Name;
                 injectConfig.ServerPublicKey = Config.PublicKey;
                 injectConfig.ServerHostname = ConnectionHostname;
                 injectConfig.ServerPort = Config.Port;
                 injectConfig.ServerGameType = Config.GameType;
-                injectConfig.EnableSeperateSaveFiles = ProgramSettings.Default.use_seperate_saves;
+                injectConfig.EnableSeperateSaveFiles =
+                    ProgramSettings.Default.use_seperate_saves || ds2ModEngine.UseAlternateSaveFile;
+                injectConfig.EnableModFileOverrides = ds2ModEngine.EnableModFileOverrides;
+                injectConfig.ModOverrideDirectory = ds2ModEngine.ModOverrideDirectory;
+                injectConfig.CacheModFilePaths = ds2ModEngine.CacheModFilePaths;
+                injectConfig.SaveFileExtension = ds2ModEngine.UseAlternateSaveFile ? ".sl3" : ".ds3os";
+                injectConfig.EnableDs2ShadowResolutionPatches = ds2ModEngine.EnableShadowResolutionPatches;
+                injectConfig.Ds2DirectionalShadowResolution = ds2ModEngine.DirectionalShadowResolution;
+                injectConfig.Ds2DynamicAtlasShadowResolution = ds2ModEngine.DynamicAtlasShadowResolution;
+                injectConfig.Ds2DynamicPointShadowResolution = ds2ModEngine.DynamicPointShadowResolution;
+                injectConfig.Ds2DynamicSpotShadowResolution = ds2ModEngine.DynamicSpotShadowResolution;
 
                 string json = injectConfig.ToJson();
                 File.WriteAllText(InjectorConfigPath, json);
