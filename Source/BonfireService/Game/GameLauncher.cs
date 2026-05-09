@@ -16,8 +16,10 @@
 
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Security.Cryptography;
 using System.Text;
 
+using Bonfire.Service.Modules;
 using Loader; // re-using the Loader-namespace utility classes (linked via csproj)
 
 namespace Bonfire.Service.Game;
@@ -32,12 +34,18 @@ public sealed record LaunchRequest(
     string PublicKey,
     string GameType,
     bool EnableSeparateSaves,
-    string Ds2OverhaulPath);
+    string Ds2OverhaulPath,
+    bool EnableDs3Seamless,
+    string Ds3SeamlessPath);
 
 public sealed record LaunchResult(bool Ok, string Message, int? Pid);
 
 public static class GameLauncher
 {
+    private sealed record Ds3SeamlessLaunchPlan(
+        string DllPath,
+        string? LauncherPath);
+
     public static LaunchResult Launch(LaunchRequest req,
         string machinePublicIp, string machinePrivateIp,
         string injectorDllPath)
@@ -72,6 +80,14 @@ public static class GameLauncher
             return new(false, $"Could not write steam_appid.txt: {ex.Message}", null);
         }
 
+        var ds3SeamlessPlan = PrepareDs3Seamless(req, out var ds3PrepareErr);
+        if (!string.IsNullOrEmpty(ds3PrepareErr))
+            return new(false, ds3PrepareErr, null);
+
+        var launchExe = ds3SeamlessPlan?.LauncherPath ?? req.ExePath;
+        var launchedViaDs3SeamlessLauncher =
+            ds3SeamlessPlan?.LauncherPath is not null;
+
         // ── 5. CreateProcess ───────────────────────────────────────
         //
         // Plain ZERO_FLAG, exactly like the original Loader's PerformLaunch
@@ -84,8 +100,9 @@ public static class GameLauncher
         // Match Loader exactly.
         var startup = new STARTUPINFO();
         var pi = new PROCESS_INFORMATION();
+        var launchStartedAt = DateTime.Now;
         var ok = WinAPI.CreateProcess(
-            null!, $"\"{req.ExePath}\"",
+            null!, $"\"{launchExe}\"",
             IntPtr.Zero, IntPtr.Zero, false,
             ProcessCreationFlags.ZERO_FLAG,
             IntPtr.Zero, exeDir,
@@ -93,12 +110,29 @@ public static class GameLauncher
         if (!ok)
             return new(false,
                 $"CreateProcess failed (GetLastError={Marshal.GetLastWin32Error()}).", null);
-        return Inject(pi, loadCfg, injectorDllPath, req, connectionHostname);
+
+        var targetPi = pi;
+        if (launchedViaDs3SeamlessLauncher)
+        {
+            if (!WaitForGameProcess(req.ExePath, launchStartedAt, out targetPi, out var waitErr))
+                return new(false, waitErr, (int)pi.dwProcessId);
+        }
+
+        return Inject(
+            targetPi,
+            loadCfg,
+            injectorDllPath,
+            req,
+            connectionHostname,
+            ds3SeamlessPlan,
+            ds3SeamlessAlreadyLoaded: launchedViaDs3SeamlessLauncher);
     }
 
     private static LaunchResult Inject(PROCESS_INFORMATION pi,
         DarkSoulsLoadConfig loadCfg, string injectorDllPath,
-        LaunchRequest req, string connectionHostname)
+        LaunchRequest req, string connectionHostname,
+        Ds3SeamlessLaunchPlan? ds3SeamlessPlan,
+        bool ds3SeamlessAlreadyLoaded)
     {
 
         try
@@ -118,6 +152,14 @@ public static class GameLauncher
                         out var patchErr))
                 {
                     return new(false, patchErr, (int)pi.dwProcessId);
+                }
+            }
+
+            if (ds3SeamlessPlan is not null && !ds3SeamlessAlreadyLoaded)
+            {
+                if (!InjectDs3Seamless(pi, ds3SeamlessPlan, out var ds3SeamlessErr))
+                {
+                    return new(false, ds3SeamlessErr, (int)pi.dwProcessId);
                 }
             }
 
@@ -178,7 +220,9 @@ public static class GameLauncher
             ServerHostname = connectionHostname,
             ServerPort = req.Port,
             ServerGameType = req.GameType,
-            EnableSeperateSaveFiles = req.EnableSeparateSaves || ds2ModEngine.UseAlternateSaveFile,
+            EnableSeperateSaveFiles =
+                !Ds3SeamlessOwnsSaveHook(req) &&
+                (req.EnableSeparateSaves || ds2ModEngine.UseAlternateSaveFile),
             EnableModFileOverrides = ds2ModEngine.EnableModFileOverrides,
             ModOverrideDirectory = ds2ModEngine.ModOverrideDirectory,
             CacheModFilePaths = ds2ModEngine.CacheModFilePaths,
@@ -190,6 +234,108 @@ public static class GameLauncher
             Ds2DynamicSpotShadowResolution = ds2ModEngine.DynamicSpotShadowResolution,
         };
         File.WriteAllText(configPath, injectCfg.ToJson());
+
+        return LoadLibraryIntoProcess(pi, injectorPath, "Injector.dll", out error);
+    }
+
+    private static Ds3SeamlessLaunchPlan? PrepareDs3Seamless(
+        LaunchRequest req, out string error)
+    {
+        error = "";
+        if (!ShouldAttemptDs3Seamless(req))
+            return null;
+
+        if (!Ds3SeamlessPayloadResolver.TryPrepareForGame(
+                req.Ds3SeamlessPath,
+                req.ExePath,
+                BuildDs3SeamlessPassword(req),
+                out var dllPath,
+                out var launcherPath,
+                out var prepareErr))
+        {
+            if (string.IsNullOrWhiteSpace(req.Ds3SeamlessPath) &&
+                prepareErr.Contains("not bundled", StringComparison.OrdinalIgnoreCase))
+            {
+                return null;
+            }
+
+            error = prepareErr;
+            return null;
+        }
+
+        return new Ds3SeamlessLaunchPlan(dllPath, launcherPath);
+    }
+
+    private static bool InjectDs3Seamless(
+        PROCESS_INFORMATION pi, Ds3SeamlessLaunchPlan plan, out string error)
+    {
+        return LoadLibraryIntoProcess(pi, plan.DllPath, "DS3 Seamless runtime", out error);
+    }
+
+    private static bool WaitForGameProcess(
+        string gameExePath,
+        DateTime launchStartedAt,
+        out PROCESS_INFORMATION pi,
+        out string error)
+    {
+        pi = new PROCESS_INFORMATION();
+        error = "";
+
+        var exeName = Path.GetFileNameWithoutExtension(gameExePath);
+        var expectedPath = Path.GetFullPath(gameExePath);
+        var minStartTime = launchStartedAt.AddSeconds(-5);
+
+        for (var attempt = 0; attempt < 80; attempt++)
+        {
+            foreach (var process in Process.GetProcessesByName(exeName))
+            {
+                try
+                {
+                    if (process.StartTime < minStartTime)
+                        continue;
+
+                    var processPath = process.MainModule?.FileName;
+                    if (string.IsNullOrEmpty(processPath) ||
+                        !SamePath(processPath, expectedPath))
+                    {
+                        continue;
+                    }
+
+                    var handle = WinAPI.OpenProcess(
+                        ProcessAccessFlags.All, false, process.Id);
+                    if (handle == IntPtr.Zero)
+                        continue;
+
+                    pi = new PROCESS_INFORMATION
+                    {
+                        hProcess = handle,
+                        dwProcessId = (uint)process.Id,
+                    };
+                    return true;
+                }
+                catch
+                {
+                    // The process can exit or deny module reads while the
+                    // launcher is still starting the game. Keep polling.
+                }
+            }
+
+            Thread.Sleep(250);
+        }
+
+        error = "DS3 Seamless launcher started, but DarkSoulsIII.exe did not appear.";
+        return false;
+    }
+
+    private static bool LoadLibraryIntoProcess(
+        PROCESS_INFORMATION pi, string dllPath, string label, out string error)
+    {
+        error = "";
+        if (!File.Exists(dllPath))
+        {
+            error = $"{label} not found at {dllPath}";
+            return false;
+        }
 
         // Resolve the LoadLibraryW address we'll invoke on the remote thread.
         var kernel32 = WinAPI.GetModuleHandle("kernel32.dll");
@@ -210,7 +356,7 @@ public static class GameLauncher
         // Allocate space for the path string in the target process. Steam
         // stub unpacks the executable asynchronously, so VirtualAllocEx may
         // fail for the first few hundred ms — retry up to ~16s.
-        var pathBytes = Encoding.Unicode.GetBytes(injectorPath + "\0");
+        var pathBytes = Encoding.Unicode.GetBytes(dllPath + "\0");
         var pathAddr = IntPtr.Zero;
         for (var i = 0; i < 32 && pathAddr == IntPtr.Zero; i++)
         {
@@ -222,7 +368,8 @@ public static class GameLauncher
         }
         if (pathAddr == IntPtr.Zero)
         {
-            error = $"VirtualAllocEx failed (GetLastError={Marshal.GetLastWin32Error()})";
+            error = $"{label}: VirtualAllocEx failed " +
+                    $"(GetLastError={Marshal.GetLastWin32Error()})";
             return false;
         }
 
@@ -230,7 +377,7 @@ public static class GameLauncher
                 pathBytes, (uint)pathBytes.Length, out var written) ||
             written != pathBytes.Length)
         {
-            error = $"WriteProcessMemory failed " +
+            error = $"{label}: WriteProcessMemory failed " +
                     $"(GetLastError={Marshal.GetLastWin32Error()})";
             return false;
         }
@@ -239,11 +386,43 @@ public static class GameLauncher
             pi.hProcess, IntPtr.Zero, 0, loadLibrary, pathAddr, 0, IntPtr.Zero);
         if (thread == IntPtr.Zero)
         {
-            error = $"CreateRemoteThread failed " +
+            error = $"{label}: CreateRemoteThread failed " +
                     $"(GetLastError={Marshal.GetLastWin32Error()})";
             return false;
         }
         return true;
+    }
+
+    private static bool ShouldAttemptDs3Seamless(LaunchRequest req) =>
+        req.EnableDs3Seamless &&
+        string.Equals(req.GameType, "DarkSouls3", StringComparison.OrdinalIgnoreCase);
+
+    private static bool Ds3SeamlessOwnsSaveHook(LaunchRequest req) =>
+        ShouldAttemptDs3Seamless(req) &&
+        Ds3SeamlessPayloadResolver.Resolve(req.Ds3SeamlessPath, req.ExePath) is not null;
+
+    private static string BuildDs3SeamlessPassword(LaunchRequest req)
+    {
+        var seed = !string.IsNullOrWhiteSpace(req.ServerId)
+            ? req.ServerId
+            : $"{req.ServerName}|{req.Hostname}|{req.Port}";
+        var hash = SHA256.HashData(Encoding.UTF8.GetBytes(seed));
+        return "bf-" + Convert.ToHexString(hash)[..24].ToLowerInvariant();
+    }
+
+    private static bool SamePath(string left, string right)
+    {
+        try
+        {
+            return string.Equals(
+                Path.GetFullPath(left).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                Path.GetFullPath(right).TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar),
+                StringComparison.OrdinalIgnoreCase);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     private static bool PatchMemory(

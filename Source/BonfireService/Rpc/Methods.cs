@@ -455,6 +455,11 @@ public static class Methods
                 ["ds2_overhaul_valid"] = string.IsNullOrWhiteSpace(s.Ds2OverhaulPath) ||
                     !string.IsNullOrEmpty(Loader.Ds2ModEngineSettings.Resolve(
                         s.Ds2ExePath, "", "DarkSouls2", s.Ds2OverhaulPath).ModOverrideDirectory),
+                ["ds3_seamless_path"] = s.Ds3SeamlessPath,
+                ["ds3_seamless_enabled"] = s.EnableDs3Seamless,
+                ["ds3_seamless_valid"] = string.IsNullOrWhiteSpace(s.Ds3SeamlessPath)
+                    ? Bonfire.Service.Modules.Ds3SeamlessPayloadResolver.Resolve("", s.Ds3ExePath) is not null
+                    : Bonfire.Service.Modules.Ds3SeamlessPayloadResolver.IsValidPath(s.Ds3SeamlessPath),
                 ["use_separate_saves"] = s.UseSeparateSaves,
             };
         });
@@ -506,6 +511,39 @@ public static class Methods
             {
                 ["ok"] = true,
                 ["path"] = path,
+            };
+        });
+
+        server.Register("game.set_ds3_seamless_path", async (@params, _) =>
+        {
+            await Task.Yield();
+            var path = @params.GetString("path") ?? "";
+            if (!string.IsNullOrWhiteSpace(path) &&
+                !Bonfire.Service.Modules.Ds3SeamlessPayloadResolver.IsValidPath(path))
+            {
+                throw new Exception("Not a valid DS3 Seamless payload directory: " + path);
+            }
+
+            var s = GameSettings.Load();
+            s.Ds3SeamlessPath = path;
+            s.Save();
+            return new JsonObject
+            {
+                ["ok"] = true,
+                ["path"] = path,
+            };
+        });
+
+        server.Register("game.set_ds3_seamless_enabled", async (@params, _) =>
+        {
+            await Task.Yield();
+            var s = GameSettings.Load();
+            s.EnableDs3Seamless = @params.GetBool("enabled") ?? true;
+            s.Save();
+            return new JsonObject
+            {
+                ["ok"] = true,
+                ["enabled"] = s.EnableDs3Seamless,
             };
         });
 
@@ -580,7 +618,9 @@ public static class Methods
                 PublicKey: publicKey,
                 GameType: serverEntry.GameType,
                 EnableSeparateSaves: settings.UseSeparateSaves,
-                Ds2OverhaulPath: settings.Ds2OverhaulPath);
+                Ds2OverhaulPath: settings.Ds2OverhaulPath,
+                EnableDs3Seamless: settings.EnableDs3Seamless,
+                Ds3SeamlessPath: settings.Ds3SeamlessPath);
 
             // Heavy P/Invoke — push it onto a worker.
             var result = await Task.Run(() => Bonfire.Service.Game.GameLauncher.Launch(
@@ -703,7 +743,7 @@ public static class Methods
 
             var req = new Bonfire.Service.Game.LaunchRequest(
                 ExePath: exePath,
-                ServerId: profileId,
+                ServerId: !string.IsNullOrWhiteSpace(cfg.ServerId) ? cfg.ServerId : profileId,
                 ServerName: meta.Name,
                 Hostname: !string.IsNullOrEmpty(cfg.ServerHostname) ? cfg.ServerHostname : (wan.Length > 0 ? wan : "127.0.0.1"),
                 PrivateHostname: !string.IsNullOrEmpty(cfg.ServerPrivateHostname) ? cfg.ServerPrivateHostname : (lan.Length > 0 ? lan : "127.0.0.1"),
@@ -711,7 +751,9 @@ public static class Methods
                 PublicKey: publicKey,
                 GameType: meta.GameType,
                 EnableSeparateSaves: settings.UseSeparateSaves,
-                Ds2OverhaulPath: settings.Ds2OverhaulPath);
+                Ds2OverhaulPath: settings.Ds2OverhaulPath,
+                EnableDs3Seamless: settings.EnableDs3Seamless,
+                Ds3SeamlessPath: settings.Ds3SeamlessPath);
 
             var result = await Task.Run(() => Bonfire.Service.Game.GameLauncher.Launch(
                 req, wan, lan, injectorPath));

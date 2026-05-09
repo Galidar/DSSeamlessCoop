@@ -13,8 +13,10 @@
 ::     Loader\
 ::       Injector.dll
 ::       Injector.pdb
-::       modengine.ini              -- ModEngine config (DS2 overhaul)
-::       ds2multoverhaul\           -- DS2 Multiplayer Overhaul 1.0.4a mod files
+::       modengine.ini              -- DS2 runtime data loader config
+::       ds2multoverhaul\           -- DS2 online unlock data
+::       SeamlessCoop\              -- DS3 online unlock runtime
+::       ds3sc_launcher.exe
 ::     Server\
 ::       Server.exe
 ::       Server.pdb
@@ -24,10 +26,9 @@
 ::     Prerequisites\
 ::     ReadMe.txt
 ::
-:: The DS2 data payload (ds2multoverhaul\ + modengine.ini) lives in
-:: Resources\Loader\ and is xcopied straight into DSSeamlessCoop\Loader\
-:: at packaging time. End users get a single windows.zip with everything
-:: bundled inside it.
+:: Release-time Loader payloads live in Resources\Loader\ and are xcopied
+:: straight into DSSeamlessCoop\Loader\ at packaging time. End users get a
+:: single windows.zip with everything bundled inside it.
 
 mkdir DSSeamlessCoop
 mkdir DSSeamlessCoop\Loader
@@ -55,12 +56,14 @@ ren DSSeamlessCoop\bonfire.exe Bonfire.exe
 :: BonfireService (C# .NET 8 self-contained single-file)
 xcopy /s /y Source\bonfire\build\bonfire_service\BonfireService.exe DSSeamlessCoop\
 
-:: DS2 data bundle (committed under Resources\Loader\). Produces a
-:: single-download windows.zip with the DS2 server-side data pre-installed,
+:: Loader payload bundle (committed under Resources\Loader\). Produces a
+:: single-download windows.zip with client preparation data pre-installed,
 :: so end users don't need to fetch or configure anything separately.
 xcopy /s /e /y Resources\Loader\ DSSeamlessCoop\Loader\
 if errorlevel 1 (
-    echo ERROR: failed to copy DS2 data bundle into Loader\
+    echo ERROR: failed to copy Loader payload bundle into Loader\
     exit /b 1
 )
-echo DS2 data bundled into DSSeamlessCoop\Loader\
+mkdir DSSeamlessCoop\Loader\SeamlessCoop\crashdumps\attachments
+mkdir DSSeamlessCoop\Loader\SeamlessCoop\crashdumps\reports
+echo Loader payload bundled into DSSeamlessCoop\Loader\

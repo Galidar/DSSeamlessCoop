@@ -21,6 +21,7 @@
 !Source/ThirdParty/**/*.so
 !Tools/**.dll
 !Tools/**/*.dll
+!Resources/Loader/**/*.dll
 !Tools/**.so
 !Tools/**/*.so
 
@@ -49,6 +50,7 @@
 !Source/ThirdParty/**.exe
 !Source/ThirdParty/**/*.exe
 !Resources/Prerequisites/*.exe
+!Resources/Loader/**/*.exe
 !Tools/**.exe
 !Tools/**/*.exe
 

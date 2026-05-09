@@ -11,6 +11,7 @@ namespace Bonfire.Service.Modules;
 
 public sealed class ServerConfig
 {
+    public string ServerId { get; set; } = "";
     public string ServerName { get; set; } = "My DS3OS Server";
     public string ServerDescription { get; set; } = "A custom Dark Souls server.";
     public string Password { get; set; } = "";
@@ -33,6 +34,7 @@ public sealed class ServerConfig
         if (!File.Exists(path)) return cfg;
 
         var text = File.ReadAllText(path);
+        cfg.ServerId              = ReadString(text, "ServerId")              ?? cfg.ServerId;
         cfg.ServerName            = ReadString(text, "ServerName")            ?? cfg.ServerName;
         cfg.ServerDescription     = ReadString(text, "ServerDescription")     ?? cfg.ServerDescription;
         cfg.Password              = ReadString(text, "Password")              ?? cfg.Password;

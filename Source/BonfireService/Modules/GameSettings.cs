@@ -12,6 +12,8 @@ public sealed class GameSettings
     public string Ds2ExePath { get; set; } = "";
     public string Ds3ExePath { get; set; } = "";
     public string Ds2OverhaulPath { get; set; } = "";
+    public string Ds3SeamlessPath { get; set; } = "";
+    public bool EnableDs3Seamless { get; set; } = true;
     public bool UseSeparateSaves { get; set; } = true;
 
     public static string SettingsPath
@@ -33,7 +35,8 @@ public sealed class GameSettings
             var path = SettingsPath;
             if (!File.Exists(path)) return AutoDetect();
             var text = File.ReadAllText(path);
-            return JsonSerializer.Deserialize<GameSettings>(text) ?? AutoDetect();
+            var loaded = JsonSerializer.Deserialize<GameSettings>(text) ?? AutoDetect();
+            return FillMissingDetectedPaths(loaded);
         }
         catch
         {
@@ -82,6 +85,22 @@ public sealed class GameSettings
         }
         catch { }
         return s;
+    }
+
+    private static GameSettings FillMissingDetectedPaths(GameSettings loaded)
+    {
+        if (!string.IsNullOrWhiteSpace(loaded.Ds2ExePath) &&
+            !string.IsNullOrWhiteSpace(loaded.Ds3ExePath))
+        {
+            return loaded;
+        }
+
+        var detected = AutoDetect();
+        if (string.IsNullOrWhiteSpace(loaded.Ds2ExePath))
+            loaded.Ds2ExePath = detected.Ds2ExePath;
+        if (string.IsNullOrWhiteSpace(loaded.Ds3ExePath))
+            loaded.Ds3ExePath = detected.Ds3ExePath;
+        return loaded;
     }
 
     public string PathFor(string gameType)
