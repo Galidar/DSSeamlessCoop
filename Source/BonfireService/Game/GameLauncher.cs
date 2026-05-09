@@ -213,6 +213,7 @@ public static class GameLauncher
         var configPath = Path.Combine(Path.GetDirectoryName(injectorPath)!, "Injector.config");
         var ds2ModEngine = Ds2ModEngineSettings.Resolve(
             req.ExePath, injectorPath, req.GameType, req.Ds2OverhaulPath);
+        var ds2LightingEngineActive = IsDs2LightingEngineInstalled(req);
         var injectCfg = new InjectionConfig
         {
             ServerName = req.ServerName,
@@ -227,7 +228,8 @@ public static class GameLauncher
             ModOverrideDirectory = ds2ModEngine.ModOverrideDirectory,
             CacheModFilePaths = ds2ModEngine.CacheModFilePaths,
             SaveFileExtension = ds2ModEngine.UseAlternateSaveFile ? ".sl3" : ".ds3os",
-            EnableDs2ShadowResolutionPatches = ds2ModEngine.EnableShadowResolutionPatches,
+            EnableDs2ShadowResolutionPatches =
+                ds2ModEngine.EnableShadowResolutionPatches && !ds2LightingEngineActive,
             Ds2DirectionalShadowResolution = ds2ModEngine.DirectionalShadowResolution,
             Ds2DynamicAtlasShadowResolution = ds2ModEngine.DynamicAtlasShadowResolution,
             Ds2DynamicPointShadowResolution = ds2ModEngine.DynamicPointShadowResolution,
@@ -236,6 +238,25 @@ public static class GameLauncher
         File.WriteAllText(configPath, injectCfg.ToJson());
 
         return LoadLibraryIntoProcess(pi, injectorPath, "Injector.dll", out error);
+    }
+
+    private static bool IsDs2LightingEngineInstalled(LaunchRequest req)
+    {
+        if (!string.Equals(req.GameType, "DarkSouls2", StringComparison.OrdinalIgnoreCase))
+            return false;
+
+        var gameDir = Path.GetDirectoryName(req.ExePath);
+        if (string.IsNullOrEmpty(gameDir))
+            return false;
+
+        if (!File.Exists(Path.Combine(gameDir, "dxgi.dll")))
+            return false;
+
+        return
+            Directory.Exists(Path.Combine(gameDir, "ds2le_atmosphere_presets")) ||
+            Directory.Exists(Path.Combine(gameDir, "shader", "addon_shaders")) ||
+            Directory.Exists(Path.Combine(gameDir, "shader", "addon_config")) ||
+            File.Exists(Path.Combine(gameDir, "DS2LE.log"));
     }
 
     private static Ds3SeamlessLaunchPlan? PrepareDs3Seamless(
