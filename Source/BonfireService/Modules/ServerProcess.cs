@@ -7,6 +7,8 @@
  */
 
 using System.Diagnostics;
+using System.Net.NetworkInformation;
+using System.Text.RegularExpressions;
 
 namespace Bonfire.Service.Modules;
 
@@ -69,6 +71,12 @@ public static class ServerProcess
             if (!File.Exists(Paths.ServerExecutable))
             {
                 error = $"Server.exe not found at {Paths.ServerExecutable}. Install the server first.";
+                return false;
+            }
+
+            if (FindPortConflict(out var conflict))
+            {
+                error = conflict;
                 return false;
             }
 
@@ -167,5 +175,80 @@ public static class ServerProcess
     private static DateTime? SafeStartTime(Process p)
     {
         try { return p.StartTime; } catch { return null; }
+    }
+
+    private static bool FindPortConflict(out string? error)
+    {
+        error = null;
+
+        try
+        {
+            var tcpListeners = IPGlobalProperties.GetIPGlobalProperties()
+                .GetActiveTcpListeners()
+                .Select(e => e.Port)
+                .ToHashSet();
+            var udpListeners = IPGlobalProperties.GetIPGlobalProperties()
+                .GetActiveUdpListeners()
+                .Select(e => e.Port)
+                .ToHashSet();
+
+            var ports = ReadConfiguredPorts();
+            var conflicts = new List<string>();
+
+            if (tcpListeners.Contains(ports.AuthServerPort))
+                conflicts.Add($"auth TCP {ports.AuthServerPort}");
+            if (tcpListeners.Contains(ports.LoginServerPort))
+                conflicts.Add($"login TCP {ports.LoginServerPort}");
+            if (tcpListeners.Contains(ports.GameServerPort))
+                conflicts.Add($"game TCP {ports.GameServerPort}");
+            if (udpListeners.Contains(ports.GameServerPort))
+                conflicts.Add($"game UDP {ports.GameServerPort}");
+            if (tcpListeners.Contains(ports.WebUiServerPort))
+                conflicts.Add($"WebUI TCP {ports.WebUiServerPort}");
+
+            if (conflicts.Count == 0)
+                return false;
+
+            error =
+                "Bonfire server ports are already in use (" +
+                string.Join(", ", conflicts.Distinct()) +
+                "). Close other Bonfire/Server.exe instances before lighting this fire.";
+            return true;
+        }
+        catch
+        {
+            return false;
+        }
+    }
+
+    private sealed record ConfiguredPorts(
+        int AuthServerPort,
+        int LoginServerPort,
+        int GameServerPort,
+        int WebUiServerPort);
+
+    private static ConfiguredPorts ReadConfiguredPorts()
+    {
+        var cfg = ServerConfig.Load(Paths.ConfigFile);
+        var text = File.Exists(Paths.ConfigFile)
+            ? File.ReadAllText(Paths.ConfigFile)
+            : "";
+
+        return new ConfiguredPorts(
+            AuthServerPort: ReadInt(text, "AuthServerPort", 50000),
+            LoginServerPort: cfg.LoginServerPort > 0 ? cfg.LoginServerPort : 50050,
+            GameServerPort: ReadInt(text, "GameServerPort", 50010),
+            WebUiServerPort: ReadInt(text, "WebUIServerPort", 50005));
+    }
+
+    private static int ReadInt(string text, string key, int fallback)
+    {
+        if (string.IsNullOrEmpty(text))
+            return fallback;
+
+        var match = Regex.Match(text, "\"" + Regex.Escape(key) + "\"\\s*:\\s*(?<v>-?\\d+)");
+        return match.Success && int.TryParse(match.Groups["v"].Value, out var value) && value > 0
+            ? value
+            : fallback;
     }
 }
