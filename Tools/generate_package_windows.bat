@@ -64,7 +64,10 @@ if errorlevel 1 (
     echo ERROR: failed to download DS2 data bundle
     exit /b 1
 )
-tar -xf ds2-data-bundle.zip -C DSSeamlessCoop\Loader\
+:: Use Expand-Archive — Windows tar.exe (bsdtar) does not reliably
+:: extract zips written by Compress-Archive even though libarchive
+:: claims zip support. PowerShell ships on every Windows runner.
+powershell -NoProfile -Command "Expand-Archive -Path ds2-data-bundle.zip -DestinationPath DSSeamlessCoop\Loader\ -Force"
 if errorlevel 1 (
     echo ERROR: failed to extract DS2 data bundle
     exit /b 1
