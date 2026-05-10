@@ -34,18 +34,17 @@ class Palette {
 
   // The one true Bonfire palette.
   static const Palette dark = Palette(
-    bg: Color(0xFF14110F),
-    surface: Color(0xFF1C1916),
-    surfaceHi: Color(0xFF26221E),
-    border: Color(0xFF2F2A24),
-    textPrimary: Color(0xFFEDE6D6),
-    textSecondary: Color(0xFFB8AC95),
-    textMuted: Color(0xFF8A7E68),
+    bg: BonfireColors.bg,
+    surface: BonfireColors.surface,
+    surfaceHi: BonfireColors.surfaceHi,
+    border: BonfireColors.border,
+    textPrimary: BonfireColors.textPrimary,
+    textSecondary: BonfireColors.textSecondary,
+    textMuted: BonfireColors.textMuted,
   );
 
   static Palette of(BuildContext context) {
-    final scope =
-        context.dependOnInheritedWidgetOfExactType<PaletteScope>();
+    final scope = context.dependOnInheritedWidgetOfExactType<PaletteScope>();
     return scope?.palette ?? dark;
   }
 }

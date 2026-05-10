@@ -6,28 +6,28 @@ import 'package:flutter/material.dart';
 
 class BonfireColors {
   // Backgrounds — layered like a tomb at night.
-  static const Color bg = Color(0xFF14110F);
-  static const Color surface = Color(0xFF1C1916);
-  static const Color surfaceHi = Color(0xFF26221E);
-  static const Color border = Color(0xFF2F2A24);
+  static const Color bg = Color(0xFF030303);
+  static const Color surface = Color(0xFF0B0B0B);
+  static const Color surfaceHi = Color(0xFF151515);
+  static const Color border = Color(0xFF2C2921);
 
   // Text.
-  static const Color textPrimary = Color(0xFFEDE6D6);
-  static const Color textSecondary = Color(0xFFB8AC95);
-  static const Color textMuted = Color(0xFF8A7E68);
+  static const Color textPrimary = Color(0xFFF4F1E7);
+  static const Color textSecondary = Color(0xFFC9C2B3);
+  static const Color textMuted = Color(0xFF8F8879);
 
   // Firekeeper amber — the only accent.
-  static const Color accent = Color(0xFFD79447);
-  static const Color accentHover = Color(0xFFE3A35B);
-  static const Color accentDim = Color(0xFF7A5527);
+  static const Color accent = Color(0xFFD8B25D);
+  static const Color accentHover = Color(0xFFFFD879);
+  static const Color accentDim = Color(0xFF806733);
 
   // Status colors.
   static const Color ok = Color(0xFF8BB36B);
-  static const Color warn = Color(0xFFD79447);
+  static const Color warn = Color(0xFFD8B25D);
   static const Color err = Color(0xFFC2563E);
 
   // Mine — for the user's own server in the list.
-  static const Color mineBg = Color(0xFF2A2114);
+  static const Color mineBg = Color(0xFF10100D);
   static const Color mineAccent = accent;
 }
 

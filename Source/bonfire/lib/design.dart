@@ -47,14 +47,14 @@ class BT {
   static const TextStyle display = TextStyle(
       fontSize: 28,
       fontWeight: FontWeight.w600,
-      letterSpacing: 1.2,
+      letterSpacing: 0,
       color: BonfireColors.textPrimary);
 
   // Title — page heading
   static const TextStyle title = TextStyle(
       fontSize: 18,
       fontWeight: FontWeight.w600,
-      letterSpacing: 0.4,
+      letterSpacing: 0,
       color: BonfireColors.textPrimary);
 
   // Heading — section heading inside a panel
@@ -78,7 +78,7 @@ class BT {
   // Eyebrow — section label above content (UPPERCASE TRACKED)
   static const TextStyle eyebrow = TextStyle(
       fontSize: 10,
-      letterSpacing: 1.6,
+      letterSpacing: 0,
       fontWeight: FontWeight.w700,
       color: BonfireColors.textMuted);
 
@@ -91,10 +91,16 @@ class BT {
 
   // Button — labels on filled / outlined buttons
   static const TextStyle button =
-      TextStyle(fontSize: 13, fontWeight: FontWeight.w600, letterSpacing: 0.3);
+      TextStyle(fontSize: 13, fontWeight: FontWeight.w600, letterSpacing: 0);
 }
 
 // ───── Souls-themed copy ─────
+class BrandAssets {
+  static const String banner = 'assets/brand/banner.png';
+  static const String headerBanner = 'assets/brand/header_banner.png';
+  static const String logo = 'assets/brand/logo.png';
+}
+
 class Lore {
   // Generic
   static const String appName = 'Bonfire';

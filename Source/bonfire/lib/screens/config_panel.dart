@@ -83,14 +83,20 @@ class _ConfigPanelState extends State<ConfigPanel> {
     // Default WebUI creds to admin/admin if unset, so the user has
     // SOMETHING to log in with the first time. They can override either.
     _webuiUserCtrl = TextEditingController(
-        text: (cfg?.webuiUsername.isNotEmpty ?? false) ? cfg!.webuiUsername : 'admin');
+        text: (cfg?.webuiUsername.isNotEmpty ?? false)
+            ? cfg!.webuiUsername
+            : 'admin');
     _webuiPwdCtrl = TextEditingController(
-        text: (cfg?.webuiPassword.isNotEmpty ?? false) ? cfg!.webuiPassword : 'admin');
+        text: (cfg?.webuiPassword.isNotEmpty ?? false)
+            ? cfg!.webuiPassword
+            : 'admin');
 
     _advertise = cfg?.advertise ?? true;
 
     // If saved IPs differ from detected ones, default to manual.
-    if (cfg != null && cfg.publicIp.isNotEmpty && app.wanIp != null &&
+    if (cfg != null &&
+        cfg.publicIp.isNotEmpty &&
+        app.wanIp != null &&
         cfg.publicIp != app.wanIp &&
         cfg.publicIp != '__WAN_IP__') {
       _autoIp = false;
@@ -132,8 +138,12 @@ class _ConfigPanelState extends State<ConfigPanel> {
         description: _descCtrl.text.trim(),
         password: _pwdCtrl.text,
         gameType: app.config?.gameType ?? 'DarkSouls2',
-        publicIp: _autoIp ? (app.wanIp ?? _publicIpCtrl.text) : _publicIpCtrl.text.trim(),
-        privateIp: _autoIp ? (app.lanIp ?? _privateIpCtrl.text) : _privateIpCtrl.text.trim(),
+        publicIp: _autoIp
+            ? (app.wanIp ?? _publicIpCtrl.text)
+            : _publicIpCtrl.text.trim(),
+        privateIp: _autoIp
+            ? (app.lanIp ?? _privateIpCtrl.text)
+            : _privateIpCtrl.text.trim(),
         advertise: _advertise,
         webuiUsername: _webuiUserCtrl.text.trim(),
         webuiPassword: _webuiPwdCtrl.text,
@@ -156,7 +166,8 @@ class _ConfigPanelState extends State<ConfigPanel> {
       children: [
         Center(
           child: Container(
-            width: 36, height: 4,
+            width: 36,
+            height: 4,
             margin: const EdgeInsets.only(bottom: 18),
             decoration: BoxDecoration(
               color: BonfireColors.border,
@@ -198,10 +209,8 @@ class _ConfigPanelState extends State<ConfigPanel> {
         SwitchListTile.adaptive(
           contentPadding: EdgeInsets.zero,
           title: const Text('List publicly'),
-          subtitle: const Text(
-              'Hide if you only share with friends',
-              style: TextStyle(
-                  fontSize: 11, color: BonfireColors.textMuted)),
+          subtitle: const Text('Hide if you only share with friends',
+              style: TextStyle(fontSize: 11, color: BonfireColors.textMuted)),
           value: _advertise,
           onChanged: (v) => setState(() => _advertise = v),
         ),
@@ -300,8 +309,7 @@ class _ConfigPanelState extends State<ConfigPanel> {
               borderRadius: BorderRadius.circular(6),
               border: Border.all(color: BonfireColors.err),
             ),
-            child: Text(_error!,
-                style: const TextStyle(fontSize: 12)),
+            child: Text(_error!, style: const TextStyle(fontSize: 12)),
           ),
         ],
 
@@ -332,8 +340,7 @@ class _ConfigPanelState extends State<ConfigPanel> {
           decoration: BoxDecoration(
             color: const Color(0x14C2563E), // 8% red tint
             borderRadius: BorderRadius.circular(8),
-            border:
-                Border.all(color: BonfireColors.err.withOpacity(0.5)),
+            border: Border.all(color: BonfireColors.err.withOpacity(0.5)),
           ),
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.start,
@@ -346,7 +353,7 @@ class _ConfigPanelState extends State<ConfigPanel> {
                   Text('Danger zone',
                       style: TextStyle(
                           fontSize: 11,
-                          letterSpacing: 1.5,
+                          letterSpacing: 0,
                           color: BonfireColors.err,
                           fontWeight: FontWeight.w700)),
                 ],
@@ -369,8 +376,7 @@ class _ConfigPanelState extends State<ConfigPanel> {
                           'binaries intact. The next start regenerates fresh '
                           'defaults.',
                           style: TextStyle(
-                              fontSize: 11,
-                              color: BonfireColors.textMuted),
+                              fontSize: 11, color: BonfireColors.textMuted),
                         ),
                       ],
                     ),
@@ -404,8 +410,7 @@ class _ConfigPanelState extends State<ConfigPanel> {
                           'config, keys, database). You can re-install later '
                           'from the home screen.',
                           style: TextStyle(
-                              fontSize: 11,
-                              color: BonfireColors.textMuted),
+                              fontSize: 11, color: BonfireColors.textMuted),
                         ),
                       ],
                     ),
@@ -467,8 +472,8 @@ class _ConfigPanelState extends State<ConfigPanel> {
       await context.read<AppState>().uninstallServer();
       if (mounted) {
         Navigator.of(context).pop();
-        ScaffoldMessenger.of(context).showSnackBar(
-            const SnackBar(content: Text('Server uninstalled.')));
+        ScaffoldMessenger.of(context)
+            .showSnackBar(const SnackBar(content: Text('Server uninstalled.')));
       }
     } catch (e) {
       setState(() => _error = e.toString());
@@ -494,8 +499,7 @@ class _ConfigPanelState extends State<ConfigPanel> {
             child: const Text('Cancel'),
           ),
           FilledButton(
-            style: FilledButton.styleFrom(
-                backgroundColor: BonfireColors.err),
+            style: FilledButton.styleFrom(backgroundColor: BonfireColors.err),
             onPressed: () => Navigator.of(context).pop(true),
             child: Text(destructiveLabel),
           ),
@@ -515,7 +519,7 @@ class _SectionTitle extends StatelessWidget {
       text.toUpperCase(),
       style: const TextStyle(
         fontSize: 10,
-        letterSpacing: 1.5,
+        letterSpacing: 0,
         color: BonfireColors.textMuted,
         fontWeight: FontWeight.w700,
       ),

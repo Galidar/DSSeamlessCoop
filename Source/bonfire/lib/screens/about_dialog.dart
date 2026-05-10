@@ -7,7 +7,7 @@ import 'package:flutter/material.dart';
 import '../design.dart';
 import '../palette.dart';
 import '../theme.dart';
-import '../widgets/animated_flame.dart';
+import '../widgets/brand_mark.dart';
 
 Future<void> showBonfireAbout(BuildContext context) {
   return showDialog(
@@ -34,7 +34,7 @@ class _AboutDialog extends StatelessWidget {
             children: [
               Row(
                 children: [
-                  const AnimatedFlame(size: 32),
+                  const BrandMark(size: 42),
                   const SizedBox(width: Sp.md),
                   Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -44,9 +44,9 @@ class _AboutDialog extends StatelessWidget {
                           style: TextStyle(
                               fontSize: 22,
                               fontWeight: FontWeight.w600,
-                              letterSpacing: 0.6,
+                              letterSpacing: 0,
                               color: p.textPrimary)),
-                      Text('v2.1.0',
+                      Text('v2.3.0',
                           style: TextStyle(
                               fontSize: 12,
                               color: p.textMuted,
@@ -63,16 +63,14 @@ class _AboutDialog extends StatelessWidget {
                 style: BT.body.copyWith(color: p.textPrimary),
               ),
               const SizedBox(height: Sp.lg),
-              Text('LINKS',
-                  style: BT.eyebrow.copyWith(color: p.textMuted)),
+              Text('LINKS', style: BT.eyebrow.copyWith(color: p.textMuted)),
               const SizedBox(height: Sp.sm),
               const _LinkRow(
                   icon: Icons.code,
                   label: 'Bonfire on GitHub',
                   url: 'https://github.com/Galidar/DSSeamlessCoop'),
               const _ComingSoonRow(
-                  icon: Icons.chat_bubble_outline,
-                  label: 'Community Discord'),
+                  icon: Icons.chat_bubble_outline, label: 'Community Discord'),
               const SizedBox(height: Sp.lg),
               Divider(color: p.border),
               const SizedBox(height: Sp.sm),
@@ -112,15 +110,14 @@ class _LinkRow extends StatelessWidget {
       onTap: () => _open(url),
       borderRadius: BorderRadius.circular(R.sm),
       child: Padding(
-        padding:
-            const EdgeInsets.symmetric(horizontal: Sp.xs, vertical: Sp.sm),
+        padding: const EdgeInsets.symmetric(horizontal: Sp.xs, vertical: Sp.sm),
         child: Row(
           children: [
             Icon(icon, size: IS.md, color: BonfireColors.accent),
             const SizedBox(width: Sp.md),
             Expanded(
-                child: Text(label,
-                    style: BT.body.copyWith(color: p.textPrimary))),
+                child:
+                    Text(label, style: BT.body.copyWith(color: p.textPrimary))),
             Icon(Icons.open_in_new, size: IS.sm, color: p.textMuted),
           ],
         ),
@@ -157,8 +154,7 @@ class _ComingSoonRow extends StatelessWidget {
           Icon(icon, size: IS.md, color: p.textMuted),
           const SizedBox(width: Sp.md),
           Expanded(
-            child: Text(label,
-                style: BT.body.copyWith(color: p.textMuted)),
+            child: Text(label, style: BT.body.copyWith(color: p.textMuted)),
           ),
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
@@ -169,10 +165,8 @@ class _ComingSoonRow extends StatelessWidget {
             ),
             child: Text(
               'Coming soon',
-              style: BT.eyebrow.copyWith(
-                  fontSize: 9,
-                  letterSpacing: 0.8,
-                  color: p.textMuted),
+              style: BT.eyebrow
+                  .copyWith(fontSize: 9, letterSpacing: 0, color: p.textMuted),
             ),
           ),
         ],

@@ -56,7 +56,7 @@ class _HelpDialogState extends State<_HelpDialog>
                       style: TextStyle(
                           fontSize: 20,
                           fontWeight: FontWeight.w600,
-                          letterSpacing: 0.4,
+                          letterSpacing: 0,
                           color: p.textPrimary)),
                 ],
               ),
@@ -75,7 +75,7 @@ class _HelpDialogState extends State<_HelpDialog>
                   labelStyle: const TextStyle(
                       fontSize: 13,
                       fontWeight: FontWeight.w600,
-                      letterSpacing: 0.5),
+                      letterSpacing: 0),
                   tabs: const [
                     Tab(text: 'TRAVEL TO A FIRE'),
                     Tab(text: 'LIGHT YOUR OWN'),

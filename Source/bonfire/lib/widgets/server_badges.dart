@@ -23,15 +23,15 @@ class ServerBadges extends StatelessWidget {
     if (server.passwordRequired) {
       tags.add(const _Tag('SEALED', BonfireColors.warn));
     } else {
-      tags.add(const _Tag('OPEN', BonfireColors.ok));
+      tags.add(const _Tag('OPEN', BonfireColors.textSecondary));
     }
     if (server.hasMods) {
       tags.add(const _Tag('MODDED', BonfireColors.accent));
     }
     if (server.isShard) {
-      tags.add(const _Tag('SHARD', Color(0xFF8AAFD4)));
+      tags.add(const _Tag('SHARD', BonfireColors.textSecondary));
     } else if (server.allowSharding) {
-      tags.add(const _Tag('SHARDABLE', Color(0xFF6E8AA6)));
+      tags.add(const _Tag('SHARDABLE', BonfireColors.textMuted));
     }
     if (tags.isEmpty) return const SizedBox.shrink();
     return Wrap(
@@ -54,8 +54,7 @@ class _Pill extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return Container(
-      padding: const EdgeInsets.symmetric(
-          horizontal: Sp.sm, vertical: 2),
+      padding: const EdgeInsets.symmetric(horizontal: Sp.sm, vertical: 2),
       decoration: BoxDecoration(
         color: tag.color.withOpacity(0.13),
         borderRadius: BorderRadius.circular(R.pill),
@@ -65,7 +64,7 @@ class _Pill extends StatelessWidget {
         tag.label,
         style: TextStyle(
           fontSize: 9,
-          letterSpacing: 1.1,
+          letterSpacing: 0,
           fontWeight: FontWeight.w700,
           color: tag.color,
         ),

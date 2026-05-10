@@ -21,6 +21,7 @@ import '../state/app_state.dart';
 import '../theme.dart';
 import '../widgets/animated_flame.dart';
 import '../widgets/bonfire_card.dart';
+import '../widgets/brand_mark.dart';
 import '../widgets/server_badges.dart';
 import '../widgets/status_dot.dart';
 import 'about_dialog.dart';
@@ -210,46 +211,119 @@ class _Header extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
-    return Container(
-      decoration: BoxDecoration(
-        color: p.surface,
-        border: Border(bottom: BorderSide(color: p.border)),
-      ),
-      padding: const EdgeInsets.fromLTRB(Sp.xl, Sp.lg, Sp.xl, Sp.lg),
-      child: Row(
-        children: [
-          const AnimatedFlame(size: IS.lg),
-          const SizedBox(width: Sp.sm),
-          Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            mainAxisSize: MainAxisSize.min,
+    return LayoutBuilder(
+      builder: (context, constraints) {
+        final compact = constraints.maxWidth < 820;
+        final headerHeight = compact ? 112.0 : 170.0;
+        return Container(
+          height: headerHeight,
+          decoration: BoxDecoration(
+            color: BonfireColors.bg,
+            border: Border(bottom: BorderSide(color: p.border)),
+          ),
+          child: Stack(
+            fit: StackFit.expand,
             children: [
-              Text(Lore.appName,
-                  style: BT.title.copyWith(color: p.textPrimary)),
-              Text(Lore.tagline,
-                  style: BT.caption.copyWith(color: p.textMuted)),
+              Image.asset(
+                BrandAssets.headerBanner,
+                fit: BoxFit.contain,
+                alignment: Alignment.center,
+                filterQuality: FilterQuality.medium,
+              ),
+              const DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.centerLeft,
+                    end: Alignment.centerRight,
+                    colors: [
+                      Color(0xE8030303),
+                      Color(0x30030303),
+                      Color(0x00030303),
+                      Color(0x00030303),
+                      Color(0x30030303),
+                      Color(0xE8030303),
+                    ],
+                    stops: [0.0, 0.12, 0.26, 0.74, 0.88, 1.0],
+                  ),
+                ),
+              ),
+              const DecoratedBox(
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    begin: Alignment.topCenter,
+                    end: Alignment.bottomCenter,
+                    colors: [
+                      Color(0x10000000),
+                      Color(0x00000000),
+                      Color(0x38000000),
+                    ],
+                  ),
+                ),
+              ),
+              Padding(
+                padding: EdgeInsets.fromLTRB(
+                  compact ? Sp.lg : Sp.xl,
+                  Sp.md,
+                  compact ? Sp.lg : Sp.xl,
+                  Sp.md,
+                ),
+                child: Row(
+                  children: [
+                    BrandMark(size: compact ? 42 : 54),
+                    const SizedBox(width: Sp.md),
+                    Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Text(
+                          Lore.appName,
+                          style: (compact ? BT.title : BT.display).copyWith(
+                            color: p.textPrimary,
+                            letterSpacing: 0,
+                            shadows: const [
+                              Shadow(
+                                  color: Colors.black,
+                                  blurRadius: 12,
+                                  offset: Offset(0, 1)),
+                            ],
+                          ),
+                        ),
+                        Text(
+                          Lore.tagline,
+                          style: BT.caption.copyWith(
+                            color: p.textSecondary,
+                            shadows: const [
+                              Shadow(color: Colors.black, blurRadius: 8),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const Spacer(),
+                    // Per-profile status + actions live in the MY BONFIRES rows;
+                    // header is reserved for app-wide affordances only.
+                    _IconBtn(
+                      icon: Icons.help_outline,
+                      tooltip: 'How to use Bonfire',
+                      onTap: () => showBonfireHelp(context),
+                    ),
+                    _IconBtn(
+                      icon: Icons.tune,
+                      tooltip: 'Game settings',
+                      onTap: () => GameSettingsPanel.show(context),
+                    ),
+                    _IconBtn(
+                      icon: Icons.info_outline,
+                      tooltip: 'About Bonfire',
+                      onTap: () => showBonfireAbout(context),
+                    ),
+                  ],
+                ),
+              ),
             ],
           ),
-          const Spacer(),
-          // Per-profile status + actions live in the MY BONFIRES rows;
-          // header is reserved for app-wide affordances only.
-          _IconBtn(
-            icon: Icons.help_outline,
-            tooltip: 'How to use Bonfire',
-            onTap: () => showBonfireHelp(context),
-          ),
-          _IconBtn(
-            icon: Icons.tune,
-            tooltip: 'Game settings',
-            onTap: () => GameSettingsPanel.show(context),
-          ),
-          _IconBtn(
-            icon: Icons.info_outline,
-            tooltip: 'About Bonfire',
-            onTap: () => showBonfireAbout(context),
-          ),
-        ],
-      ),
+        );
+      },
     );
   }
 }
@@ -671,8 +745,7 @@ class _NoProfilesCard extends StatelessWidget {
       padding: const EdgeInsets.all(Sp.xl),
       child: Row(
         children: [
-          Icon(Icons.local_fire_department_outlined,
-              size: IS.lg, color: p.textMuted),
+          const BrandMark(size: 28, glow: false),
           const SizedBox(width: Sp.md),
           Expanded(
             child: Text(
@@ -1050,7 +1123,7 @@ class _StatePill extends StatelessWidget {
       child: Text(
         text,
         style: BT.eyebrow.copyWith(
-            fontSize: 8.5, letterSpacing: 1, color: BonfireColors.accent),
+            fontSize: 8.5, letterSpacing: 0, color: BonfireColors.accent),
       ),
     );
   }
@@ -1308,8 +1381,7 @@ class _InfoChip extends StatelessWidget {
         mainAxisSize: MainAxisSize.min,
         children: [
           Text(label,
-              style:
-                  BT.eyebrow.copyWith(letterSpacing: 0.8, color: p.textMuted)),
+              style: BT.eyebrow.copyWith(letterSpacing: 0, color: p.textMuted)),
           const SizedBox(width: Sp.sm),
           Text(value, style: BT.mono.copyWith(color: p.textPrimary)),
         ],
@@ -1490,9 +1562,7 @@ class _PlayerChip extends StatelessWidget {
       padding:
           const EdgeInsets.symmetric(horizontal: Sp.md, vertical: Sp.xs + 2),
       decoration: BoxDecoration(
-        color: hot
-            ? const Color(0x33D79447) // 20% accent
-            : p.surfaceHi,
+        color: hot ? BonfireColors.accent.withOpacity(0.20) : p.surfaceHi,
         borderRadius: BorderRadius.circular(R.pill),
         border: Border.all(color: hot ? p.accentDim : p.border),
       ),
@@ -1576,7 +1646,7 @@ class _EmptyListCard extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(Sp.xl, Sp.xxl, Sp.xl, Sp.xxl),
       child: Column(
         children: [
-          const AnimatedFlame(size: 36),
+          const BrandMark(size: 44),
           const SizedBox(height: Sp.md),
           Text(msg,
               style: BT.body.copyWith(color: Palette.of(context).textPrimary),
@@ -1651,7 +1721,7 @@ class _BottomBar extends StatelessWidget {
           const EdgeInsets.symmetric(horizontal: Sp.xl, vertical: Sp.sm + 2),
       child: Row(
         children: [
-          Text('Bonfire v0.1.0',
+          Text('Bonfire v2.3.0',
               style: BT.caption.copyWith(color: p.textMuted)),
           const SizedBox(width: Sp.lg),
           if (selected != null)
