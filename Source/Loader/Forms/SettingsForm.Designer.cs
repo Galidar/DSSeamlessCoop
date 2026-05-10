@@ -59,7 +59,7 @@
         CopySavesButton.Name = "CopySavesButton";
         CopySavesButton.Size = new System.Drawing.Size(173, 40);
         CopySavesButton.TabIndex = 2;
-        CopySavesButton.Text = "Copy Retail Saves to DSOS";
+        CopySavesButton.Text = "Copy Retail Saves to Bonfire";
         CopySavesButton.UseVisualStyleBackColor = true;
         CopySavesButton.Click += CopySavesClicked;
         // 

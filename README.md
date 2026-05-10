@@ -368,6 +368,8 @@ engineering work:
 
 - [TLeonardUK/ds3os](https://github.com/TLeonardUK/ds3os), the original DS2/DS3
   private server foundation. MIT.
+- Yui, whose Dark Souls Remastered and Dark Souls III Seamless Co-op work
+  provides important foundations for the Bonfire-native DS1/DS3 runtime layers.
 - Dark Souls II SOTFS online research and enhancement work that made the DS2
   unlock layer possible.
 - [garyttierney/ds3-open-re](https://github.com/garyttierney/ds3-open-re)

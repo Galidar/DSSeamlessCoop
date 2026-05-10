@@ -37,7 +37,7 @@ namespace Loader
 
         private void CopySavesClicked(object sender, EventArgs e)
         {   
-            if (MessageBox.Show("This will overwrite any existing DSOS saves that exist, are you sure you wish to do this?", "Warning", MessageBoxButtons.YesNo, MessageBoxIcon.Exclamation) != DialogResult.Yes)
+            if (MessageBox.Show("This will overwrite any existing Bonfire saves that exist, are you sure you wish to do this?", "Warning", MessageBoxButtons.YesNo, MessageBoxIcon.Exclamation) != DialogResult.Yes)
             {
                 return;
             }

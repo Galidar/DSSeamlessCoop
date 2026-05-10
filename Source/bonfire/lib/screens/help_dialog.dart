@@ -150,7 +150,7 @@ class _JoinerGuide extends StatelessWidget {
             'Sealed ones need a password — ask the host. Bonfire fetches '
             'the server\'s key, launches the game and patches it on the '
             'fly. The first time the game tries to go online you should '
-            'see "Welcome to DSOS" — you\'re in.',
+            'see "DSSeamlessCoop Bonfire" — you\'re in.',
       ),
       _Section('Common pitfalls'),
       _Bullet(

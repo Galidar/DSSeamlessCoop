@@ -166,7 +166,7 @@ class _GameSettingsPanelState extends State<GameSettingsPanel> {
         const Text('SAVES', style: BT.eyebrow),
         const SizedBox(height: Sp.sm),
         const Text(
-          'Bonfire and DSOS use a separate save folder than the retail '
+          'Bonfire uses a separate save folder than the retail '
           'servers do. This is the safest default — anything you do on '
           'a private server cannot get flagged on Steam matchmaking.',
           style: BT.bodyMuted,

@@ -12,10 +12,88 @@
 
 #include <cfloat>
 
+namespace
+{
+    constexpr const char* kLegacyAnnouncementHeader = "Welcome to DSOS";
+    constexpr const char* kLegacyAnnouncementBody =
+        "\nYou have connected to an unofficial, work-in-progress, Dark Souls server. Stability is not guaranteed, but welcome!\n\n"
+        "More information on this project is available here:\n"
+        "https://github.com/Galidar/DSSeamlessCoop";
+    constexpr const char* kBonfireAnnouncementHeader = "DSSeamlessCoop Bonfire";
+
+    RuntimeConfigAnnouncement MakeBonfireAnnouncement(const std::string& GameType)
+    {
+        if (GameType == "DarkSouls2")
+        {
+            return {
+                kBonfireAnnouncementHeader,
+                "\nWelcome to Bonfire for Dark Souls II by DSSeamlessCoop.\n\n"
+                "Online unlocks active:\n"
+                "- Multiplayer timers removed.\n"
+                "- Multiplayer fog gates removed.\n"
+                "- Multiplayer items granted to new characters.\n"
+                "- Existing characters can buy the items from Maughlin.\n"
+                "- Bonfire handles server routing, keys, and .sl3 saves.\n\n"
+                "https://github.com/Galidar/DSSeamlessCoop"
+            };
+        }
+
+        if (GameType == "DarkSouls3")
+        {
+            return {
+                kBonfireAnnouncementHeader,
+                "\nWelcome to Bonfire for Dark Souls III by DSSeamlessCoop.\n\n"
+                "Online unlocks active:\n"
+                "- Seamless co-op from start to final boss.\n"
+                "- Death, boss clears, and area clears keep the session alive.\n"
+                "- Multiplayer fog walls removed.\n"
+                "- Progression sync, world events, scaling, and invasions supported.\n"
+                "- Bonfire handles password, server routing, and .co2 saves.\n\n"
+                "https://github.com/Galidar/DSSeamlessCoop"
+            };
+        }
+
+        return {
+            kBonfireAnnouncementHeader,
+            "\nWelcome to Bonfire by DSSeamlessCoop.\n\n"
+            "Native online unlocks are active for supported Dark Souls games. "
+            "Bonfire handles server routing, session keys, runtime setup, and separate saves automatically.\n\n"
+            "https://github.com/Galidar/DSSeamlessCoop"
+        };
+    }
+
+    bool IsBundledDefaultAnnouncement(const RuntimeConfigAnnouncement& Announcement)
+    {
+        if (Announcement.Header == kLegacyAnnouncementHeader &&
+            Announcement.Body == kLegacyAnnouncementBody)
+        {
+            return true;
+        }
+
+        const RuntimeConfigAnnouncement GenericAnnouncement = MakeBonfireAnnouncement("");
+        const RuntimeConfigAnnouncement DS2Announcement = MakeBonfireAnnouncement("DarkSouls2");
+        const RuntimeConfigAnnouncement DS3Announcement = MakeBonfireAnnouncement("DarkSouls3");
+
+        return
+            (Announcement.Header == GenericAnnouncement.Header && Announcement.Body == GenericAnnouncement.Body) ||
+            (Announcement.Header == DS2Announcement.Header && Announcement.Body == DS2Announcement.Body) ||
+            (Announcement.Header == DS3Announcement.Header && Announcement.Body == DS3Announcement.Body);
+    }
+
+    void NormalizeBonfireAnnouncement(std::vector<RuntimeConfigAnnouncement>& Announcements, const std::string& GameType)
+    {
+        if (Announcements.size() == 1 && IsBundledDefaultAnnouncement(Announcements[0]))
+        {
+            Announcements[0] = MakeBonfireAnnouncement(GameType);
+        }
+    }
+}
+
 bool RuntimeConfig::Save(const std::filesystem::path& Path)
 {
     nlohmann::json json;
 
+    NormalizeBonfireAnnouncement(Announcements, GameType);
     Serialize(json, false);
 
     if (!WriteTextToFile(Path, json.dump(4)))
@@ -39,6 +117,7 @@ bool RuntimeConfig::Load(const std::filesystem::path& Path)
     {
         nlohmann::json json = nlohmann::json::parse(JsonText);
         Serialize(json, true);
+        NormalizeBonfireAnnouncement(Announcements, GameType);
     }
     catch (nlohmann::json::parse_error)
     {

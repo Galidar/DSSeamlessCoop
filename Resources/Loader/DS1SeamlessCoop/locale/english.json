@@ -1,60 +1,60 @@
 {
 	"GENERIC_INVALID": "Nothing interesting happens",
 
-	"GOODSNAME_HOSTINGITEM": "Blessed Eye Orb",	
-	"GOODSNAME_JOININGITEM": "Crystal Eye Orb",	
-	"GOODSNAME_BREAKINITEM": "Chaos Eye Orb",	
-	"GOODSNAME_LEAVINGITEM": "Abyssal Eye Orb",	
-	"GOODSNAME_GAMERULECHANGEITEM": "Ominous Tome",	
-	"GOODSNAME_DRIEDFINGERITEM": "Dried Fingers",	
+	"GOODSNAME_HOSTINGITEM": "Blessed Eye Orb",
+	"GOODSNAME_JOININGITEM": "Crystal Eye Orb",
+	"GOODSNAME_BREAKINITEM": "Chaos Eye Orb",
+	"GOODSNAME_LEAVINGITEM": "Abyssal Eye Orb",
+	"GOODSNAME_GAMERULECHANGEITEM": "Ominous Tome",
+	"GOODSNAME_DRIEDFINGERITEM": "Dried Fingers",
 	"GOODSNAME_INFECTIONITEM": "Cursed Pendant",
 	"GOODSNAME_CURSESIGILITEM": "Crimson Blossom",
 	"GOODSNAME_SAVEREPAIRITEM": "Parchment of Deliverance",
-	
-	"GOODSINFO_HOSTINGITEM": "Create a seamless co-operative session",	
-	"GOODSINFO_JOININGITEM": "Join a seamless co-operative session",	
-	"GOODSINFO_BREAKINITEM": "Invade a seamless co-operative session",	
-	"GOODSINFO_LEAVINGITEM": "Disband a seamless session",	
-	"GOODSINFO_GAMERULECHANGEITEM": "Change the world rules",	
-	"GOODSINFO_DRIEDFINGERITEM": "Taunt invaders into joining",	
+
+	"GOODSINFO_HOSTINGITEM": "Create a seamless co-operative session",
+	"GOODSINFO_JOININGITEM": "Join a seamless co-operative session",
+	"GOODSINFO_BREAKINITEM": "Invade a seamless co-operative session",
+	"GOODSINFO_LEAVINGITEM": "Disband a seamless session",
+	"GOODSINFO_GAMERULECHANGEITEM": "Change the world rules",
+	"GOODSINFO_DRIEDFINGERITEM": "Taunt invaders into joining",
 	"GOODSINFO_INFECTIONITEM": "Cause disasters in one's own world",
 	"GOODSINFO_CURSESIGILITEM": "Accrues curse",
 	"GOODSINFO_SAVEREPAIRITEM": "Revives world allies",
-	
-	"GOODSDESC_HOSTINGITEM": "A small, white eye orb. It feels slightly warm to the touch.\n\nLooking directly into the eye fills one's soul with the thoughts\nof jolly co-operation.",	
-	"GOODSDESC_JOININGITEM": "A small, blue crystalline eye orb. It is emitting a faint\nhumming sound.\n\nLooking directly into the eye fill one's soul with thoughts\nof jolly co-operation.",	
-	"GOODSDESC_BREAKINITEM": "A small, red hot eye orb. Who knows what evil deeds this\neye has witnessed.\n\nLooking directly into the eye fill one's soul with the primal\ndesire for chaos.",	
-	"GOODSDESC_LEAVINGITEM": "A small, black eye orb. The eye is looking directly into your soul.\n\nLooking directly into the eye fill one's soul with\nmemories of home.",	
-	"GOODSDESC_GAMERULECHANGEITEM": "A mess of unbound papers. The writing is faded.\n\nThe papers describe a ritual to invoke a person's true nature\namongst their allies.",	
-	"GOODSDESC_DRIEDFINGERITEM": "A withered finger",	
+
+	"GOODSDESC_HOSTINGITEM": "A small, white eye orb warmed by Bonfire.\n\nCreates a DSSeamlessCoop session with open-world co-op,\nshared progression, and removed multiplayer fog barriers.",
+	"GOODSDESC_JOININGITEM": "A small, blue crystalline eye orb prepared by Bonfire.\n\nJoins a DSSeamlessCoop session from anywhere in Lordran and\nkeeps the journey alive through deaths and boss victories.",
+	"GOODSDESC_BREAKINITEM": "A small, red hot eye orb carrying a hostile signal.\n\nInvades a DSSeamlessCoop session when invasions are enabled.\nBonfires and warping are restricted until the fight is settled.",
+	"GOODSDESC_LEAVINGITEM": "A small, black eye orb marked by DSSeamlessCoop.\n\nDisbands the current Bonfire session and returns the world to\nits own path.",
+	"GOODSDESC_GAMERULECHANGEITEM": "A mess of unbound papers kept beside the bonfire.\n\nChanges world rules for the DSSeamlessCoop session, including\nco-op scaling and party behavior.",
+	"GOODSDESC_DRIEDFINGERITEM": "A withered finger",
 	"GOODSDESC_INFECTIONITEM": "An old, scratched pendant of unknown use.\n\nThe origin of this pendant is unknown, but some sources describe\na missing pendant from the catacombs of Gravelord Nito.",
 	"GOODSDESC_CURSESIGILITEM": "A blood-red blossom growing around the darksign.\n\nYou can feel the roots of this plant directly feeding off you",
 	"GOODSDESC_SAVEREPAIRITEM": "Used to revive certain NPCs that have died",
-	
+
 	"MODMSG_WELCOMEGUEST": "{} has joined!",
 	"MODMSG_WELCOMEBREAKIN": "Evil spirit {} has invaded!",
 	"MODMSG_LEAVEGUEST": "{} has left",
 	"MODMSG_LEAVEBREAKIN": "Evil spirit {} has left",
 	"MODMSG_DEADGUEST": "{} has died",
 	"MODMSG_DEADBREAKIN": "Evil spirit {} has died",
-	
+
 	"MODMSG_GUESTSTART": "Joining another world as a guest...",
 	"MODMSG_GUESTMISSION": "Joined another world!",
-	
+
 	"MODMSG_HOSTWARPOUT": "The power of the homeward bone consumes you...",
-	
+
 	"MODMSG_BREAKINSTART": "Invading another world as an evil spirit",
 	"MODMSG_BREAKINMISSION": "Invaded another world! Defeat {} players",
 	"MODMSG_BREAKINSUCCESS": "Invasion success! Returning to your world",
 	"MODMSG_BREAKINFAILED": "Invasion failed... Returning to your world",
-	
+
 	"MODMSG_HOSTTIMEOUT": "Failed to create session",
 	"MODMSG_JOINTIMEOUT": "Failed to find session",
 	"MODMSG_BREAKINTIMEOUT": "Failed to find session to invadee",
 	"MODMSG_CONNECTTIMEOUT": "Failed to connect",
 	"MODMSG_JOINNOONE": "No sessions found",
 	"MODMSG_INVADENOONE": "No sessions found",
-	
-	
-	"CREDITS": "LukeYui"
+
+
+	"CREDITS": "DSSeamlessCoop"
 }
