@@ -352,6 +352,14 @@ bool RuntimeConfig::Serialize(nlohmann::json& Json, bool Loading)
     SERIALIZE_VAR(ServerHostname);
     SERIALIZE_VAR(ServerPrivateHostname);
     SERIALIZE_VAR(GameType);
+    SERIALIZE_VAR(RelayEnabled);
+    SERIALIZE_VAR(RelayPublicHostname);
+    SERIALIZE_VAR(RelayControlHost);
+    SERIALIZE_VAR(RelayControlPort);
+    SERIALIZE_VAR(RelayControlToken);
+    SERIALIZE_VAR(RelayLoginServerPort);
+    SERIALIZE_VAR(RelayAuthServerPort);
+    SERIALIZE_VAR(RelayGameServerPort);
 
     SERIALIZE_VAR(QuietLogging);
 

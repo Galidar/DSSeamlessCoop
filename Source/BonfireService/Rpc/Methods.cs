@@ -112,6 +112,7 @@ public static class Methods
 
             // Stop any running server so we can overwrite files.
             ServerProcess.Stop();
+            RelayTunnel.Stop();
 
             var zipPath = Path.Combine(Paths.InstallRoot, "_release.zip");
             var ok = await ReleaseDownloader.DownloadAsync(url, zipPath, (recv, total) =>
@@ -133,7 +134,7 @@ public static class Methods
             return new JsonObject { ["success"] = true };
         });
 
-        server.Register("server.start", async (_, _) =>
+        server.Register("server.start", async (_, ct) =>
         {
             await Task.Yield();
             // Make sure config exists; if not, prime it by running once briefly.
@@ -144,22 +145,41 @@ public static class Methods
                 for (int i = 0; i < 30 && !Paths.ConfigExists; i++)
                     await Task.Delay(150);
                 ServerProcess.Stop();
+                RelayTunnel.Stop();
+            }
+
+            var cfg = ServerConfig.Load(Paths.ConfigFile);
+            if (cfg.RelayEnabled)
+            {
+                await RelayTunnel.StartAsync(cfg, Paths.ConfigFile, ct);
+            }
+            else
+            {
+                RelayTunnel.Stop();
             }
 
             if (!ServerProcess.Start(out var err))
+            {
+                RelayTunnel.Stop();
                 throw new Exception(err ?? "Failed to start server.");
+            }
 
             var status = ServerProcess.QueryStatus();
+            var relay = RelayTunnel.QueryStatus();
             return new JsonObject
             {
                 ["pid"] = status.Pid,
                 ["started_at"] = status.StartedAt?.ToString("o"),
+                ["relay_running"] = relay.Running,
+                ["relay_hostname"] = relay.PublicHostname,
+                ["relay_login_port"] = relay.LoginPort,
             };
         });
 
         server.Register("server.stop", async (_, _) =>
         {
             await Task.Run(ServerProcess.Stop);
+            RelayTunnel.Stop();
             return new JsonObject { ["success"] = true };
         });
 
@@ -167,11 +187,15 @@ public static class Methods
         {
             await Task.Yield();
             var st = ServerProcess.QueryStatus();
+            var relay = RelayTunnel.QueryStatus();
             return new JsonObject
             {
                 ["running"] = st.Running,
                 ["pid"] = st.Pid,
                 ["started_at"] = st.StartedAt?.ToString("o"),
+                ["relay_running"] = relay.Running,
+                ["relay_hostname"] = relay.PublicHostname,
+                ["relay_login_port"] = relay.LoginPort,
             };
         });
 
@@ -188,6 +212,14 @@ public static class Methods
                 ["game_type"] = cfg.GameType,
                 ["server_hostname"] = cfg.ServerHostname,
                 ["server_private_hostname"] = cfg.ServerPrivateHostname,
+                ["relay_enabled"] = cfg.RelayEnabled,
+                ["relay_public_hostname"] = cfg.RelayPublicHostname,
+                ["relay_control_host"] = cfg.RelayControlHost,
+                ["relay_control_port"] = cfg.RelayControlPort,
+                ["relay_control_token"] = cfg.RelayControlToken,
+                ["relay_login_port"] = cfg.RelayLoginServerPort,
+                ["relay_auth_port"] = cfg.RelayAuthServerPort,
+                ["relay_game_port"] = cfg.RelayGameServerPort,
                 ["advertise"] = cfg.Advertise,
                 ["webui_username"] = cfg.WebUIServerUsername,
                 ["webui_password"] = cfg.WebUIServerPassword,
@@ -217,6 +249,14 @@ public static class Methods
                 GameType = @params.GetString("game_type") ?? current.GameType,
                 ServerHostname = @params.GetString("server_hostname") ?? current.ServerHostname,
                 ServerPrivateHostname = @params.GetString("server_private_hostname") ?? current.ServerPrivateHostname,
+                RelayEnabled = @params.GetBool("relay_enabled") ?? current.RelayEnabled,
+                RelayPublicHostname = current.RelayPublicHostname,
+                RelayControlHost = @params.GetString("relay_control_host") ?? current.RelayControlHost,
+                RelayControlPort = @params.GetInt("relay_control_port") ?? current.RelayControlPort,
+                RelayControlToken = @params.GetString("relay_control_token") ?? current.RelayControlToken,
+                RelayLoginServerPort = current.RelayLoginServerPort,
+                RelayAuthServerPort = current.RelayAuthServerPort,
+                RelayGameServerPort = current.RelayGameServerPort,
                 Advertise = @params.GetBool("advertise") ?? current.Advertise,
                 WebUIServerUsername = @params.GetString("webui_username") ?? current.WebUIServerUsername,
                 WebUIServerPassword = @params.GetString("webui_password") ?? current.WebUIServerPassword,
@@ -248,6 +288,7 @@ public static class Methods
         {
             // Kill the running server first so file locks release.
             ServerProcess.Stop();
+            RelayTunnel.Stop();
             await Task.Delay(300);
 
             var keepConfig = @params.GetBool("keep_config") ?? false;
@@ -277,6 +318,7 @@ public static class Methods
             // Stop server, delete config.json so the next start regenerates
             // the default. Also wipes the keypair (regenerated on next launch).
             ServerProcess.Stop();
+            RelayTunnel.Stop();
             await Task.Delay(300);
             try
             {
@@ -360,6 +402,7 @@ public static class Methods
             if (Profiles.GetActiveId() == id)
             {
                 ServerProcess.Stop();
+                RelayTunnel.Stop();
                 await Task.Delay(300);
             }
             Profiles.Delete(id);
@@ -373,6 +416,7 @@ public static class Methods
             // edits made between activations don't get lost.
             var current = Profiles.GetActiveId();
             ServerProcess.Stop();
+            RelayTunnel.Stop();
             await Task.Delay(300);
             if (!string.IsNullOrEmpty(current) && current != id)
             {
@@ -417,6 +461,7 @@ public static class Methods
                     ["password_required"] = s.PasswordRequired,
                     ["allow_sharding"] = s.AllowSharding,
                     ["is_shard"] = s.IsShard,
+                    ["is_relayed"] = s.IsRelayed,
                     ["mods_whitelist"] = s.ModsWhiteList,
                     ["mods_blacklist"] = s.ModsBlackList,
                     ["mods_required"] = s.ModsRequiredList,
@@ -724,6 +769,7 @@ public static class Methods
             if (currentActive != profileId || !gameTypeMatches)
             {
                 ServerProcess.Stop();
+                RelayTunnel.Stop();
                 await Task.Delay(300);
                 if (!string.IsNullOrEmpty(currentActive) && currentActive != profileId)
                 {
@@ -739,13 +785,27 @@ public static class Methods
             if (isDs1 && ServerProcess.QueryStatus().Running)
             {
                 ServerProcess.Stop();
+                RelayTunnel.Stop();
                 await Task.Delay(300, ct);
             }
 
             if (!ServerProcess.QueryStatus().Running)
             {
+                var preStartCfg = ServerConfig.Load(Paths.ConfigFile);
+                if (preStartCfg.RelayEnabled)
+                {
+                    await RelayTunnel.StartAsync(preStartCfg, Paths.ConfigFile, ct);
+                }
+                else
+                {
+                    RelayTunnel.Stop();
+                }
+
                 if (!ServerProcess.Start(out var startErr, forceShellConsole: isDs1))
+                {
+                    RelayTunnel.Stop();
                     throw new Exception(startErr ?? "Could not start local server.");
+                }
             }
 
             // Wait for the public key to appear (up to 5s) — Server.exe
@@ -833,6 +893,7 @@ public static class Methods
             await Task.Yield();
             // Best-effort: stop server child first.
             ServerProcess.Stop();
+            RelayTunnel.Stop();
             // Actual exit happens after the response is written.
             _ = Task.Run(async () =>
             {

@@ -1721,7 +1721,7 @@ class _BottomBar extends StatelessWidget {
           const EdgeInsets.symmetric(horizontal: Sp.xl, vertical: Sp.sm + 2),
       child: Row(
         children: [
-          Text('Bonfire v2.3.0',
+          Text('Bonfire v2.4.0',
               style: BT.caption.copyWith(color: p.textMuted)),
           const SizedBox(width: Sp.lg),
           if (selected != null)

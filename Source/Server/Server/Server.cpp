@@ -279,13 +279,37 @@ bool Server::Init()
     Log("Public ip address: %s", PublicIP.ToString().c_str());
     Log("Private ip address: %s", PrivateIP.ToString().c_str());
 
+    if (Config.RelayEnabled)
+    {
+        if (Config.RelayPublicHostname.empty() ||
+            Config.RelayLoginServerPort <= 0 ||
+            Config.RelayAuthServerPort <= 0 ||
+            Config.RelayGameServerPort <= 0)
+        {
+            Warning("Relay mode is enabled but relay hostname/ports are incomplete; falling back to direct advertisement.");
+        }
+        else
+        {
+            Log("Relay mode active: %s login=%i auth=%i game=%i.",
+                Config.RelayPublicHostname.c_str(),
+                Config.RelayLoginServerPort,
+                Config.RelayAuthServerPort,
+                Config.RelayGameServerPort);
+        }
+    }
+
     if constexpr (BuildConfig::SUPPORT_LEGACY_IMPORT_FILES)
     {
+        const bool UseRelayEndpoint =
+            Config.RelayEnabled &&
+            !Config.RelayPublicHostname.empty() &&
+            Config.RelayLoginServerPort > 0;
+
         // Write out the server import file with the latest configuration.
         nlohmann::json Output;
         Output["Name"]              = Config.ServerName;
         Output["Description"]       = Config.ServerDescription;
-        Output["Hostname"]          = Config.ServerHostname.length() > 0 ? Config.ServerHostname : PublicIP.ToString();
+        Output["Hostname"]          = UseRelayEndpoint ? Config.RelayPublicHostname : (Config.ServerHostname.length() > 0 ? Config.ServerHostname : PublicIP.ToString());
         Output["PrivateHostname"]   = Config.ServerPrivateHostname.length() > 0 ? Config.ServerPrivateHostname : PrivateIP.ToString();
         Output["PublicKey"]         = PrimaryKeyPair.GetPublicString();
         Output["ModsWhitelist"]     = Config.ModsWhitelist;
@@ -457,9 +481,16 @@ void Server::PollServerAdvertisement()
     // Is it time to kick off a new one?
     else if (GetSeconds() - LastMasterServerUpdate > Config.AdvertiseHearbeatTime)
     {
+        const bool UseRelayEndpoint =
+            Config.RelayEnabled &&
+            !Config.RelayPublicHostname.empty() &&
+            Config.RelayLoginServerPort > 0 &&
+            Config.RelayAuthServerPort > 0 &&
+            Config.RelayGameServerPort > 0;
+
         nlohmann::json Body;
         Body["ServerId"] = Config.ServerId;
-        Body["Hostname"] = Config.ServerHostname.length() > 0 ? Config.ServerHostname : PublicIP.ToString();
+        Body["Hostname"] = UseRelayEndpoint ? Config.RelayPublicHostname : (Config.ServerHostname.length() > 0 ? Config.ServerHostname : PublicIP.ToString());
         Body["PrivateHostname"] = Config.ServerPrivateHostname.length() > 0 ? Config.ServerPrivateHostname : PrivateIP.ToString();
         Body["Description"] = Config.ServerDescription;
         Body["Name"] = Config.ServerName;
@@ -472,9 +503,10 @@ void Server::PollServerAdvertisement()
         Body["ServerVersion"] = BuildConfig::MASTER_SERVER_CLIENT_VERSION;
         Body["AllowSharding"] = Config.SupportSharding;
         Body["WebAddress"] = Config.SupportSharding ? StringFormat("http://%s:%i", ((std::string)Body["Hostname"]).c_str(), Config.WebUIServerPort) : "";
-        Body["Port"] = Config.LoginServerPort;
+        Body["Port"] = UseRelayEndpoint ? Config.RelayLoginServerPort : Config.LoginServerPort;
         Body["IsShard"] = !IsDefaultServer();
         Body["GameType"] = GameTypeStrings[(int)ServerGameType];
+        Body["IsRelayed"] = UseRelayEndpoint;
 
         MasterServerUpdateRequest = std::make_shared<NetHttpRequest>();
         MasterServerUpdateRequest->SetMethod(NetHttpMethod::POST);

@@ -14,6 +14,7 @@ const rateLimit = require('express-rate-limit')
 const cors = require('cors');
 
 const servers = require('./routes/api/v1/servers');
+const RelayManager = require('./relay/relayManager');
 
 const config = require("./config/config.json")
 
@@ -33,4 +34,7 @@ app.use(limiter);
 app.get('/', (req, res) => { res.send('Please use the appropriate API\'s to access this service.'); });
 app.use('/api/v1/servers', servers);
 
-app.listen(config.port, () => { console.log(`This service is now listening on port ${config.port}!`); }); 
+app.listen(config.port, () => { console.log(`This service is now listening on port ${config.port}!`); });
+
+const relay = new RelayManager(config.relay);
+relay.start();

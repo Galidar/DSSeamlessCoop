@@ -30,13 +30,26 @@ class ServerLiveStatus {
   final bool running;
   final int? pid;
   final DateTime? startedAt;
-  ServerLiveStatus({required this.running, this.pid, this.startedAt});
+  final bool relayRunning;
+  final String relayHostname;
+  final int relayLoginPort;
+  ServerLiveStatus({
+    required this.running,
+    this.pid,
+    this.startedAt,
+    required this.relayRunning,
+    required this.relayHostname,
+    required this.relayLoginPort,
+  });
   factory ServerLiveStatus.fromJson(Map<String, dynamic> j) => ServerLiveStatus(
         running: j['running'] as bool? ?? false,
         pid: (j['pid'] as num?)?.toInt(),
         startedAt: j['started_at'] != null
             ? DateTime.tryParse(j['started_at'] as String)
             : null,
+        relayRunning: j['relay_running'] as bool? ?? false,
+        relayHostname: j['relay_hostname'] as String? ?? '',
+        relayLoginPort: (j['relay_login_port'] as num?)?.toInt() ?? 0,
       );
 }
 
@@ -47,6 +60,14 @@ class ServerConfig {
   String gameType;
   String publicIp;
   String privateIp;
+  bool relayEnabled;
+  String relayControlHost;
+  int relayControlPort;
+  String relayControlToken;
+  String relayPublicHostname;
+  int relayLoginPort;
+  int relayAuthPort;
+  int relayGamePort;
   bool advertise;
   String webuiUsername;
   String webuiPassword;
@@ -58,6 +79,14 @@ class ServerConfig {
     required this.gameType,
     required this.publicIp,
     required this.privateIp,
+    required this.relayEnabled,
+    required this.relayControlHost,
+    required this.relayControlPort,
+    required this.relayControlToken,
+    required this.relayPublicHostname,
+    required this.relayLoginPort,
+    required this.relayAuthPort,
+    required this.relayGamePort,
     required this.advertise,
     required this.webuiUsername,
     required this.webuiPassword,
@@ -70,6 +99,14 @@ class ServerConfig {
         gameType: j['game_type'] as String? ?? 'DarkSouls2',
         publicIp: j['server_hostname'] as String? ?? '',
         privateIp: j['server_private_hostname'] as String? ?? '',
+        relayEnabled: j['relay_enabled'] as bool? ?? false,
+        relayControlHost: j['relay_control_host'] as String? ?? '',
+        relayControlPort: (j['relay_control_port'] as num?)?.toInt() ?? 50030,
+        relayControlToken: j['relay_control_token'] as String? ?? '',
+        relayPublicHostname: j['relay_public_hostname'] as String? ?? '',
+        relayLoginPort: (j['relay_login_port'] as num?)?.toInt() ?? 0,
+        relayAuthPort: (j['relay_auth_port'] as num?)?.toInt() ?? 0,
+        relayGamePort: (j['relay_game_port'] as num?)?.toInt() ?? 0,
         advertise: j['advertise'] as bool? ?? true,
         webuiUsername: j['webui_username'] as String? ?? '',
         webuiPassword: j['webui_password'] as String? ?? '',
@@ -83,6 +120,10 @@ class ServerConfig {
         'game_type': gameType,
         'server_hostname': publicIp,
         'server_private_hostname': privateIp,
+        'relay_enabled': relayEnabled,
+        'relay_control_host': relayControlHost,
+        'relay_control_port': relayControlPort,
+        'relay_control_token': relayControlToken,
         'advertise': advertise,
         'webui_username': webuiUsername,
         'webui_password': webuiPassword,
@@ -167,6 +208,7 @@ class PublicServer {
   final String hostname;
   final String ipAddress;
   final bool isShard;
+  final bool isRelayed;
   final bool allowSharding;
   final String modsWhitelist;
   final String modsBlacklist;
@@ -182,6 +224,7 @@ class PublicServer {
     required this.hostname,
     required this.ipAddress,
     required this.isShard,
+    required this.isRelayed,
     required this.allowSharding,
     required this.modsWhitelist,
     required this.modsBlacklist,
@@ -198,6 +241,7 @@ class PublicServer {
         hostname: j['hostname'] as String? ?? '',
         ipAddress: j['ip_address'] as String? ?? '',
         isShard: j['is_shard'] as bool? ?? false,
+        isRelayed: j['is_relayed'] as bool? ?? false,
         allowSharding: j['allow_sharding'] as bool? ?? false,
         modsWhitelist: j['mods_whitelist'] as String? ?? '',
         modsBlacklist: j['mods_blacklist'] as String? ?? '',

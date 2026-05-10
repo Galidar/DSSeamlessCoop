@@ -59,11 +59,15 @@ class _ConfigPanelState extends State<ConfigPanel> {
   late final TextEditingController _pwdCtrl;
   late final TextEditingController _publicIpCtrl;
   late final TextEditingController _privateIpCtrl;
+  late final TextEditingController _relayHostCtrl;
+  late final TextEditingController _relayPortCtrl;
+  late final TextEditingController _relayTokenCtrl;
   late final TextEditingController _webuiUserCtrl;
   late final TextEditingController _webuiPwdCtrl;
 
   bool _autoIp = true;
   bool _advertise = true;
+  bool _relayEnabled = false;
   bool _saving = false;
   String? _error;
 
@@ -80,6 +84,12 @@ class _ConfigPanelState extends State<ConfigPanel> {
     final lan = app.lanIp ?? cfg?.privateIp ?? '';
     _publicIpCtrl = TextEditingController(text: wan);
     _privateIpCtrl = TextEditingController(text: lan);
+    _relayEnabled = cfg?.relayEnabled ?? false;
+    _relayHostCtrl = TextEditingController(text: cfg?.relayControlHost ?? '');
+    _relayPortCtrl = TextEditingController(
+        text: (cfg?.relayControlPort ?? 50030).toString());
+    _relayTokenCtrl =
+        TextEditingController(text: cfg?.relayControlToken ?? '');
     // Default WebUI creds to admin/admin if unset, so the user has
     // SOMETHING to log in with the first time. They can override either.
     _webuiUserCtrl = TextEditingController(
@@ -110,6 +120,9 @@ class _ConfigPanelState extends State<ConfigPanel> {
     _pwdCtrl.dispose();
     _publicIpCtrl.dispose();
     _privateIpCtrl.dispose();
+    _relayHostCtrl.dispose();
+    _relayPortCtrl.dispose();
+    _relayTokenCtrl.dispose();
     _webuiUserCtrl.dispose();
     _webuiPwdCtrl.dispose();
     super.dispose();
@@ -144,6 +157,14 @@ class _ConfigPanelState extends State<ConfigPanel> {
         privateIp: _autoIp
             ? (app.lanIp ?? _privateIpCtrl.text)
             : _privateIpCtrl.text.trim(),
+        relayEnabled: _relayEnabled,
+        relayControlHost: _relayHostCtrl.text.trim(),
+        relayControlPort: int.tryParse(_relayPortCtrl.text.trim()) ?? 50030,
+        relayControlToken: _relayTokenCtrl.text,
+        relayPublicHostname: app.config?.relayPublicHostname ?? '',
+        relayLoginPort: app.config?.relayLoginPort ?? 0,
+        relayAuthPort: app.config?.relayAuthPort ?? 0,
+        relayGamePort: app.config?.relayGamePort ?? 0,
         advertise: _advertise,
         webuiUsername: _webuiUserCtrl.text.trim(),
         webuiPassword: _webuiPwdCtrl.text,
@@ -269,6 +290,58 @@ class _ConfigPanelState extends State<ConfigPanel> {
             label: const Text('Re-detect IPs', style: TextStyle(fontSize: 12)),
           ),
         ),
+        const SizedBox(height: 12),
+        SwitchListTile.adaptive(
+          contentPadding: EdgeInsets.zero,
+          title: const Text('Use Bonfire Relay'),
+          subtitle: const Text('For CGNAT or networks that cannot open ports',
+              style: TextStyle(fontSize: 11, color: BonfireColors.textMuted)),
+          value: _relayEnabled,
+          onChanged: (v) => setState(() => _relayEnabled = v),
+        ),
+        if (_relayEnabled) ...[
+          const SizedBox(height: 8),
+          Row(
+            children: [
+              Expanded(
+                flex: 3,
+                child: _LabelledField(
+                  label: 'Relay host',
+                  controller: _relayHostCtrl,
+                  hint: 'public relay IPv4 or host',
+                  monospace: true,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: _LabelledField(
+                  label: 'Port',
+                  controller: _relayPortCtrl,
+                  monospace: true,
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+          _LabelledField(
+            label: 'Relay token',
+            controller: _relayTokenCtrl,
+            hint: 'Optional',
+            obscure: true,
+          ),
+          if ((context.watch<AppState>().config?.relayPublicHostname ??
+                  '')
+              .isNotEmpty) ...[
+            const SizedBox(height: 8),
+            Text(
+              'Last relay: ${context.watch<AppState>().config!.relayPublicHostname}:${context.watch<AppState>().config!.relayLoginPort}',
+              style: const TextStyle(
+                  fontSize: 11,
+                  color: BonfireColors.textMuted,
+                  fontFamily: 'monospace'),
+            ),
+          ],
+        ],
 
         const SizedBox(height: 24),
         const _SectionTitle('Web admin'),

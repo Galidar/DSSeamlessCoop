@@ -106,7 +106,7 @@ function RemoveServer(Id)
     }
 }
 
-function AddServer(Id, IpAddress, hostname, private_hostname, description, name, public_key, player_count, password, mods_white_list, mods_black_list, mods_required_list, version, allow_sharding, web_address, port, is_shard, game_type)
+function AddServer(Id, IpAddress, hostname, private_hostname, description, name, public_key, player_count, password, mods_white_list, mods_black_list, mods_required_list, version, allow_sharding, web_address, port, is_shard, game_type, is_relayed)
 {
     var ServerObj = {
         "Id": Id,
@@ -124,6 +124,7 @@ function AddServer(Id, IpAddress, hostname, private_hostname, description, name,
         "ModsRequiredList": mods_required_list,
         "AllowSharding": allow_sharding,
         "IsShard": is_shard,
+        "IsRelayed": is_relayed,
         "GameType": game_type,
         "WebAddress": web_address,
         "UpdatedTime": Date.now(),
@@ -222,6 +223,7 @@ router.get('/', async (req, res) => {
             "ModsRequiredList": Server["ModsRequiredList"],
             "AllowSharding": Server["AllowSharding"],
             "IsShard": Server["IsShard"],
+            "IsRelayed": Server["IsRelayed"],
             "GameType": Server["GameType"],
             "WebAddress": Server["WebAddress"]
         });
@@ -328,6 +330,7 @@ router.post('/', async (req, res) => {
     var mods_required_list = req.body["ModsRequiredList"];
     var allow_sharding = false;
     var is_shard = false;
+    var is_relayed = false;
     var game_type = "DarkSouls3";
     var web_address = "";
     var server_id = req.connection.remoteAddress;
@@ -353,6 +356,10 @@ router.post('/', async (req, res) => {
     {
         is_shard = (req.body["IsShard"] == "1" || req.body["IsShard"] == "true");
     }
+    if ('IsRelayed' in req.body)
+    {
+        is_relayed = (req.body["IsRelayed"] == "1" || req.body["IsRelayed"] == "true");
+    }
     if ('GameType' in req.body)
     {
         game_type = req.body["GameType"];
@@ -360,7 +367,7 @@ router.post('/', async (req, res) => {
 
     var version = ('ServerVersion' in req.body) ? parseInt(req.body['ServerVersion']) : 1;
 
-    AddServer(server_id, req.connection.remoteAddress, hostname, private_hostname, description, name, public_key, player_count, password, mods_white_list, mods_black_list, mods_required_list, version, allow_sharding, web_address, port, is_shard, game_type);
+    AddServer(server_id, req.connection.remoteAddress, hostname, private_hostname, description, name, public_key, player_count, password, mods_white_list, mods_black_list, mods_required_list, version, allow_sharding, web_address, port, is_shard, game_type, is_relayed);
     
     res.json({ "status":"success" });
 });

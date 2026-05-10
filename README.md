@@ -38,6 +38,9 @@ or unreachable.
   the selected private server.
 - **Automatic IP detection.** Bonfire detects public WAN and private LAN
   addresses so normal hosts do not have to hunt through network settings.
+- **Relay-ready hosting.** Fires can use Bonfire Relay when the host is behind
+  CGNAT, double NAT, strict routers, dorm networks, or ISPs that cannot expose
+  inbound ports.
 - **Bonfire-native online unlocks.** The Windows release already contains the
   adapted Dark Souls I, II, and III online layers Bonfire needs. Users do not
   install mods, copy folders, run patchers, or add extra packages after
@@ -80,6 +83,8 @@ technical:
   fire has a live local profile, keys, listing state, and diagnostic log while
   the DS1 runtime owns the co-op transport.
 - Publishes public fires to the master list.
+- Can tunnel a hosted fire through a public Bonfire Relay so the host only needs
+  an outbound connection.
 - Retrieves server keys for sealed and public fires.
 - Launches Dark Souls I/II/III through the Bonfire runtime bridge.
 - Writes per-fire session data into the supported client runtimes.
@@ -235,11 +240,58 @@ Bonfire preparation:
    visibility, WAN/LAN hostnames, and WebUI credentials.
 4. Use auto-detected IPs unless you are hosting through VPN, paid hosting, or a
    custom network setup.
-5. Click **Light the bonfire**.
+5. If your ISP/router cannot accept inbound connections, enable
+   **Use Bonfire Relay** and enter the relay endpoint provided by the community
+   or operator you trust.
+6. Click **Light the bonfire**.
 
 If the fire is public, other Bonfire users can see it in the public list. If it
 is sealed with a password, only players with the password can retrieve the key
 needed to join.
+
+## Bonfire Relay
+
+Bonfire Relay is for hosts who cannot open ports because of CGNAT, double NAT,
+locked-down routers, university networks, hotel networks, or ISP restrictions.
+Instead of waiting for inbound traffic at home, BonfireService opens one
+outbound control connection to a public relay. The relay allocates public
+login/auth/game ports, Bonfire writes those ports into the active server config,
+and the fire advertises the relay endpoint to players.
+
+Player flow stays the same: choose a public fire and click
+**Travel to this fire**. Bonfire prepares the runtime and connects to the
+advertised endpoint. Relay-backed fires are marked with a `RELAY` badge when
+the master list supports that metadata.
+
+Relay host flow:
+
+1. Open **Tend the flame**.
+2. Enable **Use Bonfire Relay**.
+3. Enter the relay host, relay control port, and optional token.
+4. Click **Light the bonfire**.
+
+Relay operator flow:
+
+1. Deploy `Source\MasterServer` on a public machine or VPS.
+2. In `Source\MasterServer\src\config\config.json`, set:
+
+```json
+"relay": {
+  "enabled": true,
+  "control_port": 50030,
+  "public_hostname": "YOUR.PUBLIC.IPV4",
+  "min_port": 51000,
+  "max_port": 51999,
+  "shared_secret": "optional-token"
+}
+```
+
+3. Allow inbound TCP on the control port and inbound TCP/UDP on the relay port
+   range. The default range gives enough room for many simultaneous fires.
+
+The relay is not a database or a matchmaking rewrite. It is a transport bridge:
+TCP login/auth and UDP game traffic enter through public relay ports and are
+multiplexed back over the host's outbound BonfireService tunnel.
 
 ## Joining A Fire
 
@@ -270,12 +322,16 @@ Bonfire-prepared clients to FromSoftware official servers.
 - Steam running and logged in.
 - A legitimate Steam copy of the game being launched.
 - Admin approval when Bonfire asks for it.
-- For hosting outside your LAN: router or hosting-provider networking must allow
-  the server ports through. Bonfire handles Windows Firewall; external routing
-  still depends on your network.
+- For direct hosting outside your LAN: router or hosting-provider networking
+  must allow the server ports through. Bonfire handles Windows Firewall;
+  external routing still depends on your network.
+- For CGNAT or locked-down networks: use Bonfire Relay instead of direct
+  port-forwarding.
 
 Default server ports include `50000`, `50010`, `50020`, `50050`, and the
-`50060-50200` game range. The WebUI uses `50005`.
+`50060-50200` game range. The WebUI uses `50005`. Relay operators also expose
+the relay control port, default `50030`, and the configured public relay range,
+default `51000-51999`.
 
 ## Troubleshooting
 
@@ -287,7 +343,9 @@ auth flow depends on Steam tickets.
 ### Players cannot reach my fire
 
 Apply Bonfire's firewall rules from the UI. If players are outside your LAN,
-also forward the required ports on your router or hosting provider.
+either forward the required ports on your router/hosting provider or enable
+Bonfire Relay. If your ISP uses CGNAT, router port-forwarding alone will not
+be enough because traffic never reaches your router from the public internet.
 
 ### Dark Souls I or III launches without the online runtime
 
@@ -318,6 +376,7 @@ active files, and starts the selected fire.
 | `Server\Server.exe` | Native private multiplayer server for DS2/DS3 online systems and DS1 local coordination/profile/listing state. |
 | `Loader\` | Native runtime bridge and game-specific launch data used by Bonfire during client preparation. |
 | Master server | Public listing and key lookup service used by the Bonfire fire list. |
+| Bonfire Relay | Optional public TCP/UDP bridge for hosts behind CGNAT or strict networks. |
 
 Bonfire keeps the UI, backend service, native server, master-list lookup, and
 runtime bridge in one coordinated flow. The user clicks; Bonfire does the

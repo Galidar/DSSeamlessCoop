@@ -18,6 +18,14 @@ public sealed class ServerConfig
     public string GameType { get; set; } = "DarkSouls2";
     public string ServerHostname { get; set; } = "";
     public string ServerPrivateHostname { get; set; } = "";
+    public bool RelayEnabled { get; set; } = false;
+    public string RelayPublicHostname { get; set; } = "";
+    public string RelayControlHost { get; set; } = "";
+    public int RelayControlPort { get; set; } = 50030;
+    public string RelayControlToken { get; set; } = "";
+    public int RelayLoginServerPort { get; set; } = 0;
+    public int RelayAuthServerPort { get; set; } = 0;
+    public int RelayGameServerPort { get; set; } = 0;
     public bool Advertise { get; set; } = true;
     public string WebUIServerUsername { get; set; } = "";
     public string WebUIServerPassword { get; set; } = "";
@@ -41,6 +49,14 @@ public sealed class ServerConfig
         cfg.GameType              = ReadString(text, "GameType")              ?? cfg.GameType;
         cfg.ServerHostname        = ReadString(text, "ServerHostname")        ?? cfg.ServerHostname;
         cfg.ServerPrivateHostname = ReadString(text, "ServerPrivateHostname") ?? cfg.ServerPrivateHostname;
+        cfg.RelayEnabled          = ReadBool(text,   "RelayEnabled")          ?? cfg.RelayEnabled;
+        cfg.RelayPublicHostname   = ReadString(text, "RelayPublicHostname")   ?? cfg.RelayPublicHostname;
+        cfg.RelayControlHost      = ReadString(text, "RelayControlHost")      ?? cfg.RelayControlHost;
+        cfg.RelayControlPort      = ReadInt(text,    "RelayControlPort")      ?? cfg.RelayControlPort;
+        cfg.RelayControlToken     = ReadString(text, "RelayControlToken")     ?? cfg.RelayControlToken;
+        cfg.RelayLoginServerPort  = ReadInt(text,    "RelayLoginServerPort")  ?? cfg.RelayLoginServerPort;
+        cfg.RelayAuthServerPort   = ReadInt(text,    "RelayAuthServerPort")   ?? cfg.RelayAuthServerPort;
+        cfg.RelayGameServerPort   = ReadInt(text,    "RelayGameServerPort")   ?? cfg.RelayGameServerPort;
         cfg.Advertise             = ReadBool(text,   "Advertise")             ?? cfg.Advertise;
         cfg.WebUIServerUsername   = ReadString(text, "WebUIServerUsername")   ?? cfg.WebUIServerUsername;
         cfg.WebUIServerPassword   = ReadString(text, "WebUIServerPassword")   ?? cfg.WebUIServerPassword;
@@ -67,6 +83,14 @@ public sealed class ServerConfig
         text = ReplaceString(text, "GameType",              GameType);
         text = ReplaceString(text, "ServerHostname",        ServerHostname);
         text = ReplaceString(text, "ServerPrivateHostname", ServerPrivateHostname);
+        text = UpsertBool(text,   "RelayEnabled",          RelayEnabled);
+        text = UpsertString(text, "RelayPublicHostname",   RelayPublicHostname);
+        text = UpsertString(text, "RelayControlHost",      RelayControlHost);
+        text = UpsertInt(text,    "RelayControlPort",      RelayControlPort);
+        text = UpsertString(text, "RelayControlToken",     RelayControlToken);
+        text = UpsertInt(text,    "RelayLoginServerPort",  RelayLoginServerPort);
+        text = UpsertInt(text,    "RelayAuthServerPort",   RelayAuthServerPort);
+        text = UpsertInt(text,    "RelayGameServerPort",   RelayGameServerPort);
         text = ReplaceBool(text,   "Advertise",             Advertise);
         text = ReplaceString(text, "WebUIServerUsername",   WebUIServerUsername);
         text = ReplaceString(text, "WebUIServerPassword",   WebUIServerPassword);
@@ -106,5 +130,40 @@ public sealed class ServerConfig
         return Regex.IsMatch(text, pattern)
             ? Regex.Replace(text, pattern, replacement)
             : text;
+    }
+
+    private static string UpsertString(string text, string key, string value)
+    {
+        return Regex.IsMatch(text, "\"" + Regex.Escape(key) + "\"\\s*:")
+            ? ReplaceString(text, key, value)
+            : InsertBeforeFinalBrace(text, "\"" + key + "\": \"" + (value ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"");
+    }
+
+    private static string UpsertBool(string text, string key, bool value)
+    {
+        return Regex.IsMatch(text, "\"" + Regex.Escape(key) + "\"\\s*:")
+            ? ReplaceBool(text, key, value)
+            : InsertBeforeFinalBrace(text, "\"" + key + "\": " + (value ? "true" : "false"));
+    }
+
+    private static string UpsertInt(string text, string key, int value)
+    {
+        var pattern = "\"" + Regex.Escape(key) + "\"\\s*:\\s*-?\\d+";
+        var replacement = "\"" + key + "\": " + value;
+        return Regex.IsMatch(text, pattern)
+            ? Regex.Replace(text, pattern, replacement)
+            : InsertBeforeFinalBrace(text, replacement);
+    }
+
+    private static string InsertBeforeFinalBrace(string text, string property)
+    {
+        var idx = text.LastIndexOf('}');
+        if (idx < 0)
+            return "{\n    " + property + "\n}\n";
+
+        var before = text[..idx].TrimEnd();
+        var after = text[idx..];
+        var needsComma = before.Length > 0 && !before.EndsWith("{") && !before.EndsWith(",");
+        return before + (needsComma ? "," : "") + "\n    " + property + "\n" + after;
     }
 }

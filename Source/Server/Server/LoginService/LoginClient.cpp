@@ -82,10 +82,22 @@ bool LoginClient::Poll()
 
         const RuntimeConfig& Config = Service->GetServer()->GetConfig();
         std::string ServerIP = Service->GetServer()->GetPublicIP().ToString();
+        int AuthServerPort = Config.AuthServerPort;
+
+        if (Config.RelayEnabled &&
+            !Config.RelayPublicHostname.empty() &&
+            Config.RelayAuthServerPort > 0)
+        {
+            ServerIP = Config.RelayPublicHostname;
+            AuthServerPort = Config.RelayAuthServerPort;
+            LogS(GetName().c_str(),
+                "Directing login client to relay auth endpoint %s:%i.",
+                ServerIP.c_str(), AuthServerPort);
+        }
 
         // If user IP is on a private network, we can assume they are on our LAN
         // and return our internal IP address.
-        if (Connection->GetAddress().IsPrivateNetwork())
+        else if (Connection->GetAddress().IsPrivateNetwork())
         {
             ServerIP = Service->GetServer()->GetPrivateIP().ToString();
             LogS(GetName().c_str(), "Directing login client to our private ip (%s) as appears to be on private subnet.", ServerIP.c_str());
@@ -93,7 +105,7 @@ bool LoginClient::Poll()
 
         Shared_Frpg2RequestMessage::RequestQueryLoginServerInfoResponse Response;
         Response.set_server_ip(ServerIP);
-        Response.set_port(Config.AuthServerPort);
+        Response.set_port(AuthServerPort);
 
         if (!MessageStream->Send(&Response, Frpg2MessageType::Reply, Message.Header.msg_index))
         {

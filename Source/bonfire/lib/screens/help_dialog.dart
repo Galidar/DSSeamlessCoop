@@ -192,7 +192,7 @@ class _HostGuide extends StatelessWidget {
         n: 1,
         title: 'Kindle a new bonfire',
         body:
-            'In the tab matching the game you want to host (DS II or DS III), '
+            'In the tab matching the game you want to host (DS I, DS II, or DS III), '
             'click "+ New bonfire" at the top right. Type a name. Bonfire '
             'creates a profile and, the first time, downloads the server '
             'binaries (~115 MB) into the install folder.',
@@ -237,10 +237,10 @@ class _HostGuide extends StatelessWidget {
         'player\'s Steam ticket through the Steam GameServer SDK.',
       ),
       _Bullet(
-        'A real public IP, OR port-forwarding from your router for TCP+UDP '
-        '50000 / 50010 / 50050 / 50020 to the host machine. Bonfire\'s '
-        'firewall step only handles the local machine — your router is '
-        'still on you.',
+        'A real public IP with port-forwarding, OR Bonfire Relay when your '
+        'ISP/router cannot expose inbound ports. Direct hosting needs TCP+UDP '
+        '50000 / 50010 / 50050 / 50020 forwarded to the host machine; Relay '
+        'only needs the host to reach the public relay endpoint.',
       ),
       _Bullet(
         'Letting Bonfire run as long as you want the bonfire lit. Closing '

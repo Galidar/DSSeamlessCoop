@@ -28,6 +28,9 @@ class ServerBadges extends StatelessWidget {
     if (server.hasMods) {
       tags.add(const _Tag('MODDED', BonfireColors.accent));
     }
+    if (server.isRelayed) {
+      tags.add(const _Tag('RELAY', BonfireColors.accentHover));
+    }
     if (server.isShard) {
       tags.add(const _Tag('SHARD', BonfireColors.textSecondary));
     } else if (server.allowSharding) {

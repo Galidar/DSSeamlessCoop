@@ -155,6 +155,24 @@ public:
     // If none is supplied then this will be the private ip of the server.
     std::string ServerPrivateHostname = "";
 
+    // If enabled, the server still listens locally, but advertises and returns
+    // the relay's public IPv4/ports so hosts behind CGNAT can accept players.
+    bool RelayEnabled = false;
+
+    // Public IPv4 address of the relay. Keep this as an IPv4 string: the game
+    // auth response has a 16-byte address field and cannot safely carry DNS.
+    std::string RelayPublicHostname = "";
+
+    // Control endpoint used by BonfireService's local tunnel client.
+    std::string RelayControlHost = "";
+    int RelayControlPort = 50030;
+    std::string RelayControlToken = "";
+
+    // Public ports allocated by the relay for this Bonfire.
+    int RelayLoginServerPort = 0;
+    int RelayAuthServerPort = 0;
+    int RelayGameServerPort = 0;
+
     // If Advertise is set this is the master server that it will be registered to.
     // Be careful changing this, typically only one server should exist.
     std::string MasterServerIp = "ds3os-master.timleonard.uk";

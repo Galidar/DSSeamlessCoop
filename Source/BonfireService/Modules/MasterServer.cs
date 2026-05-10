@@ -29,6 +29,7 @@ public sealed record ServerEntry(
     bool PasswordRequired,
     bool AllowSharding,
     bool IsShard,
+    bool IsRelayed,
     string ModsWhiteList,
     string ModsBlackList,
     string ModsRequiredList,
@@ -94,6 +95,7 @@ public static class MasterServer
         public bool AllowSharding { get; set; }
         public string? WebAddress { get; set; }
         public bool IsShard { get; set; }
+        public bool IsRelayed { get; set; }
         public string? GameType { get; set; }
     }
 
@@ -121,6 +123,7 @@ public static class MasterServer
                 PasswordRequired: s.PasswordRequired,
                 AllowSharding: s.AllowSharding,
                 IsShard: s.IsShard,
+                IsRelayed: s.IsRelayed,
                 ModsWhiteList: s.ModsWhiteList ?? "",
                 ModsBlackList: s.ModsBlackList ?? "",
                 ModsRequiredList: s.ModsRequiredList ?? "",

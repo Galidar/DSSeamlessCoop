@@ -32,6 +32,8 @@
 #include <steam/steam_api.h>
 #include <steam/steam_gameserver.h>
 
+#include <algorithm>
+
 AuthClient::AuthClient(AuthService* OwningService, std::shared_ptr<NetConnection> InConnection, RSAKeyPair* InServerRSAKey)
     : Service(OwningService)
     , Connection(InConnection)
@@ -222,6 +224,7 @@ bool AuthClient::Poll()
             {
                 const RuntimeConfig& RuntimeConfig = Service->GetServer()->GetConfig();
                 std::string ServerIP = Service->GetServer()->GetPublicIP().ToString();
+                int GameServerPort = RuntimeConfig.GameServerPort;
 
                 // Format Note:
                 // The message payload is stored as:
@@ -264,7 +267,18 @@ bool AuthClient::Poll()
 
                 // If user IP is on a private network, we can assume they are on our LAN
                 // and return our internal IP address.
-                if (Connection->GetAddress().IsPrivateNetwork())
+                if (RuntimeConfig.RelayEnabled &&
+                    !RuntimeConfig.RelayPublicHostname.empty() &&
+                    RuntimeConfig.RelayGameServerPort > 0)
+                {
+                    ServerIP = RuntimeConfig.RelayPublicHostname;
+                    GameServerPort = RuntimeConfig.RelayGameServerPort;
+                    LogS(GetName().c_str(),
+                        "Directing auth client to relay game endpoint %s:%i.",
+                        ServerIP.c_str(), GameServerPort);
+                }
+
+                else if (Connection->GetAddress().IsPrivateNetwork())
                 {
                     ServerIP = Service->GetServer()->GetPrivateIP().ToString();
                     LogS(GetName().c_str(), "Directing auth client to our private ip (%s) as appears to be on private subnet.", ServerIP.c_str());
@@ -274,8 +288,8 @@ bool AuthClient::Poll()
                 memset(GameInfo.stack_data, 0, sizeof(GameInfo.stack_data));
                 memset(GameInfo.game_server_ip, 0, sizeof(GameInfo.game_server_ip));
                 FillRandomBytes((uint8_t*)&GameInfo.auth_token, 8);
-                memcpy(GameInfo.game_server_ip, ServerIP.data(), ServerIP.size() + 1);
-                GameInfo.game_port = RuntimeConfig.GameServerPort;
+                memcpy(GameInfo.game_server_ip, ServerIP.data(), std::min(ServerIP.size() + 1, sizeof(GameInfo.game_server_ip)));
+                GameInfo.game_port = GameServerPort;
                 GameInfo.SwapEndian();
 
                 Frpg2Message Response;

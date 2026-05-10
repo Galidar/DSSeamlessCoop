@@ -1,4 +1,12 @@
 {
     "port": 50020,
-    "server_timeout_ms": 240000
+    "server_timeout_ms": 240000,
+    "relay": {
+        "enabled": false,
+        "control_port": 50030,
+        "public_hostname": "",
+        "min_port": 51000,
+        "max_port": 51999,
+        "shared_secret": ""
+    }
 }
