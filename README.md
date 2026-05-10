@@ -76,6 +76,9 @@ technical:
 - Keeps one live profile active at a time so fixed server ports remain
   predictable.
 - Starts and stops the private server from the UI.
+- For Dark Souls I, starts a visible Bonfire coordinator server so the selected
+  fire has a live local profile, keys, listing state, and diagnostic log while
+  the DS1 runtime owns the co-op transport.
 - Publishes public fires to the master list.
 - Retrieves server keys for sealed and public fires.
 - Launches Dark Souls I/II/III through the Bonfire runtime bridge.
@@ -107,6 +110,14 @@ full-session co-op launch path. It prepares its included
 folder, injects `ds1sc.dll`, and starts `DarkSoulsRemastered.exe` directly.
 Players do not install a separate mod or run a separate launcher.
 
+When hosting a Dark Souls I fire, Bonfire also starts `Server\Server.exe` in
+**DarkSouls1 coordinator mode**. The coordinator uses Steam AppID `570940`,
+keeps the selected fire's profile/key/listing state live, listens on the normal
+Bonfire ports, and writes explicit DS1 coordinator logs. The actual DS1
+seamless co-op traffic is still handled by the included DS1 runtime's Steam P2P
+networking layer; Bonfire owns launch, profile, password, local coordinator,
+listing, and runtime preparation.
+
 Player-facing unlocks:
 
 - Seamless cooperative play across the whole game, from the tutorial through
@@ -136,6 +147,10 @@ Bonfire preparation:
 - Supported Steam executable: `DarkSoulsRemastered.exe`.
 - Packaged runtime payload: `Loader\DS1SeamlessCoop\`.
 - In-game staged runtime folder: `SeamlessCoop\`.
+- Local coordinator: `Server\Server.exe` with `GameType = DarkSouls1`.
+- Coordinator data file: `SeamlessCoop\bonfire_coordinator.ini`.
+- Runtime setting: `serverless_features = 0`, keeping DS1 scoped to the
+  selected Bonfire fire instead of unrelated serverless events.
 - Runtime save extension: `.co2`.
 
 ## Dark Souls II Unlocks
@@ -300,7 +315,7 @@ active files, and starts the selected fire.
 | --- | --- |
 | `Bonfire.exe` | Flutter desktop app for hosting, joining, filtering, configuring, and launching. |
 | `BonfireService.exe` | .NET backend service for JSON-RPC, network detection, firewall rules, profile state, master-list requests, server lifecycle, and game launch. |
-| `Server\Server.exe` | Native private multiplayer server for login/auth, matchmaking, signs, invasions, ghosts, messages, ranking, and related online systems. |
+| `Server\Server.exe` | Native private multiplayer server for DS2/DS3 online systems and DS1 local coordination/profile/listing state. |
 | `Loader\` | Native runtime bridge and game-specific launch data used by Bonfire during client preparation. |
 | Master server | Public listing and key lookup service used by the Bonfire fire list. |
 

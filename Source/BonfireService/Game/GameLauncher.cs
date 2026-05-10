@@ -299,6 +299,12 @@ public static class GameLauncher
                     req.Ds1SeamlessPath,
                     req.ExePath,
                     BuildSeamlessPassword(req),
+                    new Ds1BonfireCoordinator(
+                        req.ServerId,
+                        req.ServerName,
+                        req.Hostname,
+                        req.PrivateHostname,
+                        req.Port),
                     out var ds1DllPath,
                     out var ds1PrepareErr))
             {

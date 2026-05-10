@@ -22,7 +22,7 @@ namespace
         size_t GetMultiplayerSessionCount() override { return 0; }
         double GetPlayTime() override { return 0.0; }
         std::string GetConvenantStatusDescription() override { return ""; }
-        std::string GetStatusDescription() override { return "Dark Souls Remastered Seamless Co-op"; }
+        std::string GetStatusDescription() override { return "DS1 Bonfire coordinator active"; }
     };
 }
 
@@ -49,8 +49,9 @@ bool DS1_Game::ReliableUdpMessageType_Expects_Response(
 
 void DS1_Game::RegisterGameManagers(GameService&)
 {
-    // DS1 support is metadata/listing plus Yui Seamless bootstrap. DS1 clients
-    // do not speak the DSOS protobuf protocol, so there are no DSOS managers.
+    // DS1 support currently uses Server.exe as Bonfire's coordinator while the
+    // DS1 Seamless runtime owns gameplay networking. DS1 clients do not speak
+    // the DSOS protobuf protocol yet, so there are no gameplay managers here.
 }
 
 std::unique_ptr<PlayerState> DS1_Game::CreatePlayerState()
@@ -72,7 +73,10 @@ void DS1_Game::GetStatistics(
     GameService&,
     std::unordered_map<std::string, std::string>& Stats)
 {
-    Stats["Mode"] = "Dark Souls Remastered Seamless Co-op";
+    Stats["Mode"] = "Dark Souls I Bonfire coordinator";
+    Stats["Runtime"] = "DS1SeamlessCoop";
+    Stats["GameplayNetwork"] = "Steam P2P";
+    Stats["Coordinator"] = "Server.exe";
 }
 
 void DS1_Game::SendManagementMessage(

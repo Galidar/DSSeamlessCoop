@@ -172,6 +172,13 @@ bool Server::Init()
         }
     }
 
+    Log("Server game type: %s.", GameTypeStrings[(int)ServerGameType]);
+    if (ServerGameType == GameType::DarkSouls1)
+    {
+        Log("Dark Souls I coordinator mode active: DS1SeamlessCoop owns gameplay networking.");
+        Log("Bonfire manages launch, profile, listing, runtime settings, and the local coordinator.");
+    }
+
     // Patch old server ip.
 #ifdef _DEBUG
     //Config.MasterServerIp = "127.0.0.1";

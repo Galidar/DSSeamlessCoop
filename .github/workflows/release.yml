@@ -6,11 +6,11 @@ on:
       version:
         description: 'Version (e.g. 0.2.0)'
         required: true
-        default: '0.2.0'
+        default: '2.2.0'
       version_postfix:
         description: 'Version postfix (e.g. -galidar)'
         required: false
-        default: '-galidar'
+        default: ''
   push:
     tags:
       - 'v*'

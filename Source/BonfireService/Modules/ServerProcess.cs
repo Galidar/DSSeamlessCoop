@@ -56,7 +56,7 @@ public static class ServerProcess
         }
     }
 
-    public static bool Start(out string? error)
+    public static bool Start(out string? error, bool forceShellConsole = false)
     {
         error = null;
         lock (Lock)
@@ -96,8 +96,9 @@ public static class ServerProcess
                 {
                     FileName = Paths.ServerExecutable,
                     WorkingDirectory = Paths.ServerDirectory,
-                    UseShellExecute = false,
+                    UseShellExecute = forceShellConsole,
                     CreateNoWindow = false, // keep server console visible
+                    WindowStyle = ProcessWindowStyle.Normal,
                 };
                 _tracked = Process.Start(psi);
                 if (_tracked is null)

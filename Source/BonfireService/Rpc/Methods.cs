@@ -689,6 +689,10 @@ public static class Methods
 
             var meta = Profiles.List().FirstOrDefault(p => p.Id == profileId)
                        ?? throw new Exception("Profile not found.");
+            var isDs1 = string.Equals(
+                meta.GameType,
+                "DarkSouls1",
+                StringComparison.OrdinalIgnoreCase);
 
             // Game settings.
             var settings = GameSettings.Load();
@@ -730,9 +734,17 @@ public static class Methods
 
             // Make sure the server is running (it's the source of truth for
             // its public key — generated on first start if missing).
+            // DS1 uses Server.exe as Bonfire's coordinator around DS1SeamlessCoop,
+            // so restart it on local launches to avoid stale invisible state.
+            if (isDs1 && ServerProcess.QueryStatus().Running)
+            {
+                ServerProcess.Stop();
+                await Task.Delay(300, ct);
+            }
+
             if (!ServerProcess.QueryStatus().Running)
             {
-                if (!ServerProcess.Start(out var startErr))
+                if (!ServerProcess.Start(out var startErr, forceShellConsole: isDs1))
                     throw new Exception(startErr ?? "Could not start local server.");
             }
 

@@ -39,7 +39,8 @@ pick a fire in the UI, launch, and Bonfire prepares the game automatically.
   BonfireService.exe       Backend service used by the interface.
   flutter_windows.dll      Flutter runtime.
   data/                    Flutter assets and compiled Dart code.
-  Server/                  Private multiplayer server and WebUI files.
+  Server/                  Private multiplayer server, DS1 coordinator, and
+                           WebUI files.
   Loader/                  Runtime bridge and game online unlock data.
     DS1SeamlessCoop/       Dark Souls I packaged runtime payload.
     DS2SeamlessCoop/       Dark Souls II packaged runtime payload.
@@ -68,6 +69,9 @@ Dark Souls I:
   - Up to six players can share the open world.
   - Reconnects are streamlined, light sources sync locally, scaling is
     configurable, and invasions are supported when enabled in settings.
+  - Hosting starts a visible Bonfire DS1 coordinator server for the selected
+    fire. It keeps the local profile, keys, listing state, and diagnostics live
+    while the included DS1 runtime owns the Steam P2P co-op transport.
 
 Dark Souls II:
   - Multiplayer timers are removed.

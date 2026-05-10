@@ -5,6 +5,13 @@ public sealed record Ds1SeamlessPayload(
     string SourceDll,
     bool IsBundled);
 
+public sealed record Ds1BonfireCoordinator(
+    string ServerId,
+    string ServerName,
+    string Hostname,
+    string PrivateHostname,
+    int Port);
+
 public static class Ds1SeamlessPayloadResolver
 {
     public const string BundledRootDirectoryName = "DS1SeamlessCoop";
@@ -37,6 +44,7 @@ public static class Ds1SeamlessPayloadResolver
         string configuredPath,
         string ds1ExePath,
         string sessionPassword,
+        Ds1BonfireCoordinator coordinator,
         out string injectedDll,
         out string error)
     {
@@ -72,7 +80,8 @@ public static class Ds1SeamlessPayloadResolver
 
             RemoveLegacyStagedLauncher(targetLauncher);
             EnsureCrashDumpDirectories(targetRoot);
-            WriteSessionPassword(targetRoot, sessionPassword);
+            WriteRuntimeSettings(targetRoot, sessionPassword);
+            WriteCoordinatorFile(targetRoot, coordinator);
         }
         catch (Exception ex)
         {
@@ -107,52 +116,102 @@ public static class Ds1SeamlessPayloadResolver
         Directory.CreateDirectory(Path.Combine(targetRoot, "crashdumps", "reports"));
     }
 
-    private static void WriteSessionPassword(string targetRoot, string sessionPassword)
+    private static void WriteRuntimeSettings(
+        string targetRoot,
+        string sessionPassword)
     {
         var settingsPath = Path.Combine(targetRoot, "ds1sc_settings.ini");
         var lines = File.Exists(settingsPath)
             ? File.ReadAllLines(settingsPath).ToList()
             : new List<string>();
 
-        var inPasswordSection = false;
-        var wrotePassword = false;
+        UpsertIniValue(lines, "PASSWORD", "cooppassword", sessionPassword);
+
+        // Keep DS1 sessions scoped to the Bonfire fire. The DS1 runtime still
+        // owns gameplay networking today, but Bonfire should not enable
+        // unrelated serverless world events for a coordinated fire.
+        UpsertIniValue(lines, "GAMEPLAY", "serverless_features", "0");
+
+        Directory.CreateDirectory(targetRoot);
+        File.WriteAllLines(settingsPath, lines);
+    }
+
+    private static void WriteCoordinatorFile(
+        string targetRoot,
+        Ds1BonfireCoordinator coordinator)
+    {
+        var coordinatorPath = Path.Combine(targetRoot, "bonfire_coordinator.ini");
+        var lines = new[]
+        {
+            "[BONFIRE]",
+            "coordinator_enabled = 1",
+            "coordinator_protocol = bonfire-ds1-v1",
+            "server_id = " + IniValue(coordinator.ServerId),
+            "server_name = " + IniValue(coordinator.ServerName),
+            "server_hostname = " + IniValue(coordinator.Hostname),
+            "server_private_hostname = " + IniValue(coordinator.PrivateHostname),
+            "server_port = " + coordinator.Port,
+        };
+
+        Directory.CreateDirectory(targetRoot);
+        File.WriteAllLines(coordinatorPath, lines);
+    }
+
+    private static string IniValue(string value) =>
+        (value ?? "").Replace("\r", " ").Replace("\n", " ").Trim();
+
+    private static void UpsertIniValue(
+        List<string> lines,
+        string section,
+        string key,
+        string value)
+    {
+        var sectionHeader = "[" + section + "]";
+        var inSection = false;
+        var insertAt = lines.Count;
 
         for (var i = 0; i < lines.Count; i++)
         {
             var trimmed = lines[i].Trim();
             if (trimmed.StartsWith("[") && trimmed.EndsWith("]"))
             {
-                if (inPasswordSection && !wrotePassword)
+                if (inSection)
                 {
-                    lines.Insert(i, "cooppassword = " + sessionPassword);
-                    wrotePassword = true;
-                    i++;
+                    insertAt = i;
+                    break;
                 }
 
-                inPasswordSection = string.Equals(
-                    trimmed, "[PASSWORD]", StringComparison.OrdinalIgnoreCase);
+                inSection = string.Equals(trimmed, sectionHeader, StringComparison.OrdinalIgnoreCase);
+                if (inSection)
+                    insertAt = i + 1;
                 continue;
             }
 
-            if (inPasswordSection &&
-                trimmed.StartsWith("cooppassword", StringComparison.OrdinalIgnoreCase))
+            if (inSection)
             {
-                lines[i] = "cooppassword = " + sessionPassword;
-                wrotePassword = true;
+                insertAt = i + 1;
+                var separator = trimmed.IndexOf('=');
+                var existingKey = separator >= 0
+                    ? trimmed[..separator].Trim()
+                    : trimmed;
+                if (string.Equals(existingKey, key, StringComparison.OrdinalIgnoreCase))
+                {
+                    lines[i] = key + " = " + value;
+                    return;
+                }
             }
         }
 
-        if (!wrotePassword)
+        if (!inSection)
         {
             if (lines.Count > 0 && lines[^1].Length > 0)
                 lines.Add("");
-            if (!inPasswordSection)
-                lines.Add("[PASSWORD]");
-            lines.Add("cooppassword = " + sessionPassword);
+            lines.Add(sectionHeader);
+            lines.Add(key + " = " + value);
+            return;
         }
 
-        Directory.CreateDirectory(targetRoot);
-        File.WriteAllLines(settingsPath, lines);
+        lines.Insert(insertAt, key + " = " + value);
     }
 
     private static IEnumerable<string> CandidatePaths(string configuredPath, string ds1ExePath)
