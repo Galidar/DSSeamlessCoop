@@ -14,9 +14,13 @@ preparation behind one desktop UI.
 
 For players, the goal is comfort: a host can create a fire in a few clicks, and
 players who join through Bonfire receive the required client preparation
-automatically during launch. Under the hood, Bonfire uses advanced protocol
-decoding, private-server routing, and a native runtime bridge to unlock online
-flows that were previously painful or unreachable.
+automatically during launch. There is no separate mod installation step. The
+Dark Souls I, II, and III online layers included in the release are adapted to
+run as Bonfire-native unlocks, driven by Bonfire's interface and launch flow.
+
+Under the hood, Bonfire uses advanced protocol decoding, private-server routing,
+and native runtime bridges to unlock online flows that were previously painful
+or unreachable.
 
 ## Highlights
 
@@ -34,9 +38,13 @@ flows that were previously painful or unreachable.
   the selected private server.
 - **Automatic IP detection.** Bonfire detects public WAN and private LAN
   addresses so normal hosts do not have to hunt through network settings.
-- **Runtime unlocks included.** The Windows release already contains the
-  supported game runtime data Bonfire needs. Users do not install extra
-  packages after downloading Bonfire.
+- **Bonfire-native online unlocks.** The Windows release already contains the
+  adapted Dark Souls I, II, and III online layers Bonfire needs. Users do not
+  install mods, copy folders, run patchers, or add extra packages after
+  downloading Bonfire.
+- **No launcher juggling.** Bonfire prepares each game from the UI: it stages
+  the needed runtime files, writes the fire password, launches the game, and
+  injects the native bridge when that game needs it.
 - **Separate saves by default.** Private-server play stays away from retail save
   files.
 
@@ -71,12 +79,13 @@ technical:
 - Publishes public fires to the master list.
 - Retrieves server keys for sealed and public fires.
 - Launches Dark Souls I/II/III through the Bonfire runtime bridge.
+- Writes per-fire session data into the supported client runtimes.
 - Keeps private-server saves separate from retail saves.
 
-## Runtime Payload Names
+## Native Online Layers
 
-The Windows release keeps game-specific runtime data under consistent Loader
-names:
+The Windows release keeps game-specific Bonfire-native online data under
+consistent Loader names:
 
 ```text
 Loader\DS1SeamlessCoop\
@@ -86,56 +95,122 @@ Loader\DS3SeamlessCoop\
 
 Dark Souls I and Dark Souls III still create a `SeamlessCoop\` folder inside
 the game directory during launch. That is the expected in-game runtime layout
-used by those clients. Bonfire stages it automatically from the DS1/DS3 Loader
-payloads, so players should not rename or move it by hand.
+used by those clients. Bonfire creates it automatically from the DS1/DS3 Loader
+layers, so players should not rename or move it by hand.
 
 ## Dark Souls I Unlocks
 
-For Dark Souls Remastered, Bonfire ships with the runtime layer required for
-the Dark Souls I online experience. Bonfire prepares the local client during
-launch, writes the fire password into the runtime settings, and starts
-`DarkSoulsRemastered.exe` directly through its native bridge.
+For Dark Souls Remastered, Bonfire turns the **Dark Souls I** tab into a direct
+full-session co-op launch path. It prepares its included
+`Loader\DS1SeamlessCoop\` layer, writes the selected fire password into
+`ds1sc_settings.ini`, creates the expected in-game `SeamlessCoop\` runtime
+folder, injects `ds1sc.dll`, and starts `DarkSoulsRemastered.exe` directly.
+Players do not install a separate mod or run a separate launcher.
 
-Expected Dark Souls I behavior:
+Player-facing unlocks:
 
-- The visible tab is **Dark Souls I**.
-- The supported Steam executable is `DarkSoulsRemastered.exe`.
-- The Windows release includes `Loader\DS1SeamlessCoop\`.
-- The client runtime is staged into the game `SeamlessCoop\` folder when
-  launched through Bonfire.
-- Dark Souls I runtime saves use `.co2`.
+- Seamless cooperative play across the whole game, from the tutorial through
+  the final boss.
+- Player death no longer ends the session. Dead players respawn in the same
+  world at the last bonfire they rested at.
+- Boss victories and area clears no longer send co-operators home.
+- Multiplayer fog walls and zone barriers are removed.
+- NPC dialogue and talk events are synchronized for the session.
+- Resting at a bonfire resets the world state for all connected players.
+- Progression completed online also progresses the player's own world.
+- Up to six players can share the open world together: host plus five others.
+- The runtime uses Steam's newer networking API for the co-op connection layer.
+- Co-operators can reconnect from anywhere in the world and continue the same
+  run quickly after a disconnect.
+- Light sources carried by another player also cast light locally.
+- Enemy and boss scaling is configurable through `ds1sc_settings.ini`; Bonfire
+  ships with co-op-oriented defaults.
+- Dying during a boss battle or invasion places the player into spectator limbo
+  until the party is defeated or someone rests at a bonfire.
+- Invasions are supported when `allow_invaders = 1`. During an active invasion,
+  warping and bonfire resting are blocked until the invader is defeated.
+
+Bonfire preparation:
+
+- Visible tab: **Dark Souls I**.
+- Supported Steam executable: `DarkSoulsRemastered.exe`.
+- Packaged runtime payload: `Loader\DS1SeamlessCoop\`.
+- In-game staged runtime folder: `SeamlessCoop\`.
+- Runtime save extension: `.co2`.
 
 ## Dark Souls II Unlocks
 
-For DS2 SOTFS, Bonfire ships with the online unlock layer required for the
-enhanced multiplayer experience. When DS2 is launched through Bonfire, the
-client is prepared locally and routed to the selected private server.
+For DS2 SOTFS, Bonfire ships the **DS2SeamlessCoop** unlock layer and prepares
+it through the native DS2 runtime bridge. On launch it routes the game to the
+selected fire, writes server address/port/key data, switches private-server
+saves to `.sl3`, and feeds DS2 its included online data through the virtual file
+override path. Players do not install a DS2 package by hand; joining or hosting
+through Bonfire is the installation path.
 
-This is why users only need the release package. Hosting or joining through the
-current Bonfire release is enough for the client to be ready automatically.
+Player-facing unlocks:
 
-Expected DS2 behavior:
+- Multiplayer timers are removed.
+- Multiplayer fog gates and multiplayer zone barriers are removed.
+- New characters receive the multiplayer tools at the start of the game.
+- Existing characters can obtain the multiplayer tools through Maughlin the
+  Armourer's shop instead of needing a rewritten save.
+- The selected Bonfire fire is applied automatically. Players do not edit IPs,
+  server keys, or local config files by hand.
+- DS2 Lighting Engine users are handled more cleanly: when Bonfire detects
+  DS2LE, it avoids applying its own DS2 shadow-resolution patches so the
+  lighting runtime can own that path.
 
-- New characters receive the multiplayer tools at startup.
-- Existing characters use the updated in-game acquisition path instead of being
-  retroactively rewritten.
-- The Windows release includes `Loader\DS2SeamlessCoop\`.
-- DS2 private-server saves use `.sl3`.
+Bonfire preparation:
+
+- Visible tab: **Dark Souls II**.
+- Supported Steam executable: `DarkSoulsII.exe`.
+- Packaged runtime payload: `Loader\DS2SeamlessCoop\`.
+- Runtime config: `Loader\modengine.ini`.
+- Runtime save extension: `.sl3`.
 - Server address, port, public key, save path, and DS2 unlock data are prepared
   during launch.
 
 ## Dark Souls III Unlocks
 
-For Dark Souls III, Bonfire ships with the supported runtime layer and prepares
-it automatically during launch. Users launch from Bonfire, choose a fire, and
-Bonfire handles the runtime preparation and password wiring.
+For Dark Souls III, Bonfire prepares its included `Loader\DS3SeamlessCoop\`
+layer, writes the selected fire password into `ds3sc_settings.ini`, creates the
+expected in-game `SeamlessCoop\` runtime folder, injects `ds3sc.dll`, and
+launches `DarkSoulsIII.exe` through Bonfire. Players do not install a separate
+mod or start `ds3sc_launcher.exe`.
 
-Expected Dark Souls III behavior:
+Player-facing unlocks:
 
-- The Windows release includes `Loader\DS3SeamlessCoop\`.
-- The client runtime is staged into the game `SeamlessCoop\` folder when
-  launched through Bonfire.
-- Dark Souls III runtime saves use `.co2`.
+- Seamless cooperative play across the whole game, from the tutorial through
+  the final boss.
+- Player death no longer ends the session. Dead players respawn in the same
+  world at the last bonfire they rested at.
+- Boss victories and area clears no longer send co-operators home.
+- Multiplayer fog walls and zone barriers are removed.
+- NPC dialogue and talk events are synchronized for the session.
+- Resting at a bonfire resets the world state for all connected players.
+- Progression completed online also progresses the player's own world when the
+  included runtime setting is enabled.
+- Up to six players can share the open world together: host plus five others.
+- The runtime uses Steam's newer networking API for Dark Souls III co-op.
+- Co-operators can reconnect from anywhere in the world and continue the same
+  run quickly after a disconnect.
+- Enemy and boss scaling is configurable through `ds3sc_settings.ini`.
+- If one player rests at a bonfire while others are inside boss rooms, those
+  players are removed from the boss rooms.
+- Dying during a boss battle or invasion places the player into spectator limbo
+  until the party is defeated or someone rests at a bonfire.
+- Invasions are supported when `allow_invaders = 1`. During an active invasion,
+  warping and bonfire resting are blocked until the invader is defeated.
+- Players who want to invade can use the in-game hairpin item to enter a random
+  eligible session within matchmaking range.
+
+Bonfire preparation:
+
+- Visible tab: **Dark Souls III**.
+- Supported Steam executable: `DarkSoulsIII.exe`.
+- Packaged runtime payload: `Loader\DS3SeamlessCoop\`.
+- In-game staged runtime folder: `SeamlessCoop\`.
+- Runtime save extension: `.co2`.
 
 ## Hosting A Fire
 
@@ -159,8 +234,9 @@ needed to join.
 4. Click **Travel to this fire**.
 5. Enter the password if the fire is sealed.
 
-Bonfire handles the launch and runtime preparation. Players should not need
-command lines, manual IP entry, or extra installers.
+Bonfire handles the launch and native online preparation. Players should not
+need command lines, manual IP entry, external mod installers, or separate
+launchers.
 
 ## Saves And Safety
 

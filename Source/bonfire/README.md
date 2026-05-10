@@ -17,7 +17,8 @@ Bonfire's UI exists to make private Souls online feel simple:
 - no manual WAN/LAN IP lookup for normal hosts;
 - no separate launcher workflow;
 - no direct user handling of server keys;
-- no manual game runtime setup.
+- no manual game runtime setup;
+- no external mod installation after downloading the Bonfire release.
 
 The user's main verbs are the same ones shown in the interface:
 
@@ -42,9 +43,10 @@ Server\
 ```
 
 `DS1SeamlessCoop`, `DS2SeamlessCoop`, and `DS3SeamlessCoop` are the packaged
-Bonfire payload names. DS1 and DS3 are staged into each game's normal
+Bonfire-native online layers. DS1 and DS3 are staged into each game's normal
 `SeamlessCoop\` runtime folder at launch because those clients expect that
-in-game layout.
+in-game layout. From the user's perspective this is native Bonfire behavior:
+the UI prepares the selected game automatically when they host or join a fire.
 
 `BonfireService.exe` must sit beside `Bonfire.exe`. In development,
 `lib/state/app_state.dart` also searches common

@@ -29,6 +29,10 @@ Bonfire detects your WAN/LAN IPs, manages the server profile, handles firewall
 rules, starts the server, launches the game, and prepares the client for the
 selected fire.
 
+There is no manual mod installation step. The Dark Souls I, II, and III online
+layers included in this release are adapted to run as Bonfire-native unlocks:
+pick a fire in the UI, launch, and Bonfire prepares the game automatically.
+
 == What is included ==
 
   Bonfire.exe              Flutter desktop interface.
@@ -42,8 +46,9 @@ selected fire.
     DS3SeamlessCoop/       Dark Souls III packaged runtime payload.
   Prerequisites/           Visual C++ redistributables.
 
-The supported online runtime data is already included. Users do not need extra
-files after downloading this release.
+The supported Bonfire-native online data is already included. Users do not need
+extra files, external installers, patchers, or separate launchers after
+downloading this release.
 
 Dark Souls I and Dark Souls III may create a SeamlessCoop/ folder inside the
 game directory when launched through Bonfire. That is expected runtime staging
@@ -51,6 +56,37 @@ and should not be removed while the game is running.
 
 Keep separate saves enabled. Dark Souls I and Dark Souls III runtime saves use
 .co2, and DS2 private-server saves use .sl3.
+
+== Online unlock summary ==
+
+Dark Souls I:
+  - Full-session seamless co-op from tutorial to final boss.
+  - Death, boss clears, and area clears no longer end the co-op session.
+  - Multiplayer fog walls and zone barriers are removed.
+  - NPC dialogue, talk events, bonfire world resets, and progression sync are
+    handled by the included runtime.
+  - Up to six players can share the open world.
+  - Reconnects are streamlined, light sources sync locally, scaling is
+    configurable, and invasions are supported when enabled in settings.
+
+Dark Souls II:
+  - Multiplayer timers are removed.
+  - Multiplayer fog gates and zone barriers are removed.
+  - New characters receive the multiplayer tools at the start of the game.
+  - Existing characters can obtain the tools through Maughlin the Armourer's
+    shop.
+  - Server routing, keys, save extension, and unlock data are applied by
+    Bonfire during launch.
+
+Dark Souls III:
+  - Full-session seamless co-op from tutorial to final boss.
+  - Death, boss clears, and area clears no longer end the co-op session.
+  - Multiplayer fog walls and zone barriers are removed.
+  - NPC dialogue, talk events, bonfire world resets, and progression sync are
+    handled by the included runtime.
+  - Up to six players can share the open world.
+  - Reconnects are streamlined, scaling is configurable, boss-room bonfire
+    handling is included, and invasions are supported when enabled in settings.
 
 Full guide:
 https://github.com/Galidar/DSSeamlessCoop
