@@ -73,6 +73,22 @@ technical:
 - Launches Dark Souls I/II/III through the Bonfire runtime bridge.
 - Keeps private-server saves separate from retail saves.
 
+## Runtime Payload Names
+
+The Windows release keeps game-specific runtime data under consistent Loader
+names:
+
+```text
+Loader\DS1SeamlessCoop\
+Loader\DS2SeamlessCoop\
+Loader\DS3SeamlessCoop\
+```
+
+Dark Souls I and Dark Souls III still create a `SeamlessCoop\` folder inside
+the game directory during launch. That is the expected in-game runtime layout
+used by those clients. Bonfire stages it automatically from the DS1/DS3 Loader
+payloads, so players should not rename or move it by hand.
+
 ## Dark Souls I Unlocks
 
 For Dark Souls Remastered, Bonfire ships with the runtime layer required for
@@ -84,7 +100,7 @@ Expected Dark Souls I behavior:
 
 - The visible tab is **Dark Souls I**.
 - The supported Steam executable is `DarkSoulsRemastered.exe`.
-- The Windows release includes `Loader\Ds1SeamlessCoop\`.
+- The Windows release includes `Loader\DS1SeamlessCoop\`.
 - The client runtime is staged into the game `SeamlessCoop\` folder when
   launched through Bonfire.
 - Dark Souls I runtime saves use `.co2`.
@@ -103,6 +119,7 @@ Expected DS2 behavior:
 - New characters receive the multiplayer tools at startup.
 - Existing characters use the updated in-game acquisition path instead of being
   retroactively rewritten.
+- The Windows release includes `Loader\DS2SeamlessCoop\`.
 - DS2 private-server saves use `.sl3`.
 - Server address, port, public key, save path, and DS2 unlock data are prepared
   during launch.
@@ -115,7 +132,7 @@ Bonfire handles the runtime preparation and password wiring.
 
 Expected Dark Souls III behavior:
 
-- The Windows release includes `Loader\SeamlessCoop\`.
+- The Windows release includes `Loader\DS3SeamlessCoop\`.
 - The client runtime is staged into the game `SeamlessCoop\` folder when
   launched through Bonfire.
 - Dark Souls III runtime saves use `.co2`.
@@ -185,6 +202,9 @@ also forward the required ports on your router or hosting provider.
 
 Make sure you are launching through the current Bonfire release, not directly
 through Steam. The release must contain the `Loader\` folder from `windows.zip`.
+For Dark Souls I and Dark Souls III, seeing `SeamlessCoop\` inside the game
+directory after a Bonfire launch is normal; Bonfire recreates that runtime
+folder from `Loader\DS1SeamlessCoop\` or `Loader\DS3SeamlessCoop\`.
 
 ### DS2 launches without the unlock behavior
 

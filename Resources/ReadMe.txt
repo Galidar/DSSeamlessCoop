@@ -37,10 +37,17 @@ selected fire.
   data/                    Flutter assets and compiled Dart code.
   Server/                  Private multiplayer server and WebUI files.
   Loader/                  Runtime bridge and game online unlock data.
+    DS1SeamlessCoop/       Dark Souls I packaged runtime payload.
+    DS2SeamlessCoop/       Dark Souls II packaged runtime payload.
+    DS3SeamlessCoop/       Dark Souls III packaged runtime payload.
   Prerequisites/           Visual C++ redistributables.
 
 The supported online runtime data is already included. Users do not need extra
 files after downloading this release.
+
+Dark Souls I and Dark Souls III may create a SeamlessCoop/ folder inside the
+game directory when launched through Bonfire. That is expected runtime staging
+and should not be removed while the game is running.
 
 Keep separate saves enabled. Dark Souls I and Dark Souls III runtime saves use
 .co2, and DS2 private-server saves use .sl3.

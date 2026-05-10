@@ -7,11 +7,18 @@ public sealed record Ds3SeamlessPayload(
 
 public static class Ds3SeamlessPayloadResolver
 {
-    public const string RootDirectoryName = "SeamlessCoop";
+    public const string BundledRootDirectoryName = "DS3SeamlessCoop";
+    public const string RuntimeRootDirectoryName = "SeamlessCoop";
     public const string DllName = "ds3sc.dll";
     public const string LauncherName = "ds3sc_launcher.exe";
+    private const string LegacyBundledRootDirectoryName = "SeamlessCoop";
     private const string LegacyLauncherSha256 =
         "EE7C8F74751154DF84E587F6A8204CF257744A813A3D3F43FACED7B502678A48";
+    private static readonly string[] BundledRootDirectoryNames =
+    {
+        BundledRootDirectoryName,
+        LegacyBundledRootDirectoryName,
+    };
 
     public static Ds3SeamlessPayload? Resolve(string configuredPath, string ds3ExePath)
     {
@@ -54,7 +61,7 @@ public static class Ds3SeamlessPayloadResolver
             return false;
         }
 
-        var targetRoot = Path.Combine(gameDir, RootDirectoryName);
+        var targetRoot = Path.Combine(gameDir, RuntimeRootDirectoryName);
         var targetDll = Path.Combine(targetRoot, DllName);
         var targetLauncher = Path.Combine(gameDir, LauncherName);
 
@@ -159,12 +166,15 @@ public static class Ds3SeamlessPayloadResolver
         if (!string.IsNullOrWhiteSpace(configuredPath))
             yield return configuredPath;
 
-        yield return Path.Combine(Paths.InstallRoot, "Loader", RootDirectoryName);
-        yield return Path.Combine(Paths.ServiceDirectory, "Loader", RootDirectoryName);
+        foreach (var bundledRootDirectoryName in BundledRootDirectoryNames)
+        {
+            yield return Path.Combine(Paths.InstallRoot, "Loader", bundledRootDirectoryName);
+            yield return Path.Combine(Paths.ServiceDirectory, "Loader", bundledRootDirectoryName);
+        }
 
         var gameDir = Path.GetDirectoryName(ds3ExePath);
         if (!string.IsNullOrEmpty(gameDir))
-            yield return Path.Combine(gameDir, RootDirectoryName);
+            yield return Path.Combine(gameDir, RuntimeRootDirectoryName);
     }
 
     private static Ds3SeamlessPayload? ResolveOne(string path)
@@ -190,16 +200,28 @@ public static class Ds3SeamlessPayloadResolver
         else if (Directory.Exists(path))
         {
             var directDll = Path.Combine(path, DllName);
-            var nestedRoot = Path.Combine(path, RootDirectoryName);
-            var nestedDll = Path.Combine(nestedRoot, DllName);
+            var nestedRuntimeRoot = Path.Combine(path, RuntimeRootDirectoryName);
+            var nestedRuntimeDll = Path.Combine(nestedRuntimeRoot, DllName);
 
             if (File.Exists(directDll))
             {
                 root = path;
             }
-            else if (File.Exists(nestedDll))
+            else
             {
-                root = nestedRoot;
+                foreach (var bundledRootDirectoryName in BundledRootDirectoryNames)
+                {
+                    var nestedBundledRoot = Path.Combine(path, bundledRootDirectoryName);
+                    var nestedBundledDll = Path.Combine(nestedBundledRoot, DllName);
+                    if (File.Exists(nestedBundledDll))
+                    {
+                        root = nestedBundledRoot;
+                        break;
+                    }
+                }
+
+                if (root is null && File.Exists(nestedRuntimeDll))
+                    root = nestedRuntimeRoot;
             }
         }
 
@@ -210,11 +232,12 @@ public static class Ds3SeamlessPayloadResolver
         if (!File.Exists(dll))
             return null;
 
-        var bundledRoot = Path.Combine(Paths.InstallRoot, "Loader", RootDirectoryName);
+        var bundledRoot = Path.Combine(Paths.InstallRoot, "Loader", BundledRootDirectoryName);
+        var legacyBundledRoot = Path.Combine(Paths.InstallRoot, "Loader", LegacyBundledRootDirectoryName);
         return new Ds3SeamlessPayload(
             root,
             dll,
-            SamePath(root, bundledRoot));
+            SamePath(root, bundledRoot) || SamePath(root, legacyBundledRoot));
     }
 
     private static void CopyDirectory(string sourceDir, string targetDir)

@@ -96,7 +96,7 @@ public static class GameLauncher
         //
         // Seamless Co-op must be present before the game starts its game
         // code. Yui's launchers do this by creating the game suspended,
-        // injecting SeamlessCoop\<game>sc.dll, then resuming the main thread.
+        // injecting the staged Seamless runtime DLL, then resuming the main thread.
         //
         // For non-Seamless launches, keep the original Loader behavior:
         // plain ZERO_FLAG. Earlier we tried CREATE_BREAKAWAY_FROM_JOB on the

@@ -103,7 +103,7 @@ namespace
     {
         if (configured_path.empty())
         {
-            return s_game_root / "ds2multoverhaul";
+            return s_game_root / "DS2SeamlessCoop";
         }
 
         std::wstring wide_path = WidenString(configured_path);

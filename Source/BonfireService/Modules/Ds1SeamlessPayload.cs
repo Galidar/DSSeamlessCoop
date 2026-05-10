@@ -7,12 +7,18 @@ public sealed record Ds1SeamlessPayload(
 
 public static class Ds1SeamlessPayloadResolver
 {
-    public const string BundledRootDirectoryName = "Ds1SeamlessCoop";
+    public const string BundledRootDirectoryName = "DS1SeamlessCoop";
     public const string RuntimeRootDirectoryName = "SeamlessCoop";
     public const string DllName = "ds1sc.dll";
     public const string LauncherName = "ds1sc_launcher.exe";
+    private const string LegacyBundledRootDirectoryName = "Ds1SeamlessCoop";
     private const string LegacyLauncherSha256 =
         "448A819B43A3DDF85761F3D3348696E8457EB48DBCC2A7C467D571DBA64B8F74";
+    private static readonly string[] BundledRootDirectoryNames =
+    {
+        BundledRootDirectoryName,
+        LegacyBundledRootDirectoryName,
+    };
 
     public static Ds1SeamlessPayload? Resolve(string configuredPath, string ds1ExePath)
     {
@@ -154,8 +160,11 @@ public static class Ds1SeamlessPayloadResolver
         if (!string.IsNullOrWhiteSpace(configuredPath))
             yield return configuredPath;
 
-        yield return Path.Combine(Paths.InstallRoot, "Loader", BundledRootDirectoryName);
-        yield return Path.Combine(Paths.ServiceDirectory, "Loader", BundledRootDirectoryName);
+        foreach (var bundledRootDirectoryName in BundledRootDirectoryNames)
+        {
+            yield return Path.Combine(Paths.InstallRoot, "Loader", bundledRootDirectoryName);
+            yield return Path.Combine(Paths.ServiceDirectory, "Loader", bundledRootDirectoryName);
+        }
 
         var gameDir = Path.GetDirectoryName(ds1ExePath);
         if (!string.IsNullOrEmpty(gameDir))
@@ -187,8 +196,6 @@ public static class Ds1SeamlessPayloadResolver
             var directDll = Path.Combine(path, DllName);
             var nestedRuntimeRoot = Path.Combine(path, RuntimeRootDirectoryName);
             var nestedRuntimeDll = Path.Combine(nestedRuntimeRoot, DllName);
-            var nestedBundledRoot = Path.Combine(path, BundledRootDirectoryName);
-            var nestedBundledDll = Path.Combine(nestedBundledRoot, DllName);
 
             if (File.Exists(directDll))
             {
@@ -198,9 +205,18 @@ public static class Ds1SeamlessPayloadResolver
             {
                 root = nestedRuntimeRoot;
             }
-            else if (File.Exists(nestedBundledDll))
+            else
             {
-                root = nestedBundledRoot;
+                foreach (var bundledRootDirectoryName in BundledRootDirectoryNames)
+                {
+                    var nestedBundledRoot = Path.Combine(path, bundledRootDirectoryName);
+                    var nestedBundledDll = Path.Combine(nestedBundledRoot, DllName);
+                    if (File.Exists(nestedBundledDll))
+                    {
+                        root = nestedBundledRoot;
+                        break;
+                    }
+                }
             }
         }
 
@@ -212,10 +228,11 @@ public static class Ds1SeamlessPayloadResolver
             return null;
 
         var bundledRoot = Path.Combine(Paths.InstallRoot, "Loader", BundledRootDirectoryName);
+        var legacyBundledRoot = Path.Combine(Paths.InstallRoot, "Loader", LegacyBundledRootDirectoryName);
         return new Ds1SeamlessPayload(
             root,
             dll,
-            SamePath(root, bundledRoot));
+            SamePath(root, bundledRoot) || SamePath(root, legacyBundledRoot));
     }
 
     private static void CopyDirectory(string sourceDir, string targetDir)

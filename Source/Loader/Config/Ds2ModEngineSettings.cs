@@ -15,6 +15,9 @@ namespace Loader
 {
     public sealed class Ds2ModEngineSettings
     {
+        private const string OverrideDirectoryName = "DS2SeamlessCoop";
+        private const string LegacyOverrideDirectoryName = "ds2multoverhaul";
+
         public bool EnableModFileOverrides { get; init; }
         public string ModOverrideDirectory { get; init; } = "";
         public bool CacheModFilePaths { get; init; } = true;
@@ -45,9 +48,15 @@ namespace Loader
                 envOverride,
             };
             if (!string.IsNullOrEmpty(injectorDir))
-                candidates.Add(Path.Combine(injectorDir, "ds2multoverhaul"));
+            {
+                candidates.Add(Path.Combine(injectorDir, OverrideDirectoryName));
+                candidates.Add(Path.Combine(injectorDir, LegacyOverrideDirectoryName));
+            }
             if (!string.IsNullOrEmpty(exeDir))
-                candidates.Add(Path.Combine(exeDir, "ds2multoverhaul"));
+            {
+                candidates.Add(Path.Combine(exeDir, OverrideDirectoryName));
+                candidates.Add(Path.Combine(exeDir, LegacyOverrideDirectoryName));
+            }
 
             foreach (var baseDir in new[]
             {
@@ -61,7 +70,8 @@ namespace Loader
                 foreach (var releaseDir in Directory.EnumerateDirectories(
                              baseDir, "DS2*Multiplayer Overhaul - Version 1.0.4a*"))
                 {
-                    candidates.Add(Path.Combine(releaseDir, "ds2multoverhaul"));
+                    candidates.Add(Path.Combine(releaseDir, OverrideDirectoryName));
+                    candidates.Add(Path.Combine(releaseDir, LegacyOverrideDirectoryName));
                 }
             }
 
@@ -125,8 +135,12 @@ namespace Loader
             if (IsDs2OverrideRoot(fullPath))
                 return fullPath;
 
-            var nested = Path.Combine(fullPath, "ds2multoverhaul");
-            return IsDs2OverrideRoot(nested) ? nested : "";
+            var nested = Path.Combine(fullPath, OverrideDirectoryName);
+            if (IsDs2OverrideRoot(nested))
+                return nested;
+
+            var legacyNested = Path.Combine(fullPath, LegacyOverrideDirectoryName);
+            return IsDs2OverrideRoot(legacyNested) ? legacyNested : "";
         }
 
         private static bool IsDs2OverrideRoot(string path)

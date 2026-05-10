@@ -14,9 +14,9 @@
 ::       Injector.dll
 ::       Injector.pdb
 ::       modengine.ini              -- DS2 runtime data loader config
-::       ds2multoverhaul\           -- DS2 online unlock data
-::       Ds1SeamlessCoop\           -- DS1 online unlock runtime
-::       SeamlessCoop\              -- DS3 online unlock runtime
+::       DS1SeamlessCoop\           -- DS1 online unlock runtime
+::       DS2SeamlessCoop\           -- DS2 online unlock data
+::       DS3SeamlessCoop\           -- DS3 online unlock runtime
 ::     Server\
 ::       Server.exe
 ::       Server.pdb
@@ -64,6 +64,6 @@ if errorlevel 1 (
     echo ERROR: failed to copy Loader payload bundle into Loader\
     exit /b 1
 )
-mkdir DSSeamlessCoop\Loader\SeamlessCoop\crashdumps\attachments
-mkdir DSSeamlessCoop\Loader\SeamlessCoop\crashdumps\reports
+if not exist DSSeamlessCoop\Loader\DS3SeamlessCoop\crashdumps\attachments mkdir DSSeamlessCoop\Loader\DS3SeamlessCoop\crashdumps\attachments
+if not exist DSSeamlessCoop\Loader\DS3SeamlessCoop\crashdumps\reports mkdir DSSeamlessCoop\Loader\DS3SeamlessCoop\crashdumps\reports
 echo Loader payload bundled into DSSeamlessCoop\Loader\

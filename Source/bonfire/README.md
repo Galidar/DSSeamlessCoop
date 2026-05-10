@@ -34,12 +34,17 @@ A packaged release keeps these pieces beside each other:
 Bonfire.exe
 BonfireService.exe
 Loader\
-  Ds1SeamlessCoop\
-  SeamlessCoop\
-  ds2multoverhaul\
+  DS1SeamlessCoop\
+  DS2SeamlessCoop\
+  DS3SeamlessCoop\
 Server\
   Server.exe
 ```
+
+`DS1SeamlessCoop`, `DS2SeamlessCoop`, and `DS3SeamlessCoop` are the packaged
+Bonfire payload names. DS1 and DS3 are staged into each game's normal
+`SeamlessCoop\` runtime folder at launch because those clients expect that
+in-game layout.
 
 `BonfireService.exe` must sit beside `Bonfire.exe`. In development,
 `lib/state/app_state.dart` also searches common
