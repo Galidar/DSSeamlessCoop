@@ -365,6 +365,8 @@ class AppState extends ChangeNotifier {
   int? updateBytesTotal;
   String updatePhase = '';
   String? updateError;
+  DateTime? updateLastCheckedAt;
+  bool updateNoticeVisible = false;
 
   Future<void> refreshAll() async {
     await Future.wait([
@@ -588,13 +590,27 @@ class AppState extends ChangeNotifier {
   Future<void> refreshUpdateStatus({bool silent = false}) async {
     if (updateChecking || updateInstalling) return;
     updateChecking = true;
-    if (!silent) updateError = null;
+    if (!silent) {
+      updateError = null;
+      updateNoticeVisible = true;
+    }
     notifyListeners();
     try {
       final raw = await _rpc.call('app.update_status');
-      updateStatus =
-          raw is Map<String, dynamic> ? AppUpdateStatus.fromJson(raw) : null;
-      updateError = null;
+      if (raw is Map<String, dynamic>) {
+        updateStatus = AppUpdateStatus.fromJson(raw);
+        updateLastCheckedAt = DateTime.now();
+        updateError = null;
+        if (updateStatus?.updateAvailable ?? false) {
+          updateNoticeVisible = true;
+        }
+      } else {
+        updateStatus = null;
+        if (!silent) {
+          updateError =
+              'Could not resolve the latest DSSeamlessCoop release from GitHub.';
+        }
+      }
     } catch (e) {
       if (!silent) updateError = e.toString();
     } finally {
@@ -610,11 +626,13 @@ class AppState extends ChangeNotifier {
     updateBytesReceived = 0;
     updateBytesTotal = null;
     updateError = null;
+    updateNoticeVisible = true;
     notifyListeners();
     try {
       final raw = await _rpc.call('app.apply_update', {'ui_pid': pid});
       if (raw is! Map<String, dynamic>) return false;
       updateStatus = AppUpdateStatus.fromJson(raw);
+      updateLastCheckedAt = DateTime.now();
       return raw['restart_required'] as bool? ?? false;
     } catch (e) {
       updateError = e.toString();
@@ -671,6 +689,12 @@ class AppState extends ChangeNotifier {
     await refreshAll();
   }
 
+  void dismissUpdateNotice() {
+    updateNoticeVisible = false;
+    updateError = null;
+    notifyListeners();
+  }
+
   void _onNotification(RpcNotification n) {
     switch (n.method) {
       case 'download.progress':
@@ -688,6 +712,7 @@ class AppState extends ChangeNotifier {
         updateBytesReceived = recv;
         updateBytesTotal = total;
         updateProgress = (total != null && total > 0) ? recv / total : null;
+        updateNoticeVisible = true;
         notifyListeners();
         break;
     }

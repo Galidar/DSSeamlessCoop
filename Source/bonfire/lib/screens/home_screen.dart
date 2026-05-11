@@ -656,106 +656,209 @@ class _UpdateBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final app = context.watch<AppState>();
     final status = app.updateStatus;
+    final hasUpdate = status?.updateAvailable ?? false;
     final showBanner = app.updateInstalling ||
-        (status?.updateAvailable ?? false) ||
-        app.updateError != null;
+        hasUpdate ||
+        app.updateError != null ||
+        (app.updateNoticeVisible && (app.updateChecking || status != null));
     if (!showBanner) return const SizedBox.shrink();
 
     final p = Palette.of(context);
     final progress = app.updateProgress;
     final recv = app.updateBytesReceived ?? 0;
     final total = app.updateBytesTotal;
+    final checkingOnly = app.updateChecking && !app.updateInstalling;
+    final isError = app.updateError != null;
+    final isCurrent = !checkingOnly &&
+        !app.updateInstalling &&
+        !isError &&
+        status != null &&
+        !hasUpdate;
+    final tone = isError
+        ? p.err
+        : isCurrent
+            ? p.ok
+            : p.accent;
+    final title = isError
+        ? 'Update check failed'
+        : app.updateInstalling
+            ? 'Updating Bonfire'
+            : checkingOnly
+                ? 'Checking for updates'
+                : hasUpdate
+                    ? 'Bonfire ${status?.latestVersion ?? ''} is available'
+                    : 'Bonfire is up to date';
+    final subtitle = isError
+        ? app.updateError!
+        : app.updateInstalling
+            ? '${_phaseLabel(app.updatePhase)} - ${status?.assetName ?? 'release package'}'
+            : checkingOnly
+                ? 'Contacting GitHub releases for DSSeamlessCoop.'
+                : hasUpdate
+                    ? 'Installed ${status?.currentVersion ?? 'unknown'} -> ${status?.latestVersion ?? 'latest'}'
+                    : 'Installed ${status?.currentVersion ?? 'unknown'} - latest ${status?.latestVersion ?? 'latest'}';
 
     return Padding(
       padding: const EdgeInsets.only(bottom: Sp.lg),
       child: BonfireCard(
         background: p.surfaceHi,
-        borderColor: app.updateError != null ? p.err : p.accent,
+        borderColor: tone,
         padding: const EdgeInsets.all(Sp.lg),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            Row(
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final narrow = constraints.maxWidth < 620;
+            final action = _buildAction(context, app, hasUpdate, isError);
+            final close = app.updateInstalling
+                ? null
+                : IconButton(
+                    tooltip: 'Dismiss update notice',
+                    onPressed: app.dismissUpdateNotice,
+                    icon: const Icon(Icons.close, size: IS.md),
+                    color: p.textMuted,
+                  );
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                Icon(
-                  app.updateError != null
-                      ? Icons.error_outline
-                      : Icons.system_update_alt,
-                  color: app.updateError != null ? p.err : p.accent,
-                  size: IS.lg,
+                Row(
+                  children: [
+                    Icon(
+                      isError
+                          ? Icons.error_outline
+                          : isCurrent
+                              ? Icons.check_circle_outline
+                              : Icons.system_update_alt,
+                      color: tone,
+                      size: IS.lg,
+                    ),
+                    const SizedBox(width: Sp.md),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(title,
+                              style: BT.heading.copyWith(color: p.textPrimary)),
+                          const SizedBox(height: 2),
+                          Text(subtitle,
+                              style:
+                                  BT.caption.copyWith(color: p.textSecondary)),
+                        ],
+                      ),
+                    ),
+                    if (!narrow && action != null) ...[
+                      const SizedBox(width: Sp.md),
+                      action,
+                    ],
+                    if (!narrow && close != null) close,
+                  ],
                 ),
-                const SizedBox(width: Sp.md),
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
+                if (narrow && (action != null || close != null)) ...[
+                  const SizedBox(height: Sp.md),
+                  Wrap(
+                    spacing: Sp.sm,
+                    runSpacing: Sp.sm,
+                    alignment: WrapAlignment.end,
                     children: [
-                      Text(
-                        app.updateError != null
-                            ? 'Update check failed'
-                            : app.updateInstalling
-                                ? 'Updating Bonfire'
-                                : 'New Bonfire update available',
-                        style: BT.heading.copyWith(color: p.textPrimary),
-                      ),
-                      const SizedBox(height: 2),
-                      Text(
-                        app.updateError != null
-                            ? app.updateError!
-                            : 'Installed ${status?.currentVersion ?? 'unknown'} -> ${status?.latestVersion ?? 'latest'}',
-                        style: BT.caption.copyWith(color: p.textSecondary),
-                      ),
+                      if (action != null) action,
+                      if (close != null) close,
                     ],
                   ),
-                ),
-                const SizedBox(width: Sp.md),
-                if (app.updateError != null)
-                  OutlinedButton.icon(
-                    onPressed: app.updateChecking
-                        ? null
-                        : () => app.refreshUpdateStatus(),
-                    icon: const Icon(Icons.refresh, size: IS.sm),
-                    label: const Text('Try again'),
-                  )
-                else
-                  FilledButton.icon(
-                    onPressed: app.updateInstalling
-                        ? null
-                        : () => _applyAppUpdate(context),
-                    icon: const Icon(Icons.download, size: IS.sm),
-                    label: Text(
-                        app.updateInstalling ? 'Downloading' : 'Update now'),
+                ],
+                if (app.updateInstalling) ...[
+                  const SizedBox(height: Sp.md),
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(R.sm),
+                    child: LinearProgressIndicator(
+                      value: progress,
+                      minHeight: 6,
+                    ),
                   ),
+                  const SizedBox(height: Sp.xs),
+                  Text(
+                    total != null
+                        ? '${_formatMb(recv)} / ${_formatMb(total)}'
+                        : _formatMb(recv),
+                    style: BT.monoMuted.copyWith(color: p.textMuted),
+                  ),
+                ] else if (status != null) ...[
+                  const SizedBox(height: Sp.sm),
+                  Wrap(
+                    spacing: Sp.lg,
+                    runSpacing: Sp.xs,
+                    children: [
+                      if (status.assetName.isNotEmpty)
+                        _UpdateFact(
+                            icon: Icons.archive_outlined,
+                            text: status.assetName),
+                      if (status.assetSize > 0)
+                        _UpdateFact(
+                            icon: Icons.sd_storage_outlined,
+                            text: _formatMb(status.assetSize)),
+                      if (app.updateLastCheckedAt != null)
+                        _UpdateFact(
+                            icon: Icons.schedule,
+                            text: _formatChecked(app.updateLastCheckedAt!)),
+                    ],
+                  ),
+                ],
               ],
-            ),
-            if (app.updateInstalling) ...[
-              const SizedBox(height: Sp.md),
-              ClipRRect(
-                borderRadius: BorderRadius.circular(R.sm),
-                child: LinearProgressIndicator(
-                  value: progress,
-                  minHeight: 6,
-                ),
-              ),
-              const SizedBox(height: Sp.xs),
-              Text(
-                total != null
-                    ? '${_formatMb(recv)} / ${_formatMb(total)}'
-                    : _formatMb(recv),
-                style: BT.monoMuted.copyWith(color: p.textMuted),
-              ),
-            ] else if (status != null && status.assetName.isNotEmpty) ...[
-              const SizedBox(height: Sp.sm),
-              Text(status.assetName,
-                  style: BT.monoMuted.copyWith(color: p.textMuted)),
-            ],
-          ],
+            );
+          },
         ),
       ),
     );
   }
 
+  static Widget? _buildAction(
+    BuildContext context,
+    AppState app,
+    bool hasUpdate,
+    bool isError,
+  ) {
+    if (app.updateInstalling || app.updateChecking) {
+      return null;
+    }
+    if (isError) {
+      return OutlinedButton.icon(
+        onPressed: () => app.refreshUpdateStatus(),
+        icon: const Icon(Icons.refresh, size: IS.sm),
+        label: const Text('Try again'),
+      );
+    }
+    if (hasUpdate) {
+      return FilledButton.icon(
+        onPressed: () => _applyAppUpdate(context),
+        icon: const Icon(Icons.download, size: IS.sm),
+        label: const Text('Update now'),
+      );
+    }
+    return OutlinedButton.icon(
+      onPressed: () => app.refreshUpdateStatus(),
+      icon: const Icon(Icons.refresh, size: IS.sm),
+      label: const Text('Check again'),
+    );
+  }
+
+  static String _phaseLabel(String phase) {
+    switch (phase) {
+      case 'downloading':
+        return 'Downloading';
+      default:
+        return 'Preparing';
+    }
+  }
+
   static String _formatMb(int bytes) =>
       '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+
+  static String _formatChecked(DateTime checkedAt) {
+    final diff = DateTime.now().difference(checkedAt);
+    if (diff.inSeconds < 60) return 'checked just now';
+    if (diff.inMinutes < 60) return 'checked ${diff.inMinutes}m ago';
+    final h = checkedAt.hour.toString().padLeft(2, '0');
+    final m = checkedAt.minute.toString().padLeft(2, '0');
+    return 'checked at $h:$m';
+  }
 
   static Future<void> _applyAppUpdate(BuildContext context) async {
     final app = context.read<AppState>();
@@ -784,6 +887,34 @@ class _UpdateBanner extends StatelessWidget {
         ),
       );
     }
+  }
+}
+
+class _UpdateFact extends StatelessWidget {
+  final IconData icon;
+  final String text;
+  const _UpdateFact({required this.icon, required this.text});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return ConstrainedBox(
+      constraints: const BoxConstraints(maxWidth: 360),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Icon(icon, size: IS.sm, color: p.textMuted),
+          const SizedBox(width: Sp.xs),
+          Flexible(
+            child: Text(
+              text,
+              overflow: TextOverflow.ellipsis,
+              style: BT.monoMuted.copyWith(color: p.textMuted),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 }
 
