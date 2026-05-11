@@ -6,7 +6,7 @@ on:
       version:
         description: 'Version (e.g. 0.2.0)'
         required: true
-        default: '2.4.0'
+        default: '2.5.0'
       version_postfix:
         description: 'Version postfix (e.g. -galidar)'
         required: false
@@ -51,6 +51,7 @@ jobs:
           echo "postfix=${POSTFIX}" >> "$GITHUB_OUTPUT"
           echo "full=${FULL}" >> "$GITHUB_OUTPUT"
           echo "tag=v${FULL}" >> "$GITHUB_OUTPUT"
+          echo "asset_name=DSSeamlessCoop_V${FULL}.zip" >> "$GITHUB_OUTPUT"
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4
@@ -111,13 +112,13 @@ jobs:
         uses: vimtor/action-zip@v1.2
         with:
           files: DSSeamlessCoop/
-          dest: windows.zip
+          dest: ${{ steps.version.outputs.asset_name }}
 
       - name: Upload Build Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: windows
-          path: ./windows.zip
+          name: ${{ steps.version.outputs.asset_name }}
+          path: ./${{ steps.version.outputs.asset_name }}
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
@@ -128,7 +129,7 @@ jobs:
             Automated build from `${{ github.sha }}`.
 
             ## How to install
-            1. Download `windows.zip` below.
+            1. Download `${{ steps.version.outputs.asset_name }}` below.
             2. Extract anywhere (e.g. `C:\DSSeamlessCoop\`).
             3. Run `Bonfire.exe` (accept the UAC prompt — admin is required for firewall and runtime preparation).
             4. Pick the **Dark Souls I**, **Dark Souls II**, or **Dark Souls III** tab → **+ New bonfire** → follow the firewall/runtime prompts → **Light the bonfire**.
@@ -136,6 +137,6 @@ jobs:
             See the [README](https://github.com/${{ github.repository }}/blob/main/README.md) for full setup details.
           draft: false
           prerelease: ${{ contains(steps.version.outputs.full, '-') }}
-          files: ./windows.zip
+          files: ./${{ steps.version.outputs.asset_name }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

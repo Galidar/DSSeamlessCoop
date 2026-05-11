@@ -28,7 +28,7 @@ or unreachable.
   online hub focused on speed, comfort, and unlocks that feel natural to use.
 - **The trilogy in one place.** Host and join fires for Dark Souls I, Dark
   Souls II, and Dark Souls III from the same interface.
-- **One release, a few clicks.** Download `windows.zip`, extract it, run
+- **One release, a few clicks.** Download `DSSeamlessCoop_V*.zip`, extract it, run
   `Bonfire.exe`, and use the interface.
 - **Fast hosting.** Create a fire, set its name/password/visibility, and click
   **Light the bonfire**. Bonfire prepares the profile, applies firewall rules,
@@ -53,7 +53,7 @@ or unreachable.
 
 ## Quick Start
 
-1. Download the latest `windows.zip` from the
+1. Download the latest `DSSeamlessCoop_V*.zip` from the
    [Releases page](https://github.com/Galidar/DSSeamlessCoop/releases/latest).
 2. Extract it anywhere, for example `C:\Bonfire\`.
 3. Run `Bonfire.exe` and accept the UAC prompt.
@@ -350,7 +350,7 @@ be enough because traffic never reaches your router from the public internet.
 ### Dark Souls I or III launches without the online runtime
 
 Make sure you are launching through the current Bonfire release, not directly
-through Steam. The release must contain the `Loader\` folder from `windows.zip`.
+through Steam. The release must contain the `Loader\` folder from the release zip.
 For Dark Souls I and Dark Souls III, seeing `SeamlessCoop\` inside the game
 directory after a Bonfire launch is normal; Bonfire recreates that runtime
 folder from `Loader\DS1SeamlessCoop\` or `Loader\DS3SeamlessCoop\`.
@@ -358,7 +358,7 @@ folder from `Loader\DS1SeamlessCoop\` or `Loader\DS3SeamlessCoop\`.
 ### DS2 launches without the unlock behavior
 
 Make sure you are launching through the current Bonfire release, not directly
-through Steam. The release must contain the `Loader\` folder from `windows.zip`.
+through Steam. The release must contain the `Loader\` folder from the release zip.
 The generated runtime log should show DS2 preparation succeeding.
 
 ### I have several fires
@@ -411,7 +411,7 @@ Tools\generate_package_windows.bat
 ```
 
 The release workflow in `.github/workflows/release.yml` performs the same build
-and publishes `windows.zip`.
+and publishes `DSSeamlessCoop_V<version>.zip`.
 
 ## Repository Layout
 

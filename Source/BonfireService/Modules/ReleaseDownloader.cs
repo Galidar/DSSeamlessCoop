@@ -1,5 +1,5 @@
 /*
- * Downloads the latest release windows.zip from the fork's GitHub repo
+ * Downloads the latest DSSeamlessCoop_V*.zip release from the fork's GitHub repo
  * and extracts it into the install root. Progress is reported via a
  * callback so the RPC layer can forward `download.progress` notifications
  * to the Flutter UI.
@@ -15,7 +15,8 @@ namespace Bonfire.Service.Modules;
 public sealed class ReleaseDownloader
 {
     public const string Repo = "Galidar/DSSeamlessCoop";
-    public const string AssetName = "windows.zip";
+    public const string AssetNamePrefix = "DSSeamlessCoop_V";
+    public const string LegacyAssetName = "windows.zip";
 
     public sealed record ReleaseInfo(string TagName, string AssetUrl, long AssetSize);
 
@@ -46,7 +47,7 @@ public sealed class ReleaseDownloader
                 var name = asset.TryGetProperty("name", out var nameEl)
                     ? nameEl.GetString()
                     : null;
-                if (!string.Equals(name, AssetName, StringComparison.Ordinal))
+                if (!IsReleaseAssetName(name))
                     continue;
 
                 var url = asset.TryGetProperty("browser_download_url", out var urlEl)
@@ -68,6 +69,14 @@ public sealed class ReleaseDownloader
         {
             return null;
         }
+    }
+
+    private static bool IsReleaseAssetName(string? name)
+    {
+        return string.Equals(name, LegacyAssetName, StringComparison.Ordinal) ||
+               (!string.IsNullOrEmpty(name) &&
+                name.StartsWith(AssetNamePrefix, StringComparison.Ordinal) &&
+                name.EndsWith(".zip", StringComparison.Ordinal));
     }
 
     public static async Task<bool> DownloadAsync(

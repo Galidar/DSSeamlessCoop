@@ -1,4 +1,4 @@
-:: Builds the windows.zip release layout. Run from repo root after
+:: Builds the Windows release layout. Run from repo root after
 :: building C++ (Server, Injector) into Bin\x64_release\, building the
 :: Flutter Bonfire app into Source\bonfire\build\windows\x64\runner\Release\,
 :: and publishing BonfireService into Source\bonfire\build\bonfire_service\.
@@ -28,7 +28,7 @@
 ::
 :: Release-time Loader payloads live in Resources\Loader\ and are xcopied
 :: straight into DSSeamlessCoop\Loader\ at packaging time. End users get a
-:: single windows.zip with everything bundled inside it.
+:: single DSSeamlessCoop_V*.zip with everything bundled inside it.
 
 mkdir DSSeamlessCoop
 mkdir DSSeamlessCoop\Loader
@@ -57,7 +57,7 @@ ren DSSeamlessCoop\bonfire.exe Bonfire.exe
 xcopy /s /y Source\bonfire\build\bonfire_service\BonfireService.exe DSSeamlessCoop\
 
 :: Loader payload bundle (committed under Resources\Loader\). Produces a
-:: single-download windows.zip with client preparation data pre-installed,
+:: single-download DSSeamlessCoop_V*.zip with client preparation data pre-installed,
 :: so end users don't need to fetch or configure anything separately.
 xcopy /s /e /y Resources\Loader\ DSSeamlessCoop\Loader\
 if errorlevel 1 (

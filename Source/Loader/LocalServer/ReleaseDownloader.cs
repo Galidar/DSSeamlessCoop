@@ -1,7 +1,7 @@
 /*
  * Dark Souls - Open Server (Galidar fork)
  *
- * Downloads the latest release windows.zip from a public GitHub repository
+ * Downloads the latest DSSeamlessCoop_V*.zip release from a public GitHub repository
  * and extracts it next to the Loader executable. Progress callbacks are
  * marshalled back to the caller so the wizard can drive a progress bar.
  */
@@ -18,10 +18,13 @@ namespace Loader.LocalServer
 {
     public class ReleaseDownloader
     {
+        private const string AssetNamePrefix = "DSSeamlessCoop_V";
+        private const string LegacyAssetName = "windows.zip";
+
         public string Repo { get; }
         public string AssetName { get; }
 
-        public ReleaseDownloader(string repo, string assetName = "windows.zip")
+        public ReleaseDownloader(string repo, string assetName = null)
         {
             Repo = repo;
             AssetName = assetName;
@@ -50,14 +53,23 @@ namespace Loader.LocalServer
 
                     var tag = ReadJsonString(json, "tag_name");
 
-                    // Find the asset block matching AssetName, then read its url + size.
+                    // Find the release zip asset, then read its url + size.
                     // The assets array is well-formed JSON; a regex over the asset object
                     // is good enough since names/urls/sizes are simple scalars.
                     var assetPattern = new Regex(
-                        "\\{[^{}]*\"name\"\\s*:\\s*\"" + Regex.Escape(AssetName) + "\"[^{}]*\\}",
+                        "\"name\"\\s*:\\s*\"(?<name>(?:\\\\.|[^\"\\\\])*)\"(?<block>.*?)(?=\"name\"\\s*:|\\]\\s*,\\s*\"tarball_url\")",
                         RegexOptions.Singleline);
-                    var match = assetPattern.Match(json);
-                    if (!match.Success) return null;
+                    Match match = null;
+                    foreach (Match candidate in assetPattern.Matches(json))
+                    {
+                        var name = Regex.Unescape(candidate.Groups["name"].Value);
+                        if (IsReleaseAssetName(name))
+                        {
+                            match = candidate;
+                            break;
+                        }
+                    }
+                    if (match == null || !match.Success) return null;
 
                     var block = match.Value;
                     var url = ReadJsonString(block, "browser_download_url");
@@ -73,6 +85,17 @@ namespace Loader.LocalServer
             {
                 return null;
             }
+        }
+
+        private bool IsReleaseAssetName(string name)
+        {
+            if (!string.IsNullOrEmpty(AssetName))
+                return string.Equals(name, AssetName, StringComparison.Ordinal);
+
+            return string.Equals(name, LegacyAssetName, StringComparison.Ordinal) ||
+                   (!string.IsNullOrEmpty(name) &&
+                    name.StartsWith(AssetNamePrefix, StringComparison.Ordinal) &&
+                    name.EndsWith(".zip", StringComparison.Ordinal));
         }
 
         /// <summary>

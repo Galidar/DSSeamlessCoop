@@ -795,7 +795,7 @@ namespace Loader.Forms
                 DownloadDetailLabel.Text = "";
                 DownloadProgress.Value = 0;
 
-                var dl = new ReleaseDownloader(ReleaseRepo, "windows.zip");
+                var dl = new ReleaseDownloader(ReleaseRepo);
                 ReleaseDownloader.ReleaseInfo info = null;
                 await Task.Run(() => info = dl.QueryLatest());
 
