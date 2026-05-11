@@ -1,6 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <assembly manifestVersion="1.0" xmlns="urn:schemas-microsoft-com:asm.v1">
-  <assemblyIdentity version="2.4.0.0" name="BonfireService"/>
+  <!-- Manifest identity is intentionally stable; product version comes from VERSION via MSBuild. -->
+  <assemblyIdentity version="1.0.0.0" name="BonfireService"/>
   <trustInfo xmlns="urn:schemas-microsoft-com:asm.v2">
     <security>
       <requestedPrivileges xmlns="urn:schemas-microsoft-com:asm.v3">

@@ -29,6 +29,31 @@ public static class Methods
             };
         });
 
+        // ----- app updates -----
+        server.Register("app.update_status", async (_, ct) =>
+        {
+            var status = await AppUpdater.QueryStatusAsync(ct);
+            return status is null ? null : UpdateStatusJson(status);
+        });
+
+        server.Register("app.apply_update", async (@params, ct) =>
+        {
+            var uiPid = @params.GetInt("ui_pid") ?? 0;
+            var status = await AppUpdater.StageAndLaunchAsync(uiPid, (recv, total) =>
+            {
+                _ = server.NotifyAsync("app.update_progress", new JsonObject
+                {
+                    ["phase"] = "downloading",
+                    ["bytes_received"] = recv,
+                    ["bytes_total"] = total,
+                });
+            }, ct);
+
+            var result = UpdateStatusJson(status);
+            result["restart_required"] = status.UpdateAvailable;
+            return result;
+        });
+
         // ----- network -----
         server.Register("network.detect_ips", async (_, ct) =>
         {
@@ -40,6 +65,21 @@ public static class Methods
                 ["lan"] = lan,
             };
         });
+
+        static JsonObject UpdateStatusJson(AppUpdater.UpdateStatus status)
+        {
+            return new JsonObject
+            {
+                ["current_version"] = status.CurrentVersion,
+                ["latest_version"] = status.LatestVersion,
+                ["latest_tag"] = status.LatestTag,
+                ["release_url"] = status.ReleaseUrl,
+                ["asset_name"] = status.AssetName,
+                ["asset_url"] = status.AssetUrl,
+                ["asset_size"] = status.AssetSize,
+                ["update_available"] = status.UpdateAvailable,
+            };
+        }
 
         // ----- firewall -----
         server.Register("firewall.status", async (_, _) =>

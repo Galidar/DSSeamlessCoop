@@ -18,7 +18,12 @@ public sealed class ReleaseDownloader
     public const string AssetNamePrefix = "DSSeamlessCoop_V";
     public const string LegacyAssetName = "windows.zip";
 
-    public sealed record ReleaseInfo(string TagName, string AssetUrl, long AssetSize);
+    public sealed record ReleaseInfo(
+        string TagName,
+        string ReleaseUrl,
+        string AssetName,
+        string AssetUrl,
+        long AssetSize);
 
     public static async Task<ReleaseInfo?> QueryLatestAsync(CancellationToken ct = default)
     {
@@ -36,6 +41,9 @@ public sealed class ReleaseDownloader
             var root = doc.RootElement;
             var tag = root.TryGetProperty("tag_name", out var tagEl)
                 ? tagEl.GetString() ?? ""
+                : "";
+            var releaseUrl = root.TryGetProperty("html_url", out var htmlUrlEl)
+                ? htmlUrlEl.GetString() ?? ""
                 : "";
 
             if (!root.TryGetProperty("assets", out var assets) ||
@@ -60,7 +68,7 @@ public sealed class ReleaseDownloader
 
                 return string.IsNullOrEmpty(url)
                     ? null
-                    : new ReleaseInfo(tag, url, size);
+                    : new ReleaseInfo(tag, releaseUrl, name ?? "", url, size);
             }
 
             return null;

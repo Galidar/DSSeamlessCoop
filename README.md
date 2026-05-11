@@ -30,6 +30,8 @@ or unreachable.
   Souls II, and Dark Souls III from the same interface.
 - **One release, a few clicks.** Download `DSSeamlessCoop_V*.zip`, extract it, run
   `Bonfire.exe`, and use the interface.
+- **Updates from inside Bonfire.** The app checks GitHub releases, notifies when
+  a newer build is available, and can download, apply, and restart into it.
 - **Fast hosting.** Create a fire, set its name/password/visibility, and click
   **Light the bonfire**. Bonfire prepares the profile, applies firewall rules,
   starts the server, registers the fire, and launches the game.
@@ -412,6 +414,10 @@ Tools\generate_package_windows.bat
 
 The release workflow in `.github/workflows/release.yml` performs the same build
 and publishes `DSSeamlessCoop_V<version>.zip`.
+
+The canonical app version lives in `VERSION`. Local builds, Windows executable
+metadata, BonfireService, and the release workflow all stamp from that file
+unless a tagged release or manual workflow input overrides it.
 
 ## Repository Layout
 

@@ -302,6 +302,7 @@ class _Header extends StatelessWidget {
                     const Spacer(),
                     // Per-profile status + actions live in the MY BONFIRES rows;
                     // header is reserved for app-wide affordances only.
+                    const _UpdateHeaderButton(),
                     _IconBtn(
                       icon: Icons.help_outline,
                       tooltip: 'How to use Bonfire',
@@ -324,6 +325,57 @@ class _Header extends StatelessWidget {
           ),
         );
       },
+    );
+  }
+}
+
+class _UpdateHeaderButton extends StatelessWidget {
+  const _UpdateHeaderButton();
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    final hasUpdate = app.updateStatus?.updateAvailable ?? false;
+    return Tooltip(
+      message: hasUpdate ? 'Update available' : 'Check for updates',
+      child: InkWell(
+        onTap: app.updateChecking ? null : () => app.refreshUpdateStatus(),
+        borderRadius: BorderRadius.circular(R.pill),
+        child: SizedBox(
+          width: 28,
+          height: 28,
+          child: Stack(
+            alignment: Alignment.center,
+            children: [
+              if (app.updateChecking)
+                const SizedBox(
+                  width: 14,
+                  height: 14,
+                  child: CircularProgressIndicator(strokeWidth: 1.5),
+                )
+              else
+                Icon(
+                  Icons.system_update_alt,
+                  size: IS.md,
+                  color: hasUpdate ? BonfireColors.warn : BonfireColors.accent,
+                ),
+              if (hasUpdate && !app.updateChecking)
+                Positioned(
+                  right: 4,
+                  top: 4,
+                  child: Container(
+                    width: 7,
+                    height: 7,
+                    decoration: BoxDecoration(
+                      color: BonfireColors.err,
+                      borderRadius: BorderRadius.circular(R.pill),
+                    ),
+                  ),
+                ),
+            ],
+          ),
+        ),
+      ),
     );
   }
 }
@@ -531,6 +583,8 @@ class _ServerListView extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.fromLTRB(Sp.xl, Sp.lg, Sp.xl, Sp.lg),
       children: [
+        const _UpdateBanner(),
+
         // ───── MY BONFIRES ─────
         Builder(builder: (ctx) {
           final p = Palette.of(ctx);
@@ -594,6 +648,144 @@ class _ServerListView extends StatelessWidget {
 }
 
 // ────────── Your bonfires section: local profile rows ──────────
+
+class _UpdateBanner extends StatelessWidget {
+  const _UpdateBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    final status = app.updateStatus;
+    final showBanner = app.updateInstalling ||
+        (status?.updateAvailable ?? false) ||
+        app.updateError != null;
+    if (!showBanner) return const SizedBox.shrink();
+
+    final p = Palette.of(context);
+    final progress = app.updateProgress;
+    final recv = app.updateBytesReceived ?? 0;
+    final total = app.updateBytesTotal;
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Sp.lg),
+      child: BonfireCard(
+        background: p.surfaceHi,
+        borderColor: app.updateError != null ? p.err : p.accent,
+        padding: const EdgeInsets.all(Sp.lg),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(
+                  app.updateError != null
+                      ? Icons.error_outline
+                      : Icons.system_update_alt,
+                  color: app.updateError != null ? p.err : p.accent,
+                  size: IS.lg,
+                ),
+                const SizedBox(width: Sp.md),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Text(
+                        app.updateError != null
+                            ? 'Update check failed'
+                            : app.updateInstalling
+                                ? 'Updating Bonfire'
+                                : 'New Bonfire update available',
+                        style: BT.heading.copyWith(color: p.textPrimary),
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        app.updateError != null
+                            ? app.updateError!
+                            : 'Installed ${status?.currentVersion ?? 'unknown'} -> ${status?.latestVersion ?? 'latest'}',
+                        style: BT.caption.copyWith(color: p.textSecondary),
+                      ),
+                    ],
+                  ),
+                ),
+                const SizedBox(width: Sp.md),
+                if (app.updateError != null)
+                  OutlinedButton.icon(
+                    onPressed: app.updateChecking
+                        ? null
+                        : () => app.refreshUpdateStatus(),
+                    icon: const Icon(Icons.refresh, size: IS.sm),
+                    label: const Text('Try again'),
+                  )
+                else
+                  FilledButton.icon(
+                    onPressed: app.updateInstalling
+                        ? null
+                        : () => _applyAppUpdate(context),
+                    icon: const Icon(Icons.download, size: IS.sm),
+                    label: Text(
+                        app.updateInstalling ? 'Downloading' : 'Update now'),
+                  ),
+              ],
+            ),
+            if (app.updateInstalling) ...[
+              const SizedBox(height: Sp.md),
+              ClipRRect(
+                borderRadius: BorderRadius.circular(R.sm),
+                child: LinearProgressIndicator(
+                  value: progress,
+                  minHeight: 6,
+                ),
+              ),
+              const SizedBox(height: Sp.xs),
+              Text(
+                total != null
+                    ? '${_formatMb(recv)} / ${_formatMb(total)}'
+                    : _formatMb(recv),
+                style: BT.monoMuted.copyWith(color: p.textMuted),
+              ),
+            ] else if (status != null && status.assetName.isNotEmpty) ...[
+              const SizedBox(height: Sp.sm),
+              Text(status.assetName,
+                  style: BT.monoMuted.copyWith(color: p.textMuted)),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+
+  static String _formatMb(int bytes) =>
+      '${(bytes / (1024 * 1024)).toStringAsFixed(1)} MB';
+
+  static Future<void> _applyAppUpdate(BuildContext context) async {
+    final app = context.read<AppState>();
+    try {
+      final restart = await app.applyAppUpdate();
+      if (!context.mounted) return;
+      if (!restart) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(content: Text('Bonfire is already up to date.')),
+        );
+        return;
+      }
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Update ready. Bonfire will restart.')),
+      );
+      await Future<void>.delayed(const Duration(milliseconds: 500));
+      await app.rpc.close();
+      exit(0);
+    } catch (e) {
+      if (!context.mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          backgroundColor: BonfireColors.err,
+          content: Text(e.toString()),
+        ),
+      );
+    }
+  }
+}
 
 class _KindleButton extends StatelessWidget {
   final String gameType;
@@ -1721,7 +1913,7 @@ class _BottomBar extends StatelessWidget {
           const EdgeInsets.symmetric(horizontal: Sp.xl, vertical: Sp.sm + 2),
       child: Row(
         children: [
-          Text('Bonfire v2.4.0',
+          Text('Bonfire v${app.updateStatus?.currentVersion ?? 'unknown'}',
               style: BT.caption.copyWith(color: p.textMuted)),
           const SizedBox(width: Sp.lg),
           if (selected != null)

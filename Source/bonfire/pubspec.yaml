@@ -1,7 +1,9 @@
 name: bonfire
 description: Bonfire - Galidar's Dark Souls online server hub.
 publish_to: 'none'
-version: 2.4.0+9
+# Bonfire release version lives in ../../VERSION. The Windows runner stamps
+# executable metadata from that file during CMake configure.
+version: 0.0.0+0
 
 environment:
   sdk: ^3.5.4

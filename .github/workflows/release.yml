@@ -4,9 +4,9 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version (e.g. 0.2.0)'
-        required: true
-        default: '2.5.0'
+        description: 'Version override. Leave empty to use VERSION.'
+        required: false
+        default: ''
       version_postfix:
         description: 'Version postfix (e.g. -galidar)'
         required: false
@@ -46,12 +46,23 @@ jobs:
             VERSION="${{ github.event.inputs.version }}"
             POSTFIX="${{ github.event.inputs.version_postfix }}"
           fi
+          if [[ -z "${VERSION}" ]]; then
+            VERSION="$(tr -d '[:space:]' < VERSION)"
+          fi
+          if [[ -z "${VERSION}" ]]; then
+            echo "Version is empty. Set VERSION or pass a workflow input." >&2
+            exit 1
+          fi
           FULL="${VERSION}${POSTFIX}"
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "postfix=${POSTFIX}" >> "$GITHUB_OUTPUT"
           echo "full=${FULL}" >> "$GITHUB_OUTPUT"
           echo "tag=v${FULL}" >> "$GITHUB_OUTPUT"
           echo "asset_name=DSSeamlessCoop_V${FULL}.zip" >> "$GITHUB_OUTPUT"
+
+      - name: Stamp Build Version
+        shell: bash
+        run: printf '%s\n' '${{ steps.version.outputs.full }}' > VERSION
 
       - name: Setup .NET
         uses: actions/setup-dotnet@v4

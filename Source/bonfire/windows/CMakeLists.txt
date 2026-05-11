@@ -49,6 +49,31 @@ endfunction()
 set(FLUTTER_MANAGED_DIR "${CMAKE_CURRENT_SOURCE_DIR}/flutter")
 add_subdirectory(${FLUTTER_MANAGED_DIR})
 
+# Keep Windows executable version metadata in sync with the repo-level VERSION
+# file instead of duplicating the release number in pubspec.yaml or Runner.rc.
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/../../../VERSION" BONFIRE_VERSION_RAW)
+string(STRIP "${BONFIRE_VERSION_RAW}" BONFIRE_VERSION)
+string(REGEX REPLACE "[-+].*$" "" BONFIRE_VERSION_NUMERIC "${BONFIRE_VERSION}")
+string(REPLACE "." ";" BONFIRE_VERSION_PARTS "${BONFIRE_VERSION_NUMERIC}")
+list(LENGTH BONFIRE_VERSION_PARTS BONFIRE_VERSION_PART_COUNT)
+if(BONFIRE_VERSION_PART_COUNT GREATER 0)
+  list(GET BONFIRE_VERSION_PARTS 0 FLUTTER_VERSION_MAJOR)
+else()
+  set(FLUTTER_VERSION_MAJOR 0)
+endif()
+if(BONFIRE_VERSION_PART_COUNT GREATER 1)
+  list(GET BONFIRE_VERSION_PARTS 1 FLUTTER_VERSION_MINOR)
+else()
+  set(FLUTTER_VERSION_MINOR 0)
+endif()
+if(BONFIRE_VERSION_PART_COUNT GREATER 2)
+  list(GET BONFIRE_VERSION_PARTS 2 FLUTTER_VERSION_PATCH)
+else()
+  set(FLUTTER_VERSION_PATCH 0)
+endif()
+set(FLUTTER_VERSION "${BONFIRE_VERSION}")
+set(FLUTTER_VERSION_BUILD 0)
+
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
 

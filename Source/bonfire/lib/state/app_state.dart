@@ -137,6 +137,39 @@ class FirewallStatus {
       FirewallStatus(allInstalled: j['all_installed'] as bool? ?? false);
 }
 
+class AppUpdateStatus {
+  final String currentVersion;
+  final String latestVersion;
+  final String latestTag;
+  final String releaseUrl;
+  final String assetName;
+  final String assetUrl;
+  final int assetSize;
+  final bool updateAvailable;
+
+  AppUpdateStatus({
+    required this.currentVersion,
+    required this.latestVersion,
+    required this.latestTag,
+    required this.releaseUrl,
+    required this.assetName,
+    required this.assetUrl,
+    required this.assetSize,
+    required this.updateAvailable,
+  });
+
+  factory AppUpdateStatus.fromJson(Map<String, dynamic> j) => AppUpdateStatus(
+        currentVersion: j['current_version'] as String? ?? 'unknown',
+        latestVersion: j['latest_version'] as String? ?? '',
+        latestTag: j['latest_tag'] as String? ?? '',
+        releaseUrl: j['release_url'] as String? ?? '',
+        assetName: j['asset_name'] as String? ?? '',
+        assetUrl: j['asset_url'] as String? ?? '',
+        assetSize: (j['asset_size'] as num?)?.toInt() ?? 0,
+        updateAvailable: j['update_available'] as bool? ?? false,
+      );
+}
+
 class Profile {
   final String id;
   final String name;
@@ -256,10 +289,17 @@ class PublicServer {
 
 class AppState extends ChangeNotifier {
   AppState(this._rpc) {
-    _rpc.notifications.listen(_onNotification);
+    _notificationSub = _rpc.notifications.listen(_onNotification);
+    scheduleMicrotask(() => refreshUpdateStatus(silent: true));
+    _updateTimer = Timer.periodic(
+      const Duration(minutes: 30),
+      (_) => refreshUpdateStatus(silent: true),
+    );
   }
 
   final RpcClient _rpc;
+  late final StreamSubscription<RpcNotification> _notificationSub;
+  Timer? _updateTimer;
 
   // Convenience accessors for screens.
   RpcClient get rpc => _rpc;
@@ -315,6 +355,16 @@ class AppState extends ChangeNotifier {
   double? downloadProgress;
   int? downloadBytesReceived;
   int? downloadBytesTotal;
+
+  // App update status/progress.
+  AppUpdateStatus? updateStatus;
+  bool updateChecking = false;
+  bool updateInstalling = false;
+  double? updateProgress;
+  int? updateBytesReceived;
+  int? updateBytesTotal;
+  String updatePhase = '';
+  String? updateError;
 
   Future<void> refreshAll() async {
     await Future.wait([
@@ -535,6 +585,50 @@ class AppState extends ChangeNotifier {
     await refreshFirewall();
   }
 
+  Future<void> refreshUpdateStatus({bool silent = false}) async {
+    if (updateChecking || updateInstalling) return;
+    updateChecking = true;
+    if (!silent) updateError = null;
+    notifyListeners();
+    try {
+      final raw = await _rpc.call('app.update_status');
+      updateStatus =
+          raw is Map<String, dynamic> ? AppUpdateStatus.fromJson(raw) : null;
+      updateError = null;
+    } catch (e) {
+      if (!silent) updateError = e.toString();
+    } finally {
+      updateChecking = false;
+      notifyListeners();
+    }
+  }
+
+  Future<bool> applyAppUpdate() async {
+    updateInstalling = true;
+    updatePhase = 'downloading';
+    updateProgress = 0;
+    updateBytesReceived = 0;
+    updateBytesTotal = null;
+    updateError = null;
+    notifyListeners();
+    try {
+      final raw = await _rpc.call('app.apply_update', {'ui_pid': pid});
+      if (raw is! Map<String, dynamic>) return false;
+      updateStatus = AppUpdateStatus.fromJson(raw);
+      return raw['restart_required'] as bool? ?? false;
+    } catch (e) {
+      updateError = e.toString();
+      rethrow;
+    } finally {
+      updateInstalling = false;
+      updatePhase = '';
+      updateProgress = null;
+      updateBytesReceived = null;
+      updateBytesTotal = null;
+      notifyListeners();
+    }
+  }
+
   Future<void> installLatest() async {
     downloadProgress = 0;
     downloadBytesReceived = 0;
@@ -587,7 +681,23 @@ class AppState extends ChangeNotifier {
         downloadProgress = (total != null && total > 0) ? recv / total : null;
         notifyListeners();
         break;
+      case 'app.update_progress':
+        final recv = (n.params?['bytes_received'] as num?)?.toInt() ?? 0;
+        final total = (n.params?['bytes_total'] as num?)?.toInt();
+        updatePhase = n.params?['phase'] as String? ?? 'downloading';
+        updateBytesReceived = recv;
+        updateBytesTotal = total;
+        updateProgress = (total != null && total > 0) ? recv / total : null;
+        notifyListeners();
+        break;
     }
+  }
+
+  @override
+  void dispose() {
+    _updateTimer?.cancel();
+    _notificationSub.cancel();
+    super.dispose();
   }
 }
 

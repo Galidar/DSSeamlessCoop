@@ -3,9 +3,11 @@
 
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:provider/provider.dart';
 
 import '../design.dart';
 import '../palette.dart';
+import '../state/app_state.dart';
 import '../theme.dart';
 import '../widgets/brand_mark.dart';
 
@@ -21,6 +23,8 @@ class _AboutDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    final version =
+        context.watch<AppState>().updateStatus?.currentVersion ?? 'unknown';
     return Dialog(
       backgroundColor: p.surface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(R.md)),
@@ -46,7 +50,7 @@ class _AboutDialog extends StatelessWidget {
                               fontWeight: FontWeight.w600,
                               letterSpacing: 0,
                               color: p.textPrimary)),
-                      Text('v2.4.0',
+                      Text('v$version',
                           style: TextStyle(
                               fontSize: 12,
                               color: p.textMuted,
