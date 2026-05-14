@@ -1,8 +1,11 @@
 /*
- * Dark Souls II ModEngine-style data package detection.
+ * Dark Souls II optional ModEngine-style data package detection.
  *
  * This is shared by the WinForms Loader and BonfireService so both launch paths
- * generate the same injector config for DS2 overhaul packages.
+ * generate the same injector config when an external DS2 overhaul package is
+ * explicitly selected. Bonfire only auto-loads its minimal DS2BonfireRuntime
+ * item/text layer; stale bundled overhaul folders still require an explicit
+ * path or environment override.
  */
 
 using System;
@@ -16,6 +19,7 @@ namespace Loader
     public sealed class Ds2ModEngineSettings
     {
         private const string OverrideDirectoryName = "DS2SeamlessCoop";
+        private const string NativeRuntimeOverrideDirectoryName = "DS2BonfireRuntime";
         private const string LegacyOverrideDirectoryName = "ds2multoverhaul";
 
         public bool EnableModFileOverrides { get; init; }
@@ -34,46 +38,19 @@ namespace Loader
             if (!string.Equals(gameType, "DarkSouls2", StringComparison.OrdinalIgnoreCase))
                 return new Ds2ModEngineSettings();
 
-            var exeDir = string.IsNullOrWhiteSpace(exePath)
-                ? ""
-                : Path.GetDirectoryName(exePath) ?? "";
-            var injectorDir = string.IsNullOrWhiteSpace(injectorPath)
-                ? ""
-                : Path.GetDirectoryName(injectorPath) ?? "";
             var envOverride = Environment.GetEnvironmentVariable("DS2_OVERHAUL_DIR");
+            var loaderRoot = string.IsNullOrWhiteSpace(injectorPath)
+                ? ""
+                : Path.GetDirectoryName(Path.GetFullPath(injectorPath));
+            var bundledRuntimeOverride = string.IsNullOrEmpty(loaderRoot)
+                ? null
+                : Path.Combine(loaderRoot, NativeRuntimeOverrideDirectoryName);
 
             var candidates = new List<string?>
             {
                 explicitOverridePath,
                 envOverride,
             };
-            if (!string.IsNullOrEmpty(injectorDir))
-            {
-                candidates.Add(Path.Combine(injectorDir, OverrideDirectoryName));
-                candidates.Add(Path.Combine(injectorDir, LegacyOverrideDirectoryName));
-            }
-            if (!string.IsNullOrEmpty(exeDir))
-            {
-                candidates.Add(Path.Combine(exeDir, OverrideDirectoryName));
-                candidates.Add(Path.Combine(exeDir, LegacyOverrideDirectoryName));
-            }
-
-            foreach (var baseDir in new[]
-            {
-                Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory),
-                Environment.GetFolderPath(Environment.SpecialFolder.MyVideos),
-            })
-            {
-                if (!Directory.Exists(baseDir))
-                    continue;
-
-                foreach (var releaseDir in Directory.EnumerateDirectories(
-                             baseDir, "DS2*Multiplayer Overhaul - Version 1.0.4a*"))
-                {
-                    candidates.Add(Path.Combine(releaseDir, OverrideDirectoryName));
-                    candidates.Add(Path.Combine(releaseDir, LegacyOverrideDirectoryName));
-                }
-            }
 
             foreach (var candidate in candidates)
             {
@@ -110,6 +87,22 @@ namespace Loader
                     DynamicSpotShadowResolution = ReadIniInt(
                         iniPath, "rendering", "dynamicSpotShadowResolution", 1024) / 2,
                 };
+            }
+
+            if (!string.IsNullOrWhiteSpace(bundledRuntimeOverride))
+            {
+                var fullPath = ResolveDs2OverrideRoot(bundledRuntimeOverride);
+                if (!string.IsNullOrEmpty(fullPath))
+                {
+                    return new Ds2ModEngineSettings
+                    {
+                        EnableModFileOverrides = true,
+                        ModOverrideDirectory = fullPath,
+                        CacheModFilePaths = true,
+                        UseAlternateSaveFile = true,
+                        EnableShadowResolutionPatches = false,
+                    };
+                }
             }
 
             return new Ds2ModEngineSettings();

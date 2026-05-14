@@ -14,9 +14,10 @@ preparation behind one desktop UI.
 
 For players, the goal is comfort: a host can create a fire in a few clicks, and
 players who join through Bonfire receive the required client preparation
-automatically during launch. There is no separate mod installation step. The
-Dark Souls I, II, and III online layers included in the release are adapted to
-run as Bonfire-native unlocks, driven by Bonfire's interface and launch flow.
+automatically during launch. There is no separate mod installation step. Dark
+Souls I and Dark Souls III ship with Bonfire-native seamless runtime payloads,
+while Dark Souls II currently uses Bonfire's private-server bridge and
+separate-save path as the new native DS2 seamless runtime is rebuilt.
 
 Under the hood, Bonfire uses advanced protocol decoding, private-server routing,
 and native runtime bridges to unlock online flows that were previously painful
@@ -43,10 +44,10 @@ or unreachable.
 - **Relay-ready hosting.** Fires can use Bonfire Relay when the host is behind
   CGNAT, double NAT, strict routers, dorm networks, or ISPs that cannot expose
   inbound ports.
-- **Bonfire-native online unlocks.** The Windows release already contains the
-  adapted Dark Souls I, II, and III online layers Bonfire needs. Users do not
-  install mods, copy folders, run patchers, or add extra packages after
-  downloading Bonfire.
+- **Bonfire-native online preparation.** The Windows release contains the DS1
+  and DS3 seamless runtime layers plus DS2 private-server launch preparation.
+  Users do not install mods, copy folders, run patchers, or add extra packages
+  after downloading Bonfire.
 - **No launcher juggling.** Bonfire prepares each game from the UI: it stages
   the needed runtime files, writes the fire password, launches the game, and
   injects the native bridge when that game needs it.
@@ -94,19 +95,21 @@ technical:
 
 ## Native Online Layers
 
-The Windows release keeps game-specific Bonfire-native online data under
+The Windows release keeps game-specific Bonfire-native runtime data under
 consistent Loader names:
 
 ```text
 Loader\DS1SeamlessCoop\
-Loader\DS2SeamlessCoop\
 Loader\DS3SeamlessCoop\
 ```
 
 Dark Souls I and Dark Souls III still create a `SeamlessCoop\` folder inside
 the game directory during launch. That is the expected in-game runtime layout
 used by those clients. Bonfire creates it automatically from the DS1/DS3 Loader
-layers, so players should not rename or move it by hand.
+layers, so players should not rename or move it by hand. DS2 no longer ships a
+loose param/map/menu data package. Its current launch path is handled by
+`Injector.dll`, `Loader\modengine.ini`, the private server, and the native
+runtime work tracked in `Docs\DS2NativeRuntime.md`.
 
 ## Dark Souls I Unlocks
 
@@ -160,37 +163,34 @@ Bonfire preparation:
   selected Bonfire fire instead of unrelated serverless events.
 - Runtime save extension: `.co2`.
 
-## Dark Souls II Unlocks
+## Dark Souls II Runtime Rebuild
 
-For DS2 SOTFS, Bonfire ships the **DS2SeamlessCoop** unlock layer and prepares
-it through the native DS2 runtime bridge. On launch it routes the game to the
-selected fire, writes server address/port/key data, switches private-server
-saves to `.sl3`, and feeds DS2 its included online data through the virtual file
-override path. Players do not install a DS2 package by hand; joining or hosting
-through Bonfire is the installation path.
+For DS2 SOTFS, Bonfire now starts from a clean native-runtime baseline instead
+of the previous loose-data **DS2SeamlessCoop** package. On launch it routes the
+game to the selected fire, writes server address/port/key data, and keeps
+private-server saves on `.sl3` when separate saves are enabled. Players do not
+install a DS2 package by hand; joining or hosting through Bonfire is still the
+launch path.
 
-Player-facing unlocks:
+Current DS2 support:
 
-- Multiplayer timers are removed.
-- Multiplayer fog gates and multiplayer zone barriers are removed.
-- New characters receive the multiplayer tools at the start of the game.
-- Existing characters can obtain the multiplayer tools through Maughlin the
-  Armourer's shop instead of needing a rewritten save.
 - The selected Bonfire fire is applied automatically. Players do not edit IPs,
   server keys, or local config files by hand.
-- DS2 Lighting Engine users are handled more cleanly: when Bonfire detects
-  DS2LE, it avoids applying its own DS2 shadow-resolution patches so the
-  lighting runtime can own that path.
+- Separate DS2 private-server saves use `.sl3`.
+- The old bundled loose param/map/menu package is removed from releases and is
+  no longer auto-detected from stale installs.
+- External DS2 overhaul data can still be used only when explicitly selected.
+- The replacement seamless-style DS2 runtime is being built in the native
+  bridge, with the first milestones documented in `Docs\DS2NativeRuntime.md`.
 
 Bonfire preparation:
 
 - Visible tab: **Dark Souls II**.
 - Supported Steam executable: `DarkSoulsII.exe`.
-- Packaged runtime payload: `Loader\DS2SeamlessCoop\`.
-- Runtime config: `Loader\modengine.ini`.
+- Packaged runtime payload: none for the old loose-data layer.
+- Runtime config: `Loader\modengine.ini` with file overrides disabled.
 - Runtime save extension: `.sl3`.
-- Server address, port, public key, save path, and DS2 unlock data are prepared
-  during launch.
+- Server address, port, public key, and save path are prepared during launch.
 
 ## Dark Souls III Unlocks
 
@@ -357,11 +357,13 @@ For Dark Souls I and Dark Souls III, seeing `SeamlessCoop\` inside the game
 directory after a Bonfire launch is normal; Bonfire recreates that runtime
 folder from `Loader\DS1SeamlessCoop\` or `Loader\DS3SeamlessCoop\`.
 
-### DS2 launches without the unlock behavior
+### DS2 launches without private-server routing
 
 Make sure you are launching through the current Bonfire release, not directly
 through Steam. The release must contain the `Loader\` folder from the release zip.
-The generated runtime log should show DS2 preparation succeeding.
+The generated runtime log should show DS2 preparation succeeding. Current DS2
+releases no longer include the old loose-data unlock package; that work is being
+replaced by the native DS2 runtime path.
 
 ### I have several fires
 
@@ -451,7 +453,7 @@ engineering work:
 - Yui, whose Dark Souls Remastered and Dark Souls III Seamless Co-op work
   provides important foundations for the Bonfire-native DS1/DS3 runtime layers.
 - Dark Souls II SOTFS online research and enhancement work that made the DS2
-  unlock layer possible.
+  private-server bridge possible.
 - [garyttierney/ds3-open-re](https://github.com/garyttierney/ds3-open-re)
 - [Jellybaby34/DkS3-Server-Emulator-Rust-Edition](https://github.com/Jellybaby34/DkS3-Server-Emulator-Rust-Edition)
 - Souls server and reverse engineering communities.

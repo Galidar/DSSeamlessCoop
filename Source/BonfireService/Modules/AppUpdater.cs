@@ -145,6 +145,15 @@ Wait-BonfireProcess $servicePid
 Start-Sleep -Milliseconds 400
 
 New-Item -ItemType Directory -Force -Path $dest | Out-Null
+$legacyDs2Payloads = @(
+  (Join-Path $dest 'Loader\DS2SeamlessCoop'),
+  (Join-Path $dest 'Loader\ds2multoverhaul')
+)
+foreach ($legacyDs2Payload in $legacyDs2Payloads) {
+  if (Test-Path -LiteralPath $legacyDs2Payload) {
+    Remove-Item -LiteralPath $legacyDs2Payload -Recurse -Force
+  }
+}
 Get-ChildItem -LiteralPath $source -Force | Copy-Item -Destination $dest -Recurse -Force
 
 try {

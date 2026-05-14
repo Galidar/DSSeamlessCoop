@@ -44,6 +44,12 @@ public sealed record LaunchResult(bool Ok, string Message, int? Pid);
 
 public static class GameLauncher
 {
+    private sealed record Ds2NativeRuntimeBridge(
+        bool Enabled,
+        string SessionId,
+        string EventLog,
+        string CommandInbox);
+
     private sealed record SeamlessLaunchPlan(
         string DllPath,
         string Label,
@@ -243,6 +249,8 @@ public static class GameLauncher
         var configPath = Path.Combine(Path.GetDirectoryName(injectorPath)!, "Injector.config");
         var ds2ModEngine = Ds2ModEngineSettings.Resolve(
             req.ExePath, injectorPath, req.GameType, req.Ds2OverhaulPath);
+        var isDarkSouls2 = string.Equals(req.GameType, "DarkSouls2", StringComparison.OrdinalIgnoreCase);
+        var ds2NativeRuntime = PrepareDs2NativeRuntimeBridge(pi, req);
         var ds2LightingEngineActive = IsDs2LightingEngineInstalled(req);
         var injectCfg = new InjectionConfig
         {
@@ -257,17 +265,66 @@ public static class GameLauncher
             EnableModFileOverrides = ds2ModEngine.EnableModFileOverrides,
             ModOverrideDirectory = ds2ModEngine.ModOverrideDirectory,
             CacheModFilePaths = ds2ModEngine.CacheModFilePaths,
-            SaveFileExtension = ds2ModEngine.UseAlternateSaveFile ? ".sl3" : ".ds3os",
+            SaveFileExtension = isDarkSouls2 ? ".sl3" : ".ds3os",
             EnableDs2ShadowResolutionPatches =
                 ds2ModEngine.EnableShadowResolutionPatches && !ds2LightingEngineActive,
             Ds2DirectionalShadowResolution = ds2ModEngine.DirectionalShadowResolution,
             Ds2DynamicAtlasShadowResolution = ds2ModEngine.DynamicAtlasShadowResolution,
             Ds2DynamicPointShadowResolution = ds2ModEngine.DynamicPointShadowResolution,
             Ds2DynamicSpotShadowResolution = ds2ModEngine.DynamicSpotShadowResolution,
+            EnableDs2NativeRuntime = ds2NativeRuntime.Enabled,
+            Ds2NativeRuntimeSessionId = ds2NativeRuntime.SessionId,
+            Ds2NativeRuntimeEventLog = ds2NativeRuntime.EventLog,
+            Ds2NativeRuntimeCommandInbox = ds2NativeRuntime.CommandInbox,
         };
         File.WriteAllText(configPath, injectCfg.ToJson());
 
         return LoadLibraryIntoProcess(pi, injectorPath, "Injector.dll", out error);
+    }
+
+    private static Ds2NativeRuntimeBridge PrepareDs2NativeRuntimeBridge(
+        PROCESS_INFORMATION pi, LaunchRequest req)
+    {
+        if (!string.Equals(req.GameType, "DarkSouls2", StringComparison.OrdinalIgnoreCase))
+            return new Ds2NativeRuntimeBridge(false, "", "", "");
+
+        var root = Path.Combine(Paths.InstallRoot, "Runtime", "DS2Native");
+        Directory.CreateDirectory(root);
+
+        var sessionId = SanitizeRuntimeId(
+            string.IsNullOrWhiteSpace(req.ServerId)
+                ? $"ds2_{pi.dwProcessId}"
+                : $"{req.ServerId}_{pi.dwProcessId}");
+        var eventLog = Path.Combine(root, $"{sessionId}.events.jsonl");
+        var commandInbox = Path.Combine(root, $"{sessionId}.commands.jsonl");
+
+        TryDelete(eventLog);
+        TryDelete(commandInbox);
+        File.WriteAllText(commandInbox, "");
+
+        return new Ds2NativeRuntimeBridge(true, sessionId, eventLog, commandInbox);
+    }
+
+    private static string SanitizeRuntimeId(string value)
+    {
+        var sb = new StringBuilder(value.Length);
+        foreach (var ch in value)
+        {
+            sb.Append(char.IsLetterOrDigit(ch) || ch == '-' || ch == '_' ? ch : '_');
+        }
+        return sb.Length == 0 ? "ds2" : sb.ToString();
+    }
+
+    private static void TryDelete(string path)
+    {
+        try
+        {
+            if (File.Exists(path))
+                File.Delete(path);
+        }
+        catch
+        {
+        }
     }
 
     private static bool IsDs2LightingEngineInstalled(LaunchRequest req)

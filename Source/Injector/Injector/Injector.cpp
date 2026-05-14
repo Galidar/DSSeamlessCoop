@@ -21,6 +21,7 @@
 
 #include "Injector/Hooks/DarkSouls3/DS3_ReplaceServerAddressHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_ReplaceServerAddressHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_NativeRuntimeHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_ModFileOverrideHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_LogProtobufsHook.h"
 #include "Injector/Hooks/Shared/ReplaceServerPortHook.h"
@@ -145,6 +146,8 @@ bool Injector::Init()
             {
                 Hooks.push_back(std::make_unique<DS2_ReplaceServerAddressHook>());
             }
+
+            Hooks.push_back(std::make_unique<DS2_NativeRuntimeHook>());
 
             if (Config.EnableModFileOverrides ||
                 Config.EnableSeperateSaveFiles ||

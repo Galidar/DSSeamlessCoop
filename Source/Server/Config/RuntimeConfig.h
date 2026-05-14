@@ -235,7 +235,7 @@ public:
 
     // Announcements that show up when a user joins the game.
     std::vector<RuntimeConfigAnnouncement> Announcements = {
-        { "DSSeamlessCoop Bonfire", "\nWelcome to Bonfire by DSSeamlessCoop.\n\nNative online unlocks are active for supported Dark Souls games. Bonfire handles server routing, session keys, runtime setup, and separate saves automatically.\n\nhttps://github.com/Galidar/DSSeamlessCoop" }
+        { "DSSeamlessCoop Bonfire", "\nWelcome to Bonfire by DSSeamlessCoop.\n\nBonfire handles server routing, session keys, runtime setup, and separate saves automatically.\n\nhttps://github.com/Galidar/DSSeamlessCoop" }
     };
 
     // How often (in seconds) between each database trim.

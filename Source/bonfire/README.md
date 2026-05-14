@@ -36,17 +36,19 @@ Bonfire.exe
 BonfireService.exe
 Loader\
   DS1SeamlessCoop\
-  DS2SeamlessCoop\
   DS3SeamlessCoop\
 Server\
   Server.exe
 ```
 
-`DS1SeamlessCoop`, `DS2SeamlessCoop`, and `DS3SeamlessCoop` are the packaged
-Bonfire-native online layers. DS1 and DS3 are staged into each game's normal
+`DS1SeamlessCoop` and `DS3SeamlessCoop` are the packaged Bonfire-native
+seamless runtime layers. DS1 and DS3 are staged into each game's normal
 `SeamlessCoop\` runtime folder at launch because those clients expect that
-in-game layout. From the user's perspective this is native Bonfire behavior:
-the UI prepares the selected game automatically when they host or join a fire.
+in-game layout. DS2 currently uses `Injector.dll` plus `modengine.ini` for the
+private-server bridge and .sl3 saves; the old bundled DS2 data package is no
+longer part of the release. From the user's perspective this is still native
+Bonfire behavior: the UI prepares the selected game automatically when they
+host or join a fire.
 
 `BonfireService.exe` must sit beside `Bonfire.exe`. In development,
 `lib/state/app_state.dart` also searches common
@@ -113,5 +115,4 @@ flutter test
 ```
 
 Full launch validation also needs a packaged layout with `BonfireService.exe`,
-`Loader\`, `Server\Server.exe`, and the bundled runtime data for the supported
-games.
+`Loader\`, `Server\Server.exe`, and the bundled runtime data for DS1/DS3.

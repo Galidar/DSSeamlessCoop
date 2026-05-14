@@ -115,6 +115,39 @@ public static class Methods
             return new JsonObject { ["success"] = ok };
         });
 
+        // ----- DS2 native runtime -----
+        server.Register("ds2_runtime.status", async (@params, _) =>
+        {
+            await Task.Yield();
+            var sessionId = @params.GetString("session_id");
+            return Ds2RuntimeStatusJson(Ds2NativeRuntimeBridge.GetStatus(sessionId));
+        });
+
+        server.Register("ds2_runtime.command", async (@params, _) =>
+        {
+            await Task.Yield();
+            var sessionId = @params.GetString("session_id");
+            var command = @params.GetString("command")
+                ?? throw new Exception("Missing DS2 native runtime command.");
+            var payload = @params?["payload"];
+            return Ds2RuntimeStatusJson(
+                Ds2NativeRuntimeBridge.SendCommand(sessionId, command, payload));
+        });
+
+        static JsonObject Ds2RuntimeStatusJson(Ds2NativeRuntimeBridge.RuntimeStatus status)
+        {
+            return new JsonObject
+            {
+                ["installed"] = status.Installed,
+                ["active"] = status.Active,
+                ["session_id"] = status.SessionId,
+                ["event_log"] = status.EventLog,
+                ["command_inbox"] = status.CommandInbox,
+                ["last_event"] = status.LastEvent,
+                ["last_write_utc"] = status.LastWriteUtc?.ToString("O"),
+            };
+        }
+
         // ----- server install / lifecycle -----
         server.Register("server.is_installed", async (_, _) =>
         {

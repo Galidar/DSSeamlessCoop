@@ -20,6 +20,20 @@ namespace
         "More information on this project is available here:\n"
         "https://github.com/Galidar/DSSeamlessCoop";
     constexpr const char* kBonfireAnnouncementHeader = "DSSeamlessCoop Bonfire";
+    constexpr const char* kLegacyBonfireAnnouncementBody =
+        "\nWelcome to Bonfire by DSSeamlessCoop.\n\n"
+        "Native online unlocks are active for supported Dark Souls games. "
+        "Bonfire handles server routing, session keys, runtime setup, and separate saves automatically.\n\n"
+        "https://github.com/Galidar/DSSeamlessCoop";
+    constexpr const char* kLegacyDS2AnnouncementBody =
+        "\nWelcome to Bonfire for Dark Souls II by DSSeamlessCoop.\n\n"
+        "Online unlocks active:\n"
+        "- Multiplayer timers removed.\n"
+        "- Multiplayer fog gates removed.\n"
+        "- Multiplayer items granted to new characters.\n"
+        "- Existing characters can buy the items from Maughlin.\n"
+        "- Bonfire handles server routing, keys, and .sl3 saves.\n\n"
+        "https://github.com/Galidar/DSSeamlessCoop";
 
     RuntimeConfigAnnouncement MakeBonfireAnnouncement(const std::string& GameType)
     {
@@ -28,12 +42,11 @@ namespace
             return {
                 kBonfireAnnouncementHeader,
                 "\nWelcome to Bonfire for Dark Souls II by DSSeamlessCoop.\n\n"
-                "Online unlocks active:\n"
-                "- Multiplayer timers removed.\n"
-                "- Multiplayer fog gates removed.\n"
-                "- Multiplayer items granted to new characters.\n"
-                "- Existing characters can buy the items from Maughlin.\n"
-                "- Bonfire handles server routing, keys, and .sl3 saves.\n\n"
+                "DS2 native runtime rebuild active:\n"
+                "- Bonfire handles private-server routing and keys.\n"
+                "- Bonfire keeps DS2 private-server saves on .sl3.\n"
+                "- The old loose-data unlock package is no longer bundled.\n"
+                "- Seamless-style DS2 runtime work continues in the native bridge.\n\n"
                 "https://github.com/Galidar/DSSeamlessCoop"
             };
         }
@@ -56,7 +69,6 @@ namespace
         return {
             kBonfireAnnouncementHeader,
             "\nWelcome to Bonfire by DSSeamlessCoop.\n\n"
-            "Native online unlocks are active for supported Dark Souls games. "
             "Bonfire handles server routing, session keys, runtime setup, and separate saves automatically.\n\n"
             "https://github.com/Galidar/DSSeamlessCoop"
         };
@@ -66,6 +78,12 @@ namespace
     {
         if (Announcement.Header == kLegacyAnnouncementHeader &&
             Announcement.Body == kLegacyAnnouncementBody)
+        {
+            return true;
+        }
+        if (Announcement.Header == kBonfireAnnouncementHeader &&
+            (Announcement.Body == kLegacyBonfireAnnouncementBody ||
+             Announcement.Body == kLegacyDS2AnnouncementBody))
         {
             return true;
         }

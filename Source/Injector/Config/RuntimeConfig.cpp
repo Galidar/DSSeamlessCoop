@@ -160,6 +160,10 @@ bool RuntimeConfig::Serialize(nlohmann::json& Json, bool Loading)
     SERIALIZE_VAR(Ds2DynamicAtlasShadowResolution);
     SERIALIZE_VAR(Ds2DynamicPointShadowResolution);
     SERIALIZE_VAR(Ds2DynamicSpotShadowResolution);
+    SERIALIZE_VAR(EnableDs2NativeRuntime);
+    SERIALIZE_VAR(Ds2NativeRuntimeSessionId);
+    SERIALIZE_VAR(Ds2NativeRuntimeEventLog);
+    SERIALIZE_VAR(Ds2NativeRuntimeCommandInbox);
 
     return true;
 }

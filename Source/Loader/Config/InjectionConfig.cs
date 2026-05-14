@@ -37,6 +37,10 @@ namespace Loader
         public int Ds2DynamicAtlasShadowResolution   { get; set; }
         public int Ds2DynamicPointShadowResolution   { get; set; }
         public int Ds2DynamicSpotShadowResolution    { get; set; }
+        public bool EnableDs2NativeRuntime           { get; set; }
+        public string Ds2NativeRuntimeSessionId      { get; set; } = "";
+        public string Ds2NativeRuntimeEventLog       { get; set; } = "";
+        public string Ds2NativeRuntimeCommandInbox   { get; set; } = "";
 
         public string ToJson()
         {

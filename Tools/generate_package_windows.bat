@@ -13,9 +13,8 @@
 ::     Loader\
 ::       Injector.dll
 ::       Injector.pdb
-::       modengine.ini              -- DS2 runtime data loader config
+::       modengine.ini              -- DS2 bridge config; data overrides disabled
 ::       DS1SeamlessCoop\           -- DS1 online unlock runtime
-::       DS2SeamlessCoop\           -- DS2 online unlock data
 ::       DS3SeamlessCoop\           -- DS3 online unlock runtime
 ::     Server\
 ::       Server.exe

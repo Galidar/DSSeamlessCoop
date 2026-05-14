@@ -695,12 +695,26 @@ namespace Loader
                 injectConfig.EnableModFileOverrides = ds2ModEngine.EnableModFileOverrides;
                 injectConfig.ModOverrideDirectory = ds2ModEngine.ModOverrideDirectory;
                 injectConfig.CacheModFilePaths = ds2ModEngine.CacheModFilePaths;
-                injectConfig.SaveFileExtension = ds2ModEngine.UseAlternateSaveFile ? ".sl3" : ".ds3os";
+                injectConfig.SaveFileExtension = Config.GameType == "DarkSouls2" ? ".sl3" : ".ds3os";
                 injectConfig.EnableDs2ShadowResolutionPatches = ds2ModEngine.EnableShadowResolutionPatches;
                 injectConfig.Ds2DirectionalShadowResolution = ds2ModEngine.DirectionalShadowResolution;
                 injectConfig.Ds2DynamicAtlasShadowResolution = ds2ModEngine.DynamicAtlasShadowResolution;
                 injectConfig.Ds2DynamicPointShadowResolution = ds2ModEngine.DynamicPointShadowResolution;
                 injectConfig.Ds2DynamicSpotShadowResolution = ds2ModEngine.DynamicSpotShadowResolution;
+                injectConfig.EnableDs2NativeRuntime = Config.GameType == "DarkSouls2";
+                if (injectConfig.EnableDs2NativeRuntime)
+                {
+                    string runtimeDir = System.IO.Path.Combine(
+                        System.IO.Path.GetDirectoryName(InjectorPath), "Runtime", "DS2Native");
+                    System.IO.Directory.CreateDirectory(runtimeDir);
+                    string runtimeSessionId = (Config.Id ?? "ds2").Replace("\\", "_").Replace("/", "_");
+                    injectConfig.Ds2NativeRuntimeSessionId = runtimeSessionId;
+                    injectConfig.Ds2NativeRuntimeEventLog = System.IO.Path.Combine(
+                        runtimeDir, runtimeSessionId + ".events.jsonl");
+                    injectConfig.Ds2NativeRuntimeCommandInbox = System.IO.Path.Combine(
+                        runtimeDir, runtimeSessionId + ".commands.jsonl");
+                    System.IO.File.WriteAllText(injectConfig.Ds2NativeRuntimeCommandInbox, "");
+                }
 
                 string json = injectConfig.ToJson();
                 File.WriteAllText(InjectorConfigPath, json);

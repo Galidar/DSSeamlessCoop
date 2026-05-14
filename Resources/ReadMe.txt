@@ -29,9 +29,10 @@ Bonfire detects your WAN/LAN IPs, manages the server profile, handles firewall
 rules, starts the server, launches the game, and prepares the client for the
 selected fire.
 
-There is no manual mod installation step. The Dark Souls I, II, and III online
-layers included in this release are adapted to run as Bonfire-native unlocks:
-pick a fire in the UI, launch, and Bonfire prepares the game automatically.
+There is no manual mod installation step. Dark Souls I and Dark Souls III ship
+with their Bonfire-native seamless runtime payloads. Dark Souls II currently
+uses Bonfire's private-server bridge and separate-save path while the new native
+DS2 seamless runtime is rebuilt.
 
 == What is included ==
 
@@ -41,14 +42,13 @@ pick a fire in the UI, launch, and Bonfire prepares the game automatically.
   data/                    Flutter assets and compiled Dart code.
   Server/                  Private multiplayer server, DS1 coordinator, and
                            WebUI files.
-  Loader/                  Runtime bridge and game online unlock data.
+  Loader/                  Runtime bridge and game launch data.
     DS1SeamlessCoop/       Dark Souls I packaged runtime payload.
-    DS2SeamlessCoop/       Dark Souls II packaged runtime payload.
     DS3SeamlessCoop/       Dark Souls III packaged runtime payload.
   Prerequisites/           Visual C++ redistributables.
 
-The supported Bonfire-native online data is already included. Users do not need
-extra files, external installers, patchers, or separate launchers after
+The supported Bonfire-native runtime data is already included. Users do not
+need extra files, external installers, patchers, or separate launchers after
 downloading this release.
 
 Dark Souls I and Dark Souls III may create a SeamlessCoop/ folder inside the
@@ -74,13 +74,11 @@ Dark Souls I:
     while the included DS1 runtime owns the Steam P2P co-op transport.
 
 Dark Souls II:
-  - Multiplayer timers are removed.
-  - Multiplayer fog gates and zone barriers are removed.
-  - New characters receive the multiplayer tools at the start of the game.
-  - Existing characters can obtain the tools through Maughlin the Armourer's
-    shop.
-  - Server routing, keys, save extension, and unlock data are applied by
-    Bonfire during launch.
+  - Bonfire routes the game to the selected private server.
+  - Server keys and session settings are prepared automatically during launch.
+  - Private-server saves use .sl3 when separate saves are enabled.
+  - The old loose-data DS2SeamlessCoop package has been removed from releases.
+  - The replacement DS2 seamless runtime is being built in the native bridge.
 
 Dark Souls III:
   - Full-session seamless co-op from tutorial to final boss.

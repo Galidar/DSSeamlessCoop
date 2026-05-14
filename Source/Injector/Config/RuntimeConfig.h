@@ -59,6 +59,13 @@ public:
     int Ds2DynamicPointShadowResolution = 256;
     int Ds2DynamicSpotShadowResolution = 512;
 
+    // Bonfire-native DS2 runtime command/event bridge. This is the first
+    // control surface for the new DS2 seamless-style runtime.
+    bool EnableDs2NativeRuntime = false;
+    std::string Ds2NativeRuntimeSessionId = "";
+    std::string Ds2NativeRuntimeEventLog = "";
+    std::string Ds2NativeRuntimeCommandInbox = "";
+
 public:
 
     bool Save(const std::filesystem::path& Path);
