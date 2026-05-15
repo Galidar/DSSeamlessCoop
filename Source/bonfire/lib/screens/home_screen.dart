@@ -590,6 +590,7 @@ class _ServerListView extends StatelessWidget {
       children: [
         const _UpdateBanner(),
         const _Ds2RuntimeBanner(),
+        const _Ds2JoinTargetBanner(),
 
         // ───── MY BONFIRES ─────
         Builder(builder: (ctx) {
@@ -2530,14 +2531,52 @@ class _Ds2NativeSessionsSection extends StatelessWidget {
   }
 }
 
-class _Ds2NativeSessionRow extends StatelessWidget {
+class _Ds2NativeSessionRow extends StatefulWidget {
   final PublicServer server;
   const _Ds2NativeSessionRow({required this.server});
 
   @override
+  State<_Ds2NativeSessionRow> createState() => _Ds2NativeSessionRowState();
+}
+
+class _Ds2NativeSessionRowState extends State<_Ds2NativeSessionRow> {
+  bool _busy = false;
+
+  Future<void> _arm(AppState app) async {
+    setState(() => _busy = true);
+    try {
+      await app.armDs2JoinTarget(widget.server.id);
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text(
+            'Target armed — next launch joins "${widget.server.name}".'),
+      ));
+    } catch (e) {
+      if (!mounted) return;
+      ScaffoldMessenger.of(context).showSnackBar(SnackBar(
+        content: Text('Could not arm join target: $e'),
+      ));
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  Future<void> _clear(AppState app) async {
+    setState(() => _busy = true);
+    try {
+      await app.clearDs2JoinTarget();
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
     final p = Palette.of(context);
+    final server = widget.server;
     final m = server.bnsManifest!;
+    final isArmed = app.ds2JoinTarget?.serverId == server.id;
 
     final modeLabel = m.mode.isEmpty ? 'session' : m.mode;
     final Color modeColor = m.isHost
@@ -2559,12 +2598,29 @@ class _Ds2NativeSessionRow extends StatelessWidget {
         _Chip(label: 'curse ${m.curseCount}', color: p.warn),
       if (m.recoveryCount > 0)
         _Chip(label: 'recover ${m.recoveryCount}', color: p.textSecondary),
+      if (isArmed) _Chip(label: 'TARGET ARMED', color: p.accent),
     ];
+
+    final Widget actionButton = isArmed
+        ? OutlinedButton.icon(
+            onPressed: _busy ? null : () => _clear(app),
+            icon: const Icon(Icons.close, size: 16),
+            label: const Text('Cancel'),
+          )
+        : FilledButton.tonal(
+            onPressed: _busy ? null : () => _arm(app),
+            child: _busy
+                ? const SizedBox(
+                    width: 14,
+                    height: 14,
+                    child: CircularProgressIndicator(strokeWidth: 2))
+                : const Text('Join'),
+          );
 
     return Padding(
       padding: const EdgeInsets.only(bottom: Sp.sm),
       child: _HoverableRow(
-        selected: false,
+        selected: isArmed,
         onTap: () {},
         child: Padding(
           padding:
@@ -2623,14 +2679,7 @@ class _Ds2NativeSessionRow extends StatelessWidget {
               const SizedBox(width: Sp.md),
               _PlayerChip(count: server.playerCount),
               const SizedBox(width: Sp.sm),
-              const Tooltip(
-                message:
-                    'Join binding ships in the next iteration — for now this entry confirms the session is advertised.',
-                child: FilledButton.tonal(
-                  onPressed: null,
-                  child: Text('Join'),
-                ),
-              ),
+              actionButton,
             ],
           ),
         ),
@@ -2658,6 +2707,73 @@ class _Chip extends StatelessWidget {
         style: BT.caption.copyWith(
           color: color,
           fontWeight: FontWeight.w500,
+        ),
+      ),
+    );
+  }
+}
+
+// ────────── DS2 Join Target banner ──────────
+//
+// Surfaces the currently-armed BNS join target so the user can see at a
+// glance that their next "Light the bonfire" / Launch on the DS2 tab
+// will redirect DS2 to that peer host instead of their local profile's
+// loopback Server.exe. Cancel button calls clearDs2JoinTarget on the
+// service so a misclicked arming can be backed out before launching.
+
+class _Ds2JoinTargetBanner extends StatelessWidget {
+  const _Ds2JoinTargetBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    if (app.publicListGameFilter != 'DarkSouls2') {
+      return const SizedBox.shrink();
+    }
+    final target = app.ds2JoinTarget;
+    if (target == null) return const SizedBox.shrink();
+
+    final p = Palette.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Sp.md),
+      child: Container(
+        padding: const EdgeInsets.symmetric(
+            horizontal: Sp.lg, vertical: Sp.md),
+        decoration: BoxDecoration(
+          color: p.accent.withValues(alpha: 0.10),
+          borderRadius: BorderRadius.circular(6),
+          border: Border.all(color: p.accent.withValues(alpha: 0.45), width: 1),
+        ),
+        child: Row(
+          children: [
+            Icon(Icons.flight_takeoff, size: IS.md, color: p.accent),
+            const SizedBox(width: Sp.md),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    'Next launch joins "${target.serverName}"',
+                    style: BT.heading.copyWith(color: p.textPrimary),
+                  ),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${target.hostname}:${target.port}  ·  '
+                    '${target.sessionMode.toUpperCase()}  ·  '
+                    'session ${target.sessionId}',
+                    style: BT.caption.copyWith(color: p.textMuted),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(width: Sp.md),
+            TextButton.icon(
+              onPressed: () => app.clearDs2JoinTarget(),
+              icon: const Icon(Icons.close, size: 16),
+              label: const Text('Cancel'),
+            ),
+          ],
         ),
       ),
     );

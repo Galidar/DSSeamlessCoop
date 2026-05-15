@@ -324,6 +324,49 @@ class Ds2NativeSessionManifest {
   bool get isInvader => mode.toLowerCase() == 'invader';
 }
 
+/// Client-side mirror of the BonfireService `Ds2NativeJoinTarget.JoinTarget`.
+/// Populated by `ds2_runtime.get_join_target` / `set_join_target` RPCs and
+/// rendered in the UI as a "TARGET ARMED" banner + chip on the matching row.
+class Ds2NativeJoinTargetSnapshot {
+  final String serverId;
+  final String serverName;
+  final String hostname;
+  final String privateHostname;
+  final int port;
+  final bool passwordSet;
+  final String gameType;
+  final String sessionId;
+  final String sessionMode;
+  final DateTime? armedAtUtc;
+
+  const Ds2NativeJoinTargetSnapshot({
+    required this.serverId,
+    required this.serverName,
+    required this.hostname,
+    required this.privateHostname,
+    required this.port,
+    required this.passwordSet,
+    required this.gameType,
+    required this.sessionId,
+    required this.sessionMode,
+    required this.armedAtUtc,
+  });
+
+  factory Ds2NativeJoinTargetSnapshot.fromJson(Map<String, dynamic> j) =>
+      Ds2NativeJoinTargetSnapshot(
+        serverId: j['server_id'] as String? ?? '',
+        serverName: j['server_name'] as String? ?? '',
+        hostname: j['hostname'] as String? ?? '',
+        privateHostname: j['private_hostname'] as String? ?? '',
+        port: (j['port'] as num?)?.toInt() ?? 0,
+        passwordSet: j['password_set'] as bool? ?? false,
+        gameType: j['game_type'] as String? ?? '',
+        sessionId: j['session_id'] as String? ?? '',
+        sessionMode: j['session_mode'] as String? ?? '',
+        armedAtUtc: DateTime.tryParse((j['armed_at_utc'] as String?) ?? ''),
+      );
+}
+
 class PublicServer {
   final String id;
   final String name;
@@ -604,6 +647,15 @@ class AppState extends ChangeNotifier {
   Ds2RuntimeSessionState? ds2RuntimeSession;
   bool ds2RuntimeNoticeVisible = false;
 
+  // DS2 Native Session join-target arming. When non-null, the next
+  // game.launch_local redirects DS2 to this peer's host/port/public-key
+  // instead of the local profile's loopback Server.exe. Single-shot:
+  // BonfireService clears it on consume, so the user must re-arm to
+  // join again. Persisted server-side as
+  // Runtime/DS2Native/join_target.json so a service restart between
+  // arming and launching does not lose the selection.
+  Ds2NativeJoinTargetSnapshot? ds2JoinTarget;
+
   Future<void> refreshAll() async {
     await Future.wait([
       refreshInstallStatus(),
@@ -616,7 +668,50 @@ class AppState extends ChangeNotifier {
       refreshSteamStatus(),
       refreshProfiles(),
       refreshDs2RuntimeStatus(),
+      refreshDs2JoinTarget(),
     ]);
+    notifyListeners();
+  }
+
+  Future<void> refreshDs2JoinTarget() async {
+    try {
+      final j = await _rpc.call('ds2_runtime.get_join_target')
+          as Map<String, dynamic>;
+      final armed = j['armed'] as bool? ?? false;
+      final target =
+          armed ? j['target'] as Map<String, dynamic>? : null;
+      ds2JoinTarget = target == null
+          ? null
+          : Ds2NativeJoinTargetSnapshot.fromJson(target);
+    } catch (_) {
+      ds2JoinTarget = null;
+    }
+    notifyListeners();
+  }
+
+  /// Arms `serverId` as the next-launch join target. Throws on failure
+  /// (server not in master list, not a DS2 native session, wrong password,
+  /// etc.) — caller renders the message to the user.
+  Future<void> armDs2JoinTarget(String serverId, {String password = ''}) async {
+    final j = await _rpc.call('ds2_runtime.set_join_target', {
+      'server_id': serverId,
+      'password': password,
+    }) as Map<String, dynamic>;
+    final armed = j['armed'] as bool? ?? false;
+    final target = armed ? j['target'] as Map<String, dynamic>? : null;
+    ds2JoinTarget = target == null
+        ? null
+        : Ds2NativeJoinTargetSnapshot.fromJson(target);
+    notifyListeners();
+  }
+
+  Future<void> clearDs2JoinTarget() async {
+    try {
+      await _rpc.call('ds2_runtime.clear_join_target');
+    } catch (_) {
+      // Best effort — UI optimistically clears local state regardless.
+    }
+    ds2JoinTarget = null;
     notifyListeners();
   }
 
