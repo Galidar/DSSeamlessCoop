@@ -10,7 +10,13 @@ public static class Ds2NativeRuntimeBridge
         string SessionId,
         string EventLog,
         string CommandInbox,
+        string ActionLog,
+        string MessageLog,
+        string StateFile,
         string LastEvent,
+        string LastAction,
+        string LastMessage,
+        string StateJson,
         DateTime? LastWriteUtc);
 
     private static string Root => Path.Combine(Paths.InstallRoot, "Runtime", "DS2Native");
@@ -22,12 +28,18 @@ public static class Ds2NativeRuntimeBridge
         var eventLog = ResolveEventLog(sessionId);
         if (string.IsNullOrEmpty(eventLog))
         {
-            return new RuntimeStatus(false, false, "", "", "", "", null);
+            return new RuntimeStatus(false, false, "", "", "", "", "", "", "", "", "", "", null);
         }
 
         var lastWrite = File.GetLastWriteTimeUtc(eventLog);
         var commandInbox = ToCommandInbox(eventLog);
+        var actionLog = ToSibling(eventLog, ".actions.jsonl");
+        var messageLog = ToSibling(eventLog, ".messages.jsonl");
+        var stateFile = ToSibling(eventLog, ".state.json");
         var lastEvent = ReadLastLine(eventLog);
+        var lastAction = File.Exists(actionLog) ? ReadLastLine(actionLog) : "";
+        var lastMessage = File.Exists(messageLog) ? ReadLastLine(messageLog) : "";
+        var stateJson = File.Exists(stateFile) ? ReadAllText(stateFile) : "";
         var active = DateTime.UtcNow - lastWrite < TimeSpan.FromSeconds(20);
 
         return new RuntimeStatus(
@@ -36,7 +48,13 @@ public static class Ds2NativeRuntimeBridge
             SessionId: FromEventLog(eventLog),
             EventLog: eventLog,
             CommandInbox: commandInbox,
+            ActionLog: actionLog,
+            MessageLog: messageLog,
+            StateFile: stateFile,
             LastEvent: lastEvent,
+            LastAction: lastAction,
+            LastMessage: lastMessage,
+            StateJson: stateJson,
             LastWriteUtc: lastWrite);
     }
 
@@ -91,6 +109,15 @@ public static class Ds2NativeRuntimeBridge
         return Path.Combine(Path.GetDirectoryName(eventLog) ?? Root, commandName);
     }
 
+    private static string ToSibling(string eventLog, string suffix)
+    {
+        var fileName = Path.GetFileName(eventLog);
+        var siblingName = fileName.EndsWith(".events.jsonl", StringComparison.OrdinalIgnoreCase)
+            ? fileName[..^".events.jsonl".Length] + suffix
+            : fileName + suffix;
+        return Path.Combine(Path.GetDirectoryName(eventLog) ?? Root, siblingName);
+    }
+
     private static string FromEventLog(string eventLog)
     {
         var fileName = Path.GetFileName(eventLog);
@@ -104,6 +131,18 @@ public static class Ds2NativeRuntimeBridge
         try
         {
             return File.ReadLines(path).LastOrDefault() ?? "";
+        }
+        catch
+        {
+            return "";
+        }
+    }
+
+    private static string ReadAllText(string path)
+    {
+        try
+        {
+            return File.ReadAllText(path);
         }
         catch
         {

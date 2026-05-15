@@ -143,9 +143,30 @@ public static class Methods
                 ["session_id"] = status.SessionId,
                 ["event_log"] = status.EventLog,
                 ["command_inbox"] = status.CommandInbox,
+                ["action_log"] = status.ActionLog,
+                ["message_log"] = status.MessageLog,
+                ["state_file"] = status.StateFile,
                 ["last_event"] = status.LastEvent,
+                ["last_action"] = status.LastAction,
+                ["last_message"] = status.LastMessage,
+                ["runtime_state"] = ParseOptionalJson(status.StateJson),
                 ["last_write_utc"] = status.LastWriteUtc?.ToString("O"),
             };
+        }
+
+        static JsonNode? ParseOptionalJson(string json)
+        {
+            if (string.IsNullOrWhiteSpace(json))
+                return null;
+
+            try
+            {
+                return JsonNode.Parse(json);
+            }
+            catch
+            {
+                return null;
+            }
         }
 
         // ----- server install / lifecycle -----
