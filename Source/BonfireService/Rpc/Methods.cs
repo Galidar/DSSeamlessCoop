@@ -134,6 +134,80 @@ public static class Methods
                 Ds2NativeRuntimeBridge.SendCommand(sessionId, command, payload));
         });
 
+        // ----- DS2 native runtime: join target arming -----
+        //
+        // Flow: Flutter's DS2 Native Sessions browser calls set_join_target
+        // with a server_id from the master listing. BonfireService validates
+        // the entry is a real BNS host (description carries the
+        // %%BNS-DS2-V1%% sentinel), snapshots its hostname/port/etc., and
+        // stores it. The next game.launch_local pops the target via
+        // Ds2NativeJoinTarget.Consume() and redirects DS2 to that endpoint
+        // instead of the local profile's loopback Server.exe. Single-shot:
+        // arming maps to one launch only.
+
+        server.Register("ds2_runtime.set_join_target", async (@params, ct) =>
+        {
+            var serverId = @params.GetString("server_id")
+                ?? throw new Exception("server_id required");
+            var password = @params.GetString("password") ?? "";
+
+            var list = await MasterServer.ListServersAsync(ct);
+            var entry = list?.FirstOrDefault(s => s.Id == serverId)
+                ?? throw new Exception(
+                    "Server " + serverId + " is not in the master listing right now.");
+            if (!string.Equals(entry.GameType, "DarkSouls2",
+                StringComparison.OrdinalIgnoreCase))
+            {
+                throw new Exception(
+                    "Target is " + entry.GameType + ", not DarkSouls2.");
+            }
+
+            var manifest = Ds2NativeSession.TryParseFromDescription(entry.Description);
+            if (manifest is null)
+            {
+                throw new Exception(
+                    "Target server is not advertising a DS2 native session " +
+                    "(no BNS sentinel in description).");
+            }
+
+            var target = new Ds2NativeJoinTarget.JoinTarget(
+                ServerId: serverId,
+                ServerName: entry.Name,
+                Hostname: entry.Hostname,
+                PrivateHostname: entry.PrivateHostname,
+                Port: entry.Port,
+                Password: password,
+                GameType: entry.GameType,
+                SessionId: manifest.SessionId,
+                SessionMode: manifest.Mode,
+                ArmedAtUtc: DateTime.UtcNow);
+            Ds2NativeJoinTarget.Set(target);
+
+            return new JsonObject
+            {
+                ["armed"] = true,
+                ["target"] = Ds2NativeJoinTarget.ToJson(target),
+            };
+        });
+
+        server.Register("ds2_runtime.clear_join_target", async (_, _) =>
+        {
+            await Task.Yield();
+            Ds2NativeJoinTarget.Clear();
+            return new JsonObject { ["armed"] = false };
+        });
+
+        server.Register("ds2_runtime.get_join_target", async (_, _) =>
+        {
+            await Task.Yield();
+            var t = Ds2NativeJoinTarget.Get();
+            return new JsonObject
+            {
+                ["armed"] = t is not null,
+                ["target"] = Ds2NativeJoinTarget.ToJson(t),
+            };
+        });
+
         static JsonObject Ds2RuntimeStatusJson(Ds2NativeRuntimeBridge.RuntimeStatus status)
         {
             return new JsonObject
@@ -845,6 +919,79 @@ public static class Methods
 
             if (!Loader.SteamUtils.IsSteamRunningAndLoggedIn())
                 throw new Exception("Steam isn't running or you're not logged in.");
+
+            // ----- DS2 Native Session join short-circuit -----
+            //
+            // If the Flutter browser armed a target via
+            // ds2_runtime.set_join_target, redirect this launch to that
+            // peer's hostname/port/public-key instead of the local
+            // profile's loopback Server.exe. Consume() is single-shot so
+            // a single arming maps to a single launch — the user has to
+            // re-arm if they relaunch.
+            //
+            // The local profile's Server.exe is intentionally left alone
+            // (it may still be running advertising the user's own session)
+            // because a guest launch shouldn't disturb the host role.
+            var armedTarget = Ds2NativeJoinTarget.Consume();
+            if (armedTarget is not null)
+            {
+                if (!string.Equals(armedTarget.GameType, meta.GameType,
+                    StringComparison.OrdinalIgnoreCase))
+                {
+                    throw new Exception(
+                        "Join target is for " + armedTarget.GameType +
+                        " but you are launching " + meta.GameType + ".");
+                }
+
+                var joinKey = (await MasterServer.GetPublicKeyAsync(
+                        armedTarget.ServerId, armedTarget.Password, ct))
+                    ?.Replace("\r\n", "\n");
+                if (string.IsNullOrEmpty(joinKey))
+                {
+                    throw new Exception(
+                        "Master server refused to give the join target's public key " +
+                        "(wrong password, or the host went offline since arming).");
+                }
+
+                var joinWan = await Network.GetPublicIpAsync(ct) ?? "";
+                var joinLan = Network.GetPrivateIp() ?? "";
+                var joinInjector =
+                    Path.Combine(Paths.InstallRoot, "Loader", "Injector.dll");
+                if (!File.Exists(joinInjector))
+                    joinInjector = Path.Combine(Paths.ServiceDirectory, "Injector.dll");
+
+                var joinReq = new Bonfire.Service.Game.LaunchRequest(
+                    ExePath: exePath,
+                    ServerId: armedTarget.ServerId,
+                    ServerName: armedTarget.ServerName,
+                    Hostname: armedTarget.Hostname,
+                    PrivateHostname: armedTarget.PrivateHostname,
+                    Port: armedTarget.Port,
+                    PublicKey: joinKey,
+                    GameType: armedTarget.GameType,
+                    EnableSeparateSaves: settings.UseSeparateSaves,
+                    Ds2OverhaulPath: settings.Ds2OverhaulPath,
+                    EnableDs1Seamless: settings.EnableDs1Seamless,
+                    Ds1SeamlessPath: settings.Ds1SeamlessPath,
+                    EnableDs3Seamless: settings.EnableDs3Seamless,
+                    Ds3SeamlessPath: settings.Ds3SeamlessPath);
+
+                var joinResult = await Task.Run(() =>
+                    Bonfire.Service.Game.GameLauncher.Launch(
+                        joinReq, joinWan, joinLan, joinInjector));
+
+                if (!joinResult.Ok)
+                    throw new Exception(joinResult.Message);
+
+                return new JsonObject
+                {
+                    ["ok"] = true,
+                    ["pid"] = joinResult.Pid,
+                    ["server_name"] = armedTarget.ServerName,
+                    ["join_target"] = Ds2NativeJoinTarget.ToJson(armedTarget),
+                    ["mode"] = "joined_peer_session",
+                };
+            }
 
             // Activate this profile if it isn't already (saves current state,
             // copies new files into Server/Saved/default).
