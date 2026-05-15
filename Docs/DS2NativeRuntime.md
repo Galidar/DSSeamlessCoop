@@ -433,3 +433,108 @@ DS1-style item set update on 2026-05-14:
   `GrantAtBonfire=false`, so future rests deliver the DS1-style set instead.
 - FMG text was patched in English, Spanish, and neutral Spanish for the nine
   current names and descriptions.
+
+## Session Advertisement Layer (2026-05-15)
+
+Once item-action emission was stable end-to-end, the next layer wired the
+service-side session state into the master server so a peer Bonfire client can
+discover the session before launch.
+
+Module: `Source\BonfireService\Modules\Ds2NativeSession.cs`.
+
+Protocol shape — the coordinator embeds a single-line manifest at the bottom of
+`ServerConfig.ServerDescription`, behind a versioned sentinel:
+
+```text
+<user description>\n%%BNS-DS2-V1%%{"session_id":"...","mode":"host","stage":"service_host_online","intent":"cooperate_host","rules":"challenge","taunt":0,"infection":0,"curse":0,"recovery":0,"runtime_ver":1,"ts":"2026-05-15T..."}
+```
+
+`Server.exe` re-publishes `ServerName`/`ServerDescription` to the master server
+every `Config.AdvertiseHearbeatTime` (default 30 s) via
+`Server::PollServerAdvertisement`, so other Bonfire instances reading
+`MasterServer.ListServersAsync` see the manifest verbatim. Any client that
+imports `Ds2NativeSession` can parse it with
+`Ds2NativeSession.TryParseFromDescription(...)`.
+
+Stamping rules in `Ds2NativeSessionCoordinator.StampManifestIfChanged`:
+
+- Builds a manifest from the current `SessionMemory` (mode, stage, intent,
+  rule preset, counters, runtime version, timestamp).
+- Embeds it via `EmbedInDescription`, preserving the user's free-text
+  description above the sentinel line. On `session.leave` returning to solo,
+  the sentinel line is stripped entirely so the master listing reads as plain
+  again.
+- Forces `cfg.Advertise = true` while in host mode.
+- Dedupes by an `equality_key` derived from the same fields (excluding the
+  timestamp) so timestamp-only refreshes do not trigger redundant writes.
+- For `session.create`, the stamp runs **before** `EnsureLocalServerRunning`
+  so a fresh `Server.exe` boot reads the manifest. For every other verb the
+  stamp runs after the switch and is flagged
+  `manifest_stale_pending_restart=true` since the running server keeps its
+  boot-loaded config in memory.
+
+The service-state JSON now exposes:
+
+```text
+advertised_manifest               parsed JsonObject of the stamped manifest
+advertised_manifest_json          compact JSON string (sentinel payload)
+advertised_equality_key           dedup key
+advertised_stamped_at             ISO-8601 of last successful stamp
+advertised_session_id             public session id (= runtime session id)
+manifest_stale_pending_restart    true iff Server.exe boot predates the stamp
+advertise_heartbeat_seconds       30 (informational, references Server.exe)
+advertise_enabled                 mirror of cfg.Advertise after stamp
+```
+
+The Flutter UI in `Source\bonfire\lib\state\app_state.dart` strips the sentinel
+from descriptions before display (`_stripBnsSentinel`) so the manifest is
+invisible to humans but parseable by peer Bonfire clients.
+
+## Native Runtime Hardening (2026-05-15)
+
+While validating the advertisement layer end-to-end the following native
+runtime issues were caught and resolved:
+
+- `ResolveLastSelectedRuntimeItem`, `ResolveCurrentSelectedRuntimeItem`, and
+  `InventorySelectedItemEntryHook` all rejected a Bonfire row when the live
+  inventory entry's `+0x18 native_use_item_id` did not match the in-code
+  `RuntimeGrantItem::NativeUseItemId`. Codex validated action emission against
+  the legacy 62060001/62060002/60360001 rows whose in-code `NativeUseItemId`
+  matched their prototype shells; the migration to 62061000..62061008 with
+  self-referential IDs in the code table preceded the corresponding
+  `ItemParam.param` rebuild, so live `+0x18` still reported vanilla shells
+  (e.g. `62050000` for Crystal Eye Orb) and the resolution chain returned
+  `nullptr`. The visible `item_id` at `+0x14` is now treated as authoritative
+  for Bonfire-owned rows; the `native_id_matches` boolean is preserved in
+  diagnostic events but no longer gates resolution. This aligns with the
+  existing tolerance already present in `ItemUseValidationHook`.
+- `RuntimeGrantItem::SuppressVanillaContinuation` is now `false` for the nine
+  62061000..62061008 rows (kept `true` for the three legacy rows). The
+  suppression at `DarkSoulsII.exe+0x500C40` was originally added to block the
+  vanilla red-eye invasion search after using Abyssal Eye Orb's prototype
+  (NativeUseItemId 62060000); the new rows inherit `Item Use Animation = 1700`
+  / `Item State = 13` from the Bone of Order template (item id 62020000),
+  which has no invasion-search side effects, so suppressing vanilla
+  continuation served only to interrupt DS2's quickslot use-animation pipeline.
+  Quickslot now plays the full vanilla animation while
+  `HandleBonfireRuntimeItemUse` still emits the Bonfire-owned action.
+- `ServerConfig.SaveOver` previously escaped only `\\` and `"` when writing
+  values, so the literal newline inside the manifest line corrupted
+  `config.json`; `nlohmann::json` in `Server.exe` then logged
+  `Failed to load configuration file` and started with compile-time defaults,
+  breaking the auth handshake. `ReplaceString`, `UpsertString`, and
+  `ReadString` now go through `JsonEncodeString` / `JsonDecodeString`
+  helpers that handle `\\` `"` `\n` `\r` `\t` `\b` `\f` `/` for both
+  directions, preserving round-trip integrity for any free-form field.
+
+Live validation 2026-05-15:
+
+- Steam authenticated through the local `Server.exe` after the JSON escape
+  fix (`Steam id 011000011773f8ab has logged in as player 1`).
+- `actions.jsonl` emitted for every Bonfire item from both inventory and
+  quickslot use paths.
+- `config.json` carries a JSON-valid sentinel after each state change
+  (`"ServerDescription": "A custom Dark Souls server.\n%%BNS-DS2-V1%%{...}"`
+  with escaped `\n`).
+- The Flutter bonfire list renders descriptions stripped of the sentinel
+  line.

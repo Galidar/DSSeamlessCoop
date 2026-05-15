@@ -103,7 +103,48 @@ public sealed class ServerConfig
     private static string? ReadString(string text, string key)
     {
         var m = Regex.Match(text, "\"" + Regex.Escape(key) + "\"\\s*:\\s*\"(?<v>(?:\\\\.|[^\"\\\\])*)\"");
-        return m.Success ? Regex.Unescape(m.Groups["v"].Value) : null;
+        return m.Success ? JsonDecodeString(m.Groups["v"].Value) : null;
+    }
+
+    /// <summary>
+    /// Inverse of <see cref="JsonEncodeString(string?)"/>. Walks the raw value
+    /// in one pass so escape sequences are not double-decoded
+    /// (e.g. <c>\\n</c> must become a backslash followed by 'n', not a newline).
+    /// </summary>
+    private static string JsonDecodeString(string raw)
+    {
+        if (string.IsNullOrEmpty(raw)) return raw;
+        var sb = new System.Text.StringBuilder(raw.Length);
+        for (int i = 0; i < raw.Length; i++)
+        {
+            var c = raw[i];
+            if (c == '\\' && i + 1 < raw.Length)
+            {
+                var next = raw[++i];
+                switch (next)
+                {
+                    case '\\': sb.Append('\\'); break;
+                    case '"':  sb.Append('"');  break;
+                    case '/':  sb.Append('/');  break;
+                    case 'n':  sb.Append('\n'); break;
+                    case 'r':  sb.Append('\r'); break;
+                    case 't':  sb.Append('\t'); break;
+                    case 'b':  sb.Append('\b'); break;
+                    case 'f':  sb.Append('\f'); break;
+                    default:
+                        // Unknown escape — preserve verbatim so round-trip
+                        // through JsonEncodeString is reversible.
+                        sb.Append('\\');
+                        sb.Append(next);
+                        break;
+                }
+            }
+            else
+            {
+                sb.Append(c);
+            }
+        }
+        return sb.ToString();
     }
 
     private static bool? ReadBool(string text, string key)
@@ -116,11 +157,30 @@ public sealed class ServerConfig
     private static string ReplaceString(string text, string key, string value)
     {
         var pattern = "\"" + Regex.Escape(key) + "\"\\s*:\\s*\"(?:\\\\.|[^\"\\\\])*\"";
-        var escaped = (value ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"");
+        var escaped = JsonEncodeString(value);
         var replacement = "\"" + key + "\": \"" + escaped + "\"";
         return Regex.IsMatch(text, pattern)
             ? Regex.Replace(text, pattern, replacement)
             : text;
+    }
+
+    /// <summary>
+    /// Escapes a string for safe embedding inside a JSON double-quoted value.
+    /// Handles backslash, double-quote, and the three control characters most
+    /// likely to appear in free-form fields (newline, carriage return, tab).
+    /// Required because <see cref="SaveOver(string)"/> uses regex-based field
+    /// replacement instead of round-tripping the file through a real JSON
+    /// serializer (to preserve hand-edited matchmaking parameters), so each
+    /// value substitution must produce JSON-legal output on its own.
+    /// </summary>
+    private static string JsonEncodeString(string? value)
+    {
+        return (value ?? "")
+            .Replace("\\", "\\\\")
+            .Replace("\"", "\\\"")
+            .Replace("\n", "\\n")
+            .Replace("\r", "\\r")
+            .Replace("\t", "\\t");
     }
 
     private static string ReplaceBool(string text, string key, bool value)
@@ -136,7 +196,7 @@ public sealed class ServerConfig
     {
         return Regex.IsMatch(text, "\"" + Regex.Escape(key) + "\"\\s*:")
             ? ReplaceString(text, key, value)
-            : InsertBeforeFinalBrace(text, "\"" + key + "\": \"" + (value ?? "").Replace("\\", "\\\\").Replace("\"", "\\\"") + "\"");
+            : InsertBeforeFinalBrace(text, "\"" + key + "\": \"" + JsonEncodeString(value) + "\"");
     }
 
     private static string UpsertBool(string text, string key, bool value)

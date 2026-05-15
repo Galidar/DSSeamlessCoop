@@ -200,7 +200,13 @@ public static class Ds2NativeSessionCoordinator
                 memory.Mode = "host";
                 memory.Stage = "service_host_online";
                 memory.OnlineIntent = "cooperate_host";
+                // Stamp the manifest into config.json BEFORE Start() so a
+                // fresh Server.exe boot reads the new advertisement instead
+                // of whatever ServerDescription was on disk before this
+                // session opened.
+                var preStartStamp = StampManifestIfChanged(memory);
                 serverEffect = EnsureLocalServerRunning(memory);
+                serverEffect["manifest_pre_start"] = preStartStamp;
                 break;
 
             case "session.join":
@@ -280,8 +286,17 @@ public static class Ds2NativeSessionCoordinator
                 break;
         }
 
+        // Final stamp captures any post-switch state into the advertised
+        // manifest. For session.create this is usually a no-op (the pre-Start
+        // stamp covered it); for the other verbs it's the primary stamp call.
+        var finalStamp = StampManifestIfChanged(memory);
+        serverEffect["manifest_stamp"] = finalStamp;
+
         var serverStatus = ServerProcess.QueryStatus();
         var cfg = ServerConfig.Load(Paths.ConfigFile);
+        var advertisedManifestNode = string.IsNullOrEmpty(memory.LastStampedManifestJson)
+            ? null
+            : Ds2NativeSession.TryParseManifestJson(memory.LastStampedManifestJson)?.ToJson();
         var state = new JsonObject
         {
             ["time_utc"] = now.ToString("O"),
@@ -312,6 +327,16 @@ public static class Ds2NativeSessionCoordinator
             ["login_port"] = cfg.LoginServerPort,
             ["private_hostname"] = cfg.ServerPrivateHostname,
             ["public_hostname"] = cfg.ServerHostname,
+            ["advertise_enabled"] = cfg.Advertise,
+            ["advertised_manifest"] = advertisedManifestNode,
+            ["advertised_manifest_json"] = memory.LastStampedManifestJson,
+            ["advertised_equality_key"] = memory.LastStampedEqualityKey,
+            ["advertised_stamped_at"] = memory.LastStampedUtc?.ToString("O"),
+            ["advertised_session_id"] = memory.LastStampedManifestJson.Length > 0
+                ? memory.SessionId
+                : "",
+            ["manifest_stale_pending_restart"] = memory.ManifestStalePendingRestart,
+            ["advertise_heartbeat_seconds"] = Ds2NativeSession.HeartbeatPropagationSeconds,
             ["effect"] = serverEffect,
         };
 
@@ -395,6 +420,136 @@ public static class Ds2NativeSessionCoordinator
         memory.StartedServer = false;
         effect["status"] = "runtime_started_server_stopped";
         return effect;
+    }
+
+    /// <summary>
+    /// Writes the current SessionMemory state into <c>config.json</c> as a DS2
+    /// Native Session manifest embedded in <c>ServerDescription</c>. Forces
+    /// <c>Advertise=true</c> while the session is in host mode and clears the
+    /// manifest line entirely once the session closes. Returns a JSON envelope
+    /// describing the result and whether the running Server.exe needs a restart
+    /// before the new manifest reaches the master server.
+    /// </summary>
+    /// <remarks>
+    /// Server.exe loads its in-memory <c>RuntimeConfig</c> once at boot and
+    /// re-broadcasts <c>ServerName</c>/<c>ServerDescription</c> on a heartbeat
+    /// (~30s). Mutating the on-disk config while the server runs does NOT
+    /// retroactively change what's advertised — hence the staleness flag.
+    /// </remarks>
+    private static JsonObject StampManifestIfChanged(SessionMemory memory)
+    {
+        var envelope = new JsonObject();
+        var equalityKey = ManifestEqualityKey(memory);
+        envelope["equality_key"] = equalityKey;
+
+        if (!Paths.ConfigExists)
+        {
+            envelope["status"] = "config_missing";
+            envelope["note"] = "Server.exe must run once to generate config.json before the manifest can be advertised.";
+            return envelope;
+        }
+
+        try
+        {
+            var cfg = ServerConfig.Load(Paths.ConfigFile);
+            var shouldClear = !memory.SessionOpen &&
+                string.Equals(memory.Mode, "solo", StringComparison.OrdinalIgnoreCase);
+            var wantAdvertise = !shouldClear &&
+                string.Equals(memory.Mode, "host", StringComparison.OrdinalIgnoreCase);
+
+            string newDescription;
+            string newManifestJson;
+            if (shouldClear)
+            {
+                newDescription = Ds2NativeSession.StripManifestLine(cfg.ServerDescription);
+                newManifestJson = "";
+            }
+            else
+            {
+                var manifest = BuildManifestForMemory(memory);
+                newDescription = Ds2NativeSession.EmbedInDescription(cfg.ServerDescription, manifest);
+                newManifestJson = manifest.ToCompactJson();
+            }
+
+            var descriptionUnchanged = string.Equals(
+                cfg.ServerDescription ?? "", newDescription, StringComparison.Ordinal);
+            var advertiseUnchanged = !wantAdvertise || cfg.Advertise;
+            var equalityUnchanged = string.Equals(
+                memory.LastStampedEqualityKey, equalityKey, StringComparison.Ordinal);
+
+            if (descriptionUnchanged && advertiseUnchanged && equalityUnchanged)
+            {
+                envelope["status"] = "unchanged";
+                envelope["manifest_json"] = memory.LastStampedManifestJson;
+                envelope["pending_restart"] = memory.ManifestStalePendingRestart;
+                return envelope;
+            }
+
+            cfg.ServerDescription = newDescription;
+            if (wantAdvertise)
+                cfg.Advertise = true;
+
+            if (!cfg.SaveOver(Paths.ConfigFile))
+            {
+                envelope["status"] = "save_failed";
+                return envelope;
+            }
+
+            memory.LastStampedEqualityKey = equalityKey;
+            memory.LastStampedManifestJson = newManifestJson;
+            memory.LastStampedUtc = DateTime.UtcNow;
+
+            // If Server.exe is already running, the manifest we just wrote
+            // won't be picked up until it restarts. We can detect that by
+            // comparing process start time against our stamp time.
+            var serverStatus = ServerProcess.QueryStatus();
+            memory.ManifestStalePendingRestart = serverStatus.Running &&
+                serverStatus.StartedAt.HasValue &&
+                memory.LastStampedUtc > serverStatus.StartedAt.Value.ToUniversalTime();
+
+            envelope["status"] = shouldClear ? "manifest_cleared" : "manifest_stamped";
+            envelope["manifest_json"] = newManifestJson;
+            envelope["pending_restart"] = memory.ManifestStalePendingRestart;
+            envelope["server_started_at"] = serverStatus.StartedAt?.ToUniversalTime().ToString("O");
+            return envelope;
+        }
+        catch (Exception ex)
+        {
+            envelope["status"] = "stamp_failed";
+            envelope["error"] = ex.Message;
+            return envelope;
+        }
+    }
+
+    private static Ds2NativeSession.Manifest BuildManifestForMemory(SessionMemory memory)
+    {
+        return new Ds2NativeSession.Manifest(
+            SessionId: memory.SessionId,
+            Mode: memory.Mode,
+            Stage: memory.Stage,
+            Intent: memory.OnlineIntent,
+            RulePreset: memory.RulePreset,
+            TauntCount: memory.TauntCount,
+            InfectionCount: memory.InfectionCount,
+            CurseCount: memory.CurseCount,
+            RecoveryCount: memory.RecoveryCount,
+            RuntimeVersion: Ds2NativeSession.CurrentRuntimeVersion,
+            TimestampUtc: DateTime.UtcNow);
+    }
+
+    private static string ManifestEqualityKey(SessionMemory memory)
+    {
+        return string.Join("|",
+            memory.SessionId,
+            memory.Mode,
+            memory.Stage,
+            memory.OnlineIntent,
+            memory.RulePreset,
+            memory.TauntCount.ToString(),
+            memory.InfectionCount.ToString(),
+            memory.CurseCount.ToString(),
+            memory.RecoveryCount.ToString(),
+            memory.SessionOpen ? "1" : "0");
     }
 
     private static SessionMemory GetSession(string sessionId)
@@ -506,5 +661,14 @@ public static class Ds2NativeSessionCoordinator
         public int InfectionCount { get; set; }
         public int CurseCount { get; set; }
         public DateTime LastActionUtc { get; set; }
+
+        // Advertisement bookkeeping. The "stamp" is what we last wrote to
+        // <see cref="ServerConfig.ServerDescription"/>; "stale" means the
+        // running Server.exe still has an older manifest in memory because it
+        // only re-reads config.json at boot.
+        public string LastStampedEqualityKey { get; set; } = "";
+        public string LastStampedManifestJson { get; set; } = "";
+        public DateTime? LastStampedUtc { get; set; }
+        public bool ManifestStalePendingRestart { get; set; }
     }
 }

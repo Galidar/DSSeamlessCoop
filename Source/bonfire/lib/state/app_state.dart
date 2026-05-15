@@ -9,6 +9,24 @@ import 'package:flutter/foundation.dart';
 
 import '../rpc/rpc_client.dart';
 
+/// Strips the DS2 Native Session manifest line (`%%BNS-DS2-V1%%{...}`) and
+/// everything after it from a server description before it reaches the UI.
+///
+/// The manifest is metadata BonfireService stamps into ServerDescription so the
+/// master server (and other Bonfire instances) can detect / parse a DS2 native
+/// session; it is not meant for human eyes and would otherwise show up as raw
+/// JSON in the bonfire list and search results.
+String _stripBnsSentinel(String desc) {
+  if (desc.isEmpty) return desc;
+  const sentinel = '%%BNS-DS2-V1%%';
+  final idx = desc.indexOf(sentinel);
+  if (idx < 0) return desc;
+  if (idx == 0) return '';
+  final lineStart = desc.lastIndexOf('\n', idx - 1);
+  if (lineStart < 0) return '';
+  return desc.substring(0, lineStart).trimRight();
+}
+
 class ServerInstallStatus {
   final bool installed;
   final String serverDirectory;
@@ -94,7 +112,7 @@ class ServerConfig {
   });
   factory ServerConfig.fromJson(Map<String, dynamic> j) => ServerConfig(
         name: j['server_name'] as String? ?? '',
-        description: j['server_description'] as String? ?? '',
+        description: _stripBnsSentinel(j['server_description'] as String? ?? ''),
         password: j['password'] as String? ?? '',
         gameType: j['game_type'] as String? ?? 'DarkSouls2',
         publicIp: j['server_hostname'] as String? ?? '',
@@ -267,7 +285,7 @@ class PublicServer {
   factory PublicServer.fromJson(Map<String, dynamic> j) => PublicServer(
         id: j['id'] as String? ?? '',
         name: j['name'] as String? ?? '(unnamed)',
-        description: j['description'] as String? ?? '',
+        description: _stripBnsSentinel(j['description'] as String? ?? ''),
         gameType: j['game_type'] as String? ?? '',
         playerCount: (j['player_count'] as num?)?.toInt() ?? 0,
         passwordRequired: j['password_required'] as bool? ?? false,

@@ -201,7 +201,7 @@ namespace
             "session.create",
             "create a Bonfire co-op session",
             15,
-            true,
+            false,
         },
         {
             62061001,
@@ -212,7 +212,7 @@ namespace
             "session.join",
             "join a Bonfire co-op session",
             15,
-            true,
+            false,
         },
         {
             62061002,
@@ -223,7 +223,7 @@ namespace
             "session.invade",
             "invade a Bonfire co-op session",
             14,
-            true,
+            false,
         },
         {
             62061003,
@@ -234,7 +234,7 @@ namespace
             "session.leave",
             "leave or disband the current Bonfire session",
             14,
-            true,
+            false,
         },
         {
             62061004,
@@ -245,7 +245,7 @@ namespace
             "rules.cycle",
             "cycle Bonfire runtime rules",
             15,
-            true,
+            false,
         },
         {
             62061005,
@@ -256,7 +256,7 @@ namespace
             "invasions.taunt",
             "invite invaders into the Bonfire world",
             13,
-            true,
+            false,
         },
         {
             62061006,
@@ -267,7 +267,7 @@ namespace
             "world.infection",
             "apply a Bonfire world disaster request",
             13,
-            true,
+            false,
         },
         {
             62061007,
@@ -278,7 +278,7 @@ namespace
             "curse.accrue",
             "accrue a Bonfire curse sigil",
             13,
-            true,
+            false,
         },
         {
             62061008,
@@ -289,7 +289,7 @@ namespace
             "world.recover",
             "revive allies and repair Bonfire runtime items",
             13,
-            true,
+            false,
         },
         {
             60360001,
@@ -1771,12 +1771,16 @@ namespace
 
         const RuntimeGrantItem* runtime_item =
             FindBonfireRuntimeItem(selected_runtime_item_id);
-        if (runtime_item == nullptr ||
-            runtime_item->NativeUseItemId != selected_native_use_item_id)
+        if (runtime_item == nullptr)
         {
             return nullptr;
         }
 
+        // The visible item_id (+0x14) is authoritative for Bonfire-owned rows.
+        // DS2 may surface a vanilla native shell id at +0x18 if the loaded
+        // ItemParam was built from a prototype shell — accept the match
+        // anyway and let downstream consumers see the mismatch via
+        // selection_match.NativeUseItemId vs runtime_item->NativeUseItemId.
         match.Matched = true;
         match.RuntimeItemId = selected_runtime_item_id;
         match.NativeUseItemId = selected_native_use_item_id;
@@ -1923,7 +1927,12 @@ namespace
                 payload);
         }
 
-        if (!native_id_matches)
+        // Accept the Bonfire item by visible item_id even when +0x18 doesn't
+        // match the in-code NativeUseItemId. A stale/prototype ItemParam may
+        // leave +0x18 pointing to a vanilla shell (e.g. 62050000), but the
+        // visible +0x14 id remains authoritative for Bonfire-owned rows.
+        // The mismatch is still surfaced via the direct_probe event above.
+        if (runtime_item == nullptr)
         {
             return nullptr;
         }
@@ -2120,11 +2129,11 @@ namespace
 
         const int32_t native_use_item_id =
             ReadInventoryItemEntryNativeUseId(entry);
-        if (native_use_item_id != runtime_item->NativeUseItemId)
-        {
-            return entry;
-        }
-
+        // Accept the Bonfire row by visible item_id alone. The +0x18 native
+        // shell id may differ from the in-code NativeUseItemId when the
+        // loaded ItemParam still carries the prototype's vanilla placeholder
+        // shape; treating +0x14 as authoritative keeps the cache populated
+        // so InventorySelectedItemCategoryHook can fire the runtime action.
         RememberSelectedRuntimeItem(
             config,
             inventory,
