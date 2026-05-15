@@ -584,6 +584,7 @@ class _ServerListView extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(Sp.xl, Sp.lg, Sp.xl, Sp.lg),
       children: [
         const _UpdateBanner(),
+        const _Ds2RuntimeBanner(),
 
         // ───── MY BONFIRES ─────
         Builder(builder: (ctx) {
@@ -887,6 +888,148 @@ class _UpdateBanner extends StatelessWidget {
         ),
       );
     }
+  }
+}
+
+class _Ds2RuntimeBanner extends StatelessWidget {
+  const _Ds2RuntimeBanner();
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    final state = app.ds2RuntimeSession;
+    if (app.publicListGameFilter != 'DarkSouls2' ||
+        state == null ||
+        !app.ds2RuntimeNoticeVisible) {
+      return const SizedBox.shrink();
+    }
+
+    final p = Palette.of(context);
+    final isError = state.error != null || state.effectError.isNotEmpty;
+    final tone = isError
+        ? p.err
+        : state.sessionOpen
+            ? p.ok
+            : p.accent;
+    final title = isError
+        ? 'DS2 runtime needs attention'
+        : state.lastRuntimeName.isNotEmpty
+            ? '${state.lastRuntimeName} activated'
+            : 'DS2 runtime item activated';
+    final serverText = state.serverRunning
+        ? 'server running${state.serverPid != null ? ' - PID ${state.serverPid}' : ''}'
+        : 'server idle';
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Sp.lg),
+      child: BonfireCard(
+        background: p.surfaceHi,
+        borderColor: tone,
+        padding: const EdgeInsets.all(Sp.lg),
+        child: LayoutBuilder(
+          builder: (context, constraints) {
+            final narrow = constraints.maxWidth < 680;
+            final actions = Wrap(
+              spacing: Sp.sm,
+              runSpacing: Sp.sm,
+              alignment: WrapAlignment.end,
+              children: [
+                OutlinedButton.icon(
+                  onPressed: () => app.refreshDs2RuntimeStatus(
+                    sessionId: state.sessionId,
+                  ),
+                  icon: const Icon(Icons.sync, size: IS.sm),
+                  label: const Text('Sync'),
+                ),
+                IconButton(
+                  tooltip: 'Dismiss DS2 runtime status',
+                  onPressed: app.dismissDs2RuntimeNotice,
+                  icon: const Icon(Icons.close, size: IS.md),
+                  color: p.textMuted,
+                ),
+              ],
+            );
+
+            return Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.center,
+                  children: [
+                    Icon(
+                      isError
+                          ? Icons.error_outline
+                          : state.sessionOpen
+                              ? Icons.link
+                              : Icons.link_off,
+                      color: tone,
+                      size: IS.lg,
+                    ),
+                    const SizedBox(width: Sp.md),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            title,
+                            style: BT.heading.copyWith(color: p.textPrimary),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            state.displayMessage,
+                            style: BT.caption.copyWith(color: p.textSecondary),
+                            overflow: TextOverflow.ellipsis,
+                            maxLines: 2,
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (!narrow) ...[
+                      const SizedBox(width: Sp.md),
+                      actions,
+                    ],
+                  ],
+                ),
+                if (narrow) ...[
+                  const SizedBox(height: Sp.md),
+                  actions,
+                ],
+                const SizedBox(height: Sp.sm),
+                Wrap(
+                  spacing: Sp.lg,
+                  runSpacing: Sp.xs,
+                  children: [
+                    _UpdateFact(
+                      icon: Icons.bolt_outlined,
+                      text: state.lastCommand,
+                    ),
+                    _UpdateFact(
+                      icon: Icons.radio_button_checked,
+                      text: state.sessionMode,
+                    ),
+                    _UpdateFact(
+                      icon: Icons.dns_outlined,
+                      text: serverText,
+                    ),
+                    if (state.rulePreset.isNotEmpty)
+                      _UpdateFact(
+                        icon: Icons.tune,
+                        text: state.rulePreset,
+                      ),
+                    if (state.actionCount > 0)
+                      _UpdateFact(
+                        icon: Icons.history,
+                        text:
+                            '${state.actionCount} action${state.actionCount == 1 ? '' : 's'}',
+                      ),
+                  ],
+                ),
+              ],
+            );
+          },
+        ),
+      ),
+    );
   }
 }
 

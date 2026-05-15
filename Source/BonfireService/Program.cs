@@ -14,6 +14,7 @@
 using System;
 using System.Reflection;
 using System.Threading.Tasks;
+using Bonfire.Service.Modules;
 using Bonfire.Service.Rpc;
 
 namespace Bonfire.Service;
@@ -35,8 +36,16 @@ public static class Program
 
         var server = new RpcServer();
         Methods.Register(server);
-        await server.RunAsync();
-        return 0;
+        Ds2NativeSessionCoordinator.Start(server);
+        try
+        {
+            await server.RunAsync();
+            return 0;
+        }
+        finally
+        {
+            Ds2NativeSessionCoordinator.Stop();
+        }
     }
 
     private static string ResolveServiceVersion()

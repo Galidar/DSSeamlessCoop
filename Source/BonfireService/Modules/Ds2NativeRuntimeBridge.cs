@@ -13,10 +13,12 @@ public static class Ds2NativeRuntimeBridge
         string ActionLog,
         string MessageLog,
         string StateFile,
+        string ServiceStateFile,
         string LastEvent,
         string LastAction,
         string LastMessage,
         string StateJson,
+        string ServiceStateJson,
         DateTime? LastWriteUtc);
 
     private static string Root => Path.Combine(Paths.InstallRoot, "Runtime", "DS2Native");
@@ -28,7 +30,7 @@ public static class Ds2NativeRuntimeBridge
         var eventLog = ResolveEventLog(sessionId);
         if (string.IsNullOrEmpty(eventLog))
         {
-            return new RuntimeStatus(false, false, "", "", "", "", "", "", "", "", "", "", null);
+            return new RuntimeStatus(false, false, "", "", "", "", "", "", "", "", "", "", "", "", null);
         }
 
         var lastWrite = File.GetLastWriteTimeUtc(eventLog);
@@ -36,10 +38,12 @@ public static class Ds2NativeRuntimeBridge
         var actionLog = ToSibling(eventLog, ".actions.jsonl");
         var messageLog = ToSibling(eventLog, ".messages.jsonl");
         var stateFile = ToSibling(eventLog, ".state.json");
+        var serviceStateFile = ToSibling(eventLog, ".service_state.json");
         var lastEvent = ReadLastLine(eventLog);
         var lastAction = File.Exists(actionLog) ? ReadLastLine(actionLog) : "";
         var lastMessage = File.Exists(messageLog) ? ReadLastLine(messageLog) : "";
         var stateJson = File.Exists(stateFile) ? ReadAllText(stateFile) : "";
+        var serviceStateJson = File.Exists(serviceStateFile) ? ReadAllText(serviceStateFile) : "";
         var active = DateTime.UtcNow - lastWrite < TimeSpan.FromSeconds(20);
 
         return new RuntimeStatus(
@@ -51,10 +55,12 @@ public static class Ds2NativeRuntimeBridge
             ActionLog: actionLog,
             MessageLog: messageLog,
             StateFile: stateFile,
+            ServiceStateFile: serviceStateFile,
             LastEvent: lastEvent,
             LastAction: lastAction,
             LastMessage: lastMessage,
             StateJson: stateJson,
+            ServiceStateJson: serviceStateJson,
             LastWriteUtc: lastWrite);
     }
 

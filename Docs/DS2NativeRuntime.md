@@ -55,6 +55,10 @@ The first native runtime feature is an injected DS2 command bridge:
 - BonfireService exposes RPC helpers:
   `ds2_runtime.status` reads the latest runtime heartbeat and
   `ds2_runtime.command` appends a command envelope to the inbox.
+- BonfireService also starts a `Ds2NativeSessionCoordinator` background watcher.
+  It tails `<session>.actions.jsonl`, writes `<session>.service_state.json`,
+  and emits `ds2_runtime.session` UI notifications whenever an in-game custom
+  item changes the service-side session state.
 
 At this stage commands are acknowledged and logged only. Gameplay handlers are
 not armed yet; this deliberately proves the control channel before mutating
@@ -165,8 +169,9 @@ DS2 expose a usable/quickslot item in every zone while Bonfire owns the meaning.
 
 - `enc_regulation.bnd.dcx`
 - a clean vanilla `Param\*.param` set extracted from the installed SOTFS
-  `enc_regulation.bnd.dcx`, with only `ItemParam.param` and
-  `ItemUsageParam.param` overlaid for the Bonfire custom rows
+  `enc_regulation.bnd.dcx`, with only `ItemParam.param`,
+  `ItemUsageParam.param`, and `ItemUseCheckDialogParam.param` overlaid for the
+  Bonfire custom rows
 - `menu\text\english\*.fmg`
 - `menu\text\spanish\itemname.fmg`,
   `menu\text\spanish\simpleexplanation.fmg`, and
@@ -189,6 +194,13 @@ shops, bypassing the native bonfire-rest grant path.
 The visible names/descriptions are intentionally Bonfire-specific so the
 inventory no longer presents the items as native Human Effigy / Cracked Eye Orb
 clones.
+
+The native DS2 use-confirmation band comes from `ItemUseCheckDialogParam`, not
+from `ItemParam` itself. `Bone of Order` is item row `62020000` and uses
+`ItemUseCheckDialogParam` row `62020000 -> common.fmg 30000000`, which is the
+vanilla `Use %s?` style prompt. Bonfire custom rows `62061000..62061008` clone
+that same dialog row so the game shows a normal localized DS2 confirmation
+prompt before Bonfire's runtime-owned action runs.
 
 ## Custom Item Functions
 
@@ -302,8 +314,40 @@ the nine current IDs, the loaded Param/DLL is stale or the row was accidentally
 rebuilt from a vanilla prototype again.
 
 `ds2_runtime.status` also reports `action_log`, `state_file`, `last_action`,
-and parsed `runtime_state` so Bonfire UI/service code can surface item effects
-without scraping raw files.
+`service_state_file`, `last_action`, parsed `runtime_state`, and parsed
+`service_state` so Bonfire UI/service code can surface item effects without
+scraping raw files.
+
+## Service-Side Session Coordinator
+
+`BonfireService` watches every `Runtime\DS2Native\*.actions.jsonl` file after
+startup. Existing action logs are treated as history; new action lines are
+processed into a service-owned state snapshot:
+
+```text
+Runtime\DS2Native\<session>.service_state.json
+```
+
+Current service behavior:
+
+- `session.create` marks the DS2 runtime as host mode and starts the local
+  `Server.exe` if it is not already running. If the server was already open,
+  the action records `server_already_running` and leaves it alone.
+- `session.join` marks guest mode and records that a Bonfire host link is armed.
+  The current DS2 network stack still needs the game to be launched against the
+  target Bonfire server; this is the first control-plane state, not yet a
+  mid-game server retarget.
+- `session.invade` records private invasion intent for later matching work.
+- `session.leave` returns the service state to solo mode. It only stops
+  `Server.exe` if that server was started by the in-game runtime item, avoiding
+  accidental teardown of a manually launched Bonfire session.
+- `rules.cycle`, `invasions.taunt`, `world.infection`, `curse.accrue`, and
+  `world.recover` update counters/state in `service_state.json` for the next
+  multiplayer behavior layer.
+
+Every processed action also sends an unsolicited JSON-RPC notification named
+`ds2_runtime.session`; the Flutter UI can subscribe through `RpcClient` without
+polling.
 
 The command inbox accepts the same stateful verbs (`session.create`,
 `session.join`, `session.invade`, `session.leave`, `session.reconnect`,

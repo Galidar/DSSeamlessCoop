@@ -287,6 +287,139 @@ class PublicServer {
       modsRequired.trim().isNotEmpty;
 }
 
+class Ds2RuntimeSessionState {
+  final DateTime? timeUtc;
+  final String sessionId;
+  final bool sessionOpen;
+  final String sessionMode;
+  final String serviceStage;
+  final String onlineIntent;
+  final String lastCommand;
+  final int lastItemId;
+  final String lastRuntimeName;
+  final String lastMessageEn;
+  final String lastMessageEs;
+  final int actionCount;
+  final String rulePreset;
+  final int recoveryCount;
+  final int tauntCount;
+  final int infectionCount;
+  final int curseCount;
+  final bool serverRunning;
+  final int? serverPid;
+  final bool serverStartedByRuntime;
+  final String serverName;
+  final String serverGameType;
+  final String effectStatus;
+  final String effectError;
+  final String effectNote;
+  final String? error;
+
+  Ds2RuntimeSessionState({
+    this.timeUtc,
+    required this.sessionId,
+    required this.sessionOpen,
+    required this.sessionMode,
+    required this.serviceStage,
+    required this.onlineIntent,
+    required this.lastCommand,
+    required this.lastItemId,
+    required this.lastRuntimeName,
+    required this.lastMessageEn,
+    required this.lastMessageEs,
+    required this.actionCount,
+    required this.rulePreset,
+    required this.recoveryCount,
+    required this.tauntCount,
+    required this.infectionCount,
+    required this.curseCount,
+    required this.serverRunning,
+    this.serverPid,
+    required this.serverStartedByRuntime,
+    required this.serverName,
+    required this.serverGameType,
+    required this.effectStatus,
+    required this.effectError,
+    required this.effectNote,
+    this.error,
+  });
+
+  factory Ds2RuntimeSessionState.fromJson(Map<String, dynamic> j) {
+    final effect = j['effect'] is Map<String, dynamic>
+        ? j['effect'] as Map<String, dynamic>
+        : const <String, dynamic>{};
+    return Ds2RuntimeSessionState(
+      timeUtc: j['time_utc'] != null
+          ? DateTime.tryParse(j['time_utc'] as String)
+          : null,
+      sessionId: j['session_id'] as String? ?? '',
+      sessionOpen: j['session_open'] as bool? ?? false,
+      sessionMode: j['session_mode'] as String? ?? 'solo',
+      serviceStage: j['service_stage'] as String? ?? 'idle',
+      onlineIntent: j['online_intent'] as String? ?? 'none',
+      lastCommand: j['last_command'] as String? ?? 'none',
+      lastItemId: (j['last_item_id'] as num?)?.toInt() ?? 0,
+      lastRuntimeName: j['last_runtime_name'] as String? ?? '',
+      lastMessageEn: j['last_message_en'] as String? ?? '',
+      lastMessageEs: j['last_message_es'] as String? ?? '',
+      actionCount: (j['action_count'] as num?)?.toInt() ?? 0,
+      rulePreset: j['rule_preset'] as String? ?? '',
+      recoveryCount: (j['recovery_count'] as num?)?.toInt() ?? 0,
+      tauntCount: (j['taunt_count'] as num?)?.toInt() ?? 0,
+      infectionCount: (j['infection_count'] as num?)?.toInt() ?? 0,
+      curseCount: (j['curse_count'] as num?)?.toInt() ?? 0,
+      serverRunning: j['server_running'] as bool? ?? false,
+      serverPid: (j['server_pid'] as num?)?.toInt(),
+      serverStartedByRuntime: j['server_started_by_runtime'] as bool? ?? false,
+      serverName: j['server_name'] as String? ?? '',
+      serverGameType: j['server_game_type'] as String? ?? '',
+      effectStatus: effect['status'] as String? ?? '',
+      effectError: effect['error'] as String? ?? '',
+      effectNote: effect['note'] as String? ?? '',
+    );
+  }
+
+  factory Ds2RuntimeSessionState.error(Map<String, dynamic>? j) =>
+      Ds2RuntimeSessionState(
+        timeUtc: j?['time_utc'] != null
+            ? DateTime.tryParse(j!['time_utc'] as String)
+            : null,
+        sessionId: '',
+        sessionOpen: false,
+        sessionMode: 'error',
+        serviceStage: 'service_error',
+        onlineIntent: 'none',
+        lastCommand: 'error',
+        lastItemId: 0,
+        lastRuntimeName: '',
+        lastMessageEn: '',
+        lastMessageEs: '',
+        actionCount: 0,
+        rulePreset: '',
+        recoveryCount: 0,
+        tauntCount: 0,
+        infectionCount: 0,
+        curseCount: 0,
+        serverRunning: false,
+        serverStartedByRuntime: false,
+        serverName: '',
+        serverGameType: 'DarkSouls2',
+        effectStatus: 'error',
+        effectError: j?['error'] as String? ?? 'Unknown DS2 runtime error.',
+        effectNote: '',
+        error: j?['error'] as String? ?? 'Unknown DS2 runtime error.',
+      );
+
+  String get displayMessage {
+    if (error != null && error!.isNotEmpty) return error!;
+    if (lastMessageEs.isNotEmpty) return lastMessageEs;
+    if (lastMessageEn.isNotEmpty) return lastMessageEn;
+    if (effectError.isNotEmpty) return effectError;
+    if (effectNote.isNotEmpty) return effectNote;
+    return serviceStage;
+  }
+}
+
 class AppState extends ChangeNotifier {
   AppState(this._rpc) {
     _notificationSub = _rpc.notifications.listen(_onNotification);
@@ -368,6 +501,10 @@ class AppState extends ChangeNotifier {
   DateTime? updateLastCheckedAt;
   bool updateNoticeVisible = false;
 
+  // DS2 in-game runtime item/session status.
+  Ds2RuntimeSessionState? ds2RuntimeSession;
+  bool ds2RuntimeNoticeVisible = false;
+
   Future<void> refreshAll() async {
     await Future.wait([
       refreshInstallStatus(),
@@ -379,6 +516,7 @@ class AppState extends ChangeNotifier {
       refreshGameSettings(),
       refreshSteamStatus(),
       refreshProfiles(),
+      refreshDs2RuntimeStatus(),
     ]);
     notifyListeners();
   }
@@ -619,6 +757,23 @@ class AppState extends ChangeNotifier {
     }
   }
 
+  Future<void> refreshDs2RuntimeStatus({String? sessionId}) async {
+    try {
+      final raw = await _rpc.call('ds2_runtime.status', {
+        if (sessionId != null && sessionId.isNotEmpty) 'session_id': sessionId,
+      });
+      if (raw is! Map<String, dynamic>) return;
+      final serviceState = raw['service_state'];
+      if (serviceState is Map<String, dynamic>) {
+        ds2RuntimeSession = Ds2RuntimeSessionState.fromJson(serviceState);
+        ds2RuntimeNoticeVisible = true;
+      }
+    } catch (_) {
+      // DS2 runtime status is optional; Bonfire can boot before DS2 has run.
+    }
+    notifyListeners();
+  }
+
   Future<bool> applyAppUpdate() async {
     updateInstalling = true;
     updatePhase = 'downloading';
@@ -695,6 +850,11 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  void dismissDs2RuntimeNotice() {
+    ds2RuntimeNoticeVisible = false;
+    notifyListeners();
+  }
+
   void _onNotification(RpcNotification n) {
     switch (n.method) {
       case 'download.progress':
@@ -713,6 +873,19 @@ class AppState extends ChangeNotifier {
         updateBytesTotal = total;
         updateProgress = (total != null && total > 0) ? recv / total : null;
         updateNoticeVisible = true;
+        notifyListeners();
+        break;
+      case 'ds2_runtime.session':
+        if (n.params != null) {
+          ds2RuntimeSession = Ds2RuntimeSessionState.fromJson(n.params!);
+          ds2RuntimeNoticeVisible = true;
+          unawaited(refreshLiveStatus());
+          notifyListeners();
+        }
+        break;
+      case 'ds2_runtime.session_error':
+        ds2RuntimeSession = Ds2RuntimeSessionState.error(n.params);
+        ds2RuntimeNoticeVisible = true;
         notifyListeners();
         break;
     }

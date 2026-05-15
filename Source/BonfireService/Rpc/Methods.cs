@@ -146,10 +146,12 @@ public static class Methods
                 ["action_log"] = status.ActionLog,
                 ["message_log"] = status.MessageLog,
                 ["state_file"] = status.StateFile,
+                ["service_state_file"] = status.ServiceStateFile,
                 ["last_event"] = status.LastEvent,
                 ["last_action"] = status.LastAction,
                 ["last_message"] = status.LastMessage,
                 ["runtime_state"] = ParseOptionalJson(status.StateJson),
+                ["service_state"] = ParseOptionalJson(status.ServiceStateJson),
                 ["last_write_utc"] = status.LastWriteUtc?.ToString("O"),
             };
         }

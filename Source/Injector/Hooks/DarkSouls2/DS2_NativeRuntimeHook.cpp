@@ -82,6 +82,7 @@ namespace
     LONG s_inventory_adjust_event_count = 0;
     LONG s_inventory_use_event_count = 0;
     LONG s_inventory_selected_event_count = 0;
+    LONG s_inventory_selected_direct_event_count = 0;
     LONG s_inventory_selected_action_event_count = 0;
     LONG s_inventory_selected_action_execute_event_count = 0;
     LONG s_item_use_validation_event_count = 0;
@@ -1856,6 +1857,93 @@ namespace
         AppendRuntimeEvent(config, "inventory.selected_runtime_item", payload);
     }
 
+    const RuntimeGrantItem* ResolveCurrentSelectedRuntimeItem(
+        const RuntimeWorkerConfig& config,
+        void* inventory,
+        const char* source,
+        uintptr_t return_rva,
+        RuntimeSelectionMatch& match)
+    {
+        InventorySelectedItemEntryFn original =
+            s_original_inventory_selected_item_entry;
+        if (original == nullptr || inventory == nullptr)
+        {
+            return nullptr;
+        }
+
+        void* entry = original(inventory);
+        if (entry == nullptr)
+        {
+            return nullptr;
+        }
+
+        const int32_t item_id = ReadInventoryItemEntryId(entry);
+        const int32_t native_use_item_id =
+            ReadInventoryItemEntryNativeUseId(entry);
+        const RuntimeGrantItem* runtime_item =
+            FindBonfireRuntimeItem(item_id);
+        const bool native_id_matches =
+            runtime_item != nullptr &&
+            native_use_item_id == runtime_item->NativeUseItemId;
+
+        const LONG event_index =
+            InterlockedIncrement(&s_inventory_selected_direct_event_count);
+        if (event_index <= 128 || runtime_item != nullptr)
+        {
+            nlohmann::json payload;
+            payload["event_index"] = event_index;
+            payload["inventory"] =
+                HexPointer(reinterpret_cast<uintptr_t>(inventory));
+            payload["entry"] =
+                HexPointer(reinterpret_cast<uintptr_t>(entry));
+            payload["item_id"] = item_id;
+            payload["item_id_hex"] =
+                HexPointer(static_cast<uint32_t>(item_id));
+            payload["native_use_item_id"] = native_use_item_id;
+            payload["native_use_item_id_hex"] =
+                HexPointer(static_cast<uint32_t>(native_use_item_id));
+            payload["bonfire_runtime_item"] = runtime_item != nullptr;
+            payload["native_id_matches"] = native_id_matches;
+            payload["source"] = source;
+            payload["return_rva"] = HexPointer(return_rva);
+            payload["original_target"] = HexPointer(
+                reinterpret_cast<uintptr_t>(
+                    s_original_inventory_selected_item_entry));
+            if (runtime_item != nullptr)
+            {
+                payload["runtime_item_id"] = runtime_item->ItemId;
+                payload["runtime_item_id_hex"] =
+                    HexPointer(static_cast<uint32_t>(runtime_item->ItemId));
+                payload["runtime_name"] = runtime_item->RuntimeName;
+                payload["command"] = runtime_item->ActionCommand;
+            }
+            AppendRuntimeEvent(
+                config,
+                "inventory.selected_runtime_item_direct_probe",
+                payload);
+        }
+
+        if (!native_id_matches)
+        {
+            return nullptr;
+        }
+
+        RememberSelectedRuntimeItem(
+            config,
+            inventory,
+            entry,
+            *runtime_item,
+            native_use_item_id,
+            return_rva);
+
+        match.Matched = true;
+        match.RuntimeItemId = item_id;
+        match.NativeUseItemId = native_use_item_id;
+        match.EntryAddress = reinterpret_cast<uintptr_t>(entry);
+        match.AgeMs = 0;
+        return runtime_item;
+    }
+
     void LogInventoryUseItem(
         void* inventory,
         int32_t item_slot,
@@ -2073,6 +2161,15 @@ namespace
             ResolveLastSelectedRuntimeItem(selection_match);
         const bool action_candidate =
             return_rva == kInventorySelectedActionCandidateReturnRva;
+        if (runtime_item == nullptr && action_candidate)
+        {
+            runtime_item = ResolveCurrentSelectedRuntimeItem(
+                config,
+                inventory,
+                "inventory_selected_category_direct_0x1B19D0",
+                return_rva,
+                selection_match);
+        }
 
         const LONG event_index =
             InterlockedIncrement(&s_inventory_selected_action_event_count);
