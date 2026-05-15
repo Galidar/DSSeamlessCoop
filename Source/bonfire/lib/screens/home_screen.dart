@@ -558,11 +558,16 @@ class _ServerListView extends StatelessWidget {
         .map((p) => p.name.trim().toLowerCase())
         .where((n) => n.isNotEmpty)
         .toSet();
-    final deduped = myNames.isEmpty
-        ? all
-        : all
-            .where((s) => !myNames.contains(s.name.trim().toLowerCase()))
-            .toList();
+    // Also hide BNS-flagged DS2 native sessions from the generic public list —
+    // they get their own section above so the user can tell apart a co-op
+    // host from a plain DS3OS-style public server.
+    final deduped = (myNames.isEmpty
+            ? all
+            : all
+                .where((s) => !myNames.contains(s.name.trim().toLowerCase()))
+                .toList())
+        .where((s) => s.bnsManifest == null)
+        .toList();
 
     // Apply optional filters: hide sealed (passworded) + minimum player count.
     final afterFilters = deduped
@@ -610,6 +615,12 @@ class _ServerListView extends StatelessWidget {
           ...myProfiles.map((profile) => _LocalBonfireRow(profile: profile)),
 
         const SizedBox(height: Sp.xl),
+
+        // ───── DS2 NATIVE SESSIONS ─────
+        // Shows public servers whose ServerDescription carries the BNS
+        // sentinel %%BNS-DS2-V1%% — i.e. another Bonfire instance has a
+        // DS2 native session open and is advertising it to the master.
+        const _Ds2NativeSessionsSection(),
 
         // ───── PUBLIC BONFIRES ─────
         Builder(builder: (ctx) {
@@ -2465,6 +2476,189 @@ class _LaunchButtonState extends State<_LaunchButton> {
       label: Padding(
         padding: const EdgeInsets.symmetric(horizontal: Sp.sm, vertical: 2),
         child: Text(_busy ? 'Travelling…' : Lore.launchGame),
+      ),
+    );
+  }
+}
+
+// ────────── DS2 Native Sessions section ──────────
+//
+// Shows public servers whose ServerDescription carries the BNS sentinel
+// %%BNS-DS2-V1%% — peer Bonfire instances advertising an open DS2 native
+// session. Filtered server-side by master listing; client-side filtered to
+// the DS2 tab. The Join button is a v1 placeholder; the wiring to actually
+// target the session on launch ships in a follow-up.
+
+class _Ds2NativeSessionsSection extends StatelessWidget {
+  const _Ds2NativeSessionsSection();
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    if (app.publicListGameFilter != 'DarkSouls2') {
+      return const SizedBox.shrink();
+    }
+
+    final all = app.publicServers ?? const <PublicServer>[];
+    final sessions = all
+        .where((s) => s.bnsManifest != null)
+        .where((s) =>
+            s.gameType.isEmpty ||
+            s.gameType.toLowerCase() == 'darksouls2')
+        .toList();
+
+    if (sessions.isEmpty) return const SizedBox.shrink();
+
+    final p = Palette.of(context);
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: [
+        Row(
+          children: [
+            Text('DS2 NATIVE SESSIONS',
+                style: BT.eyebrow.copyWith(color: p.textMuted)),
+            const SizedBox(width: Sp.sm),
+            Text('· ${sessions.length}',
+                style: BT.caption.copyWith(color: p.textMuted)),
+          ],
+        ),
+        const SizedBox(height: Sp.sm),
+        ...sessions.map((s) => _Ds2NativeSessionRow(server: s)),
+        const SizedBox(height: Sp.xl),
+      ],
+    );
+  }
+}
+
+class _Ds2NativeSessionRow extends StatelessWidget {
+  final PublicServer server;
+  const _Ds2NativeSessionRow({required this.server});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    final m = server.bnsManifest!;
+
+    final modeLabel = m.mode.isEmpty ? 'session' : m.mode;
+    final Color modeColor = m.isHost
+        ? p.accent
+        : m.isGuest
+            ? p.textSecondary
+            : m.isInvader
+                ? p.warn
+                : p.textMuted;
+
+    final chips = <Widget>[
+      _Chip(label: modeLabel.toUpperCase(), color: modeColor),
+      if (m.rulePreset.isNotEmpty)
+        _Chip(label: m.rulePreset, color: p.textMuted),
+      if (m.tauntCount > 0) _Chip(label: 'taunt ${m.tauntCount}', color: p.warn),
+      if (m.infectionCount > 0)
+        _Chip(label: 'infect ${m.infectionCount}', color: p.warn),
+      if (m.curseCount > 0)
+        _Chip(label: 'curse ${m.curseCount}', color: p.warn),
+      if (m.recoveryCount > 0)
+        _Chip(label: 'recover ${m.recoveryCount}', color: p.textSecondary),
+    ];
+
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Sp.sm),
+      child: _HoverableRow(
+        selected: false,
+        onTap: () {},
+        child: Padding(
+          padding:
+              const EdgeInsets.symmetric(horizontal: Sp.lg, vertical: Sp.md),
+          child: Row(
+            children: [
+              Icon(
+                m.isHost
+                    ? Icons.fireplace
+                    : m.isGuest
+                        ? Icons.person_add_alt
+                        : Icons.public,
+                size: IS.md,
+                color: modeColor,
+              ),
+              const SizedBox(width: Sp.md),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      crossAxisAlignment: CrossAxisAlignment.center,
+                      children: [
+                        Flexible(
+                          child: Text(
+                            server.name.isEmpty ? '(unnamed)' : server.name,
+                            style: BT.heading.copyWith(color: p.textPrimary),
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (server.description.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text(server.description,
+                            style: BT.caption.copyWith(color: p.textMuted),
+                            overflow: TextOverflow.ellipsis),
+                      ),
+                    const SizedBox(height: Sp.xs),
+                    Wrap(
+                      spacing: Sp.xs,
+                      runSpacing: Sp.xs,
+                      children: chips,
+                    ),
+                    if (m.sessionId.isNotEmpty)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 2),
+                        child: Text('session ${m.sessionId}',
+                            style: BT.caption.copyWith(color: p.textMuted),
+                            overflow: TextOverflow.ellipsis),
+                      ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: Sp.md),
+              _PlayerChip(count: server.playerCount),
+              const SizedBox(width: Sp.sm),
+              const Tooltip(
+                message:
+                    'Join binding ships in the next iteration — for now this entry confirms the session is advertised.',
+                child: FilledButton.tonal(
+                  onPressed: null,
+                  child: Text('Join'),
+                ),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _Chip extends StatelessWidget {
+  final String label;
+  final Color color;
+  const _Chip({required this.label, required this.color});
+
+  @override
+  Widget build(BuildContext context) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: Sp.sm, vertical: 2),
+      decoration: BoxDecoration(
+        color: color.withValues(alpha: 0.12),
+        borderRadius: BorderRadius.circular(4),
+        border: Border.all(color: color.withValues(alpha: 0.35), width: 1),
+      ),
+      child: Text(
+        label,
+        style: BT.caption.copyWith(
+          color: color,
+          fontWeight: FontWeight.w500,
+        ),
       ),
     );
   }

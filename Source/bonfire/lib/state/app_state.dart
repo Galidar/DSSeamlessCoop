@@ -3,6 +3,7 @@
 /// download progress, etc.) via ChangeNotifier so widgets can rebuild.
 
 import 'dart:async';
+import 'dart:convert';
 import 'dart:io';
 
 import 'package:flutter/foundation.dart';
@@ -249,6 +250,80 @@ class GameSettings {
   }
 }
 
+/// Parsed payload of the `%%BNS-DS2-V1%%` sentinel embedded by
+/// BonfireService into `ServerConfig.ServerDescription`. Mirrors the schema
+/// in `Source/BonfireService/Modules/Ds2NativeSession.cs::Manifest`.
+///
+/// `null` if a remote server doesn't carry the sentinel (i.e. it's not a
+/// Bonfire DS2 native session host or it's currently in solo mode).
+class Ds2NativeSessionManifest {
+  final String sessionId;
+  final String mode; // host | guest | invader | solo
+  final String stage;
+  final String intent;
+  final String rulePreset;
+  final int tauntCount;
+  final int infectionCount;
+  final int curseCount;
+  final int recoveryCount;
+  final int runtimeVersion;
+  final DateTime? stampedAt;
+
+  const Ds2NativeSessionManifest({
+    required this.sessionId,
+    required this.mode,
+    required this.stage,
+    required this.intent,
+    required this.rulePreset,
+    required this.tauntCount,
+    required this.infectionCount,
+    required this.curseCount,
+    required this.recoveryCount,
+    required this.runtimeVersion,
+    required this.stampedAt,
+  });
+
+  static const String sentinel = '%%BNS-DS2-V1%%';
+
+  /// Extracts and decodes the manifest from a raw `ServerDescription` value.
+  /// Returns `null` if the sentinel is absent or the JSON payload is invalid.
+  static Ds2NativeSessionManifest? tryParseFromDescription(String desc) {
+    if (desc.isEmpty) return null;
+    final idx = desc.indexOf(sentinel);
+    if (idx < 0) return null;
+    final jsonStart = idx + sentinel.length;
+    if (jsonStart >= desc.length) return null;
+    final endIdx = desc.indexOf('\n', jsonStart);
+    final raw = (endIdx < 0
+            ? desc.substring(jsonStart)
+            : desc.substring(jsonStart, endIdx))
+        .trim();
+    try {
+      final node = jsonDecode(raw);
+      if (node is! Map<String, dynamic>) return null;
+      return Ds2NativeSessionManifest(
+        sessionId: (node['session_id'] as String?) ?? '',
+        mode: (node['mode'] as String?) ?? 'solo',
+        stage: (node['stage'] as String?) ?? '',
+        intent: (node['intent'] as String?) ?? '',
+        rulePreset: (node['rules'] as String?) ?? '',
+        tauntCount: (node['taunt'] as num?)?.toInt() ?? 0,
+        infectionCount: (node['infection'] as num?)?.toInt() ?? 0,
+        curseCount: (node['curse'] as num?)?.toInt() ?? 0,
+        recoveryCount: (node['recovery'] as num?)?.toInt() ?? 0,
+        runtimeVersion: (node['runtime_ver'] as num?)?.toInt() ?? 0,
+        stampedAt: DateTime.tryParse((node['ts'] as String?) ?? ''),
+      );
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bool get isHost => mode.toLowerCase() == 'host';
+  bool get isGuest => mode.toLowerCase() == 'guest';
+  bool get isInvader => mode.toLowerCase() == 'invader';
+}
+
 class PublicServer {
   final String id;
   final String name;
@@ -264,6 +339,7 @@ class PublicServer {
   final String modsWhitelist;
   final String modsBlacklist;
   final String modsRequired;
+  final Ds2NativeSessionManifest? bnsManifest;
 
   PublicServer({
     required this.id,
@@ -280,24 +356,29 @@ class PublicServer {
     required this.modsWhitelist,
     required this.modsBlacklist,
     required this.modsRequired,
+    this.bnsManifest,
   });
 
-  factory PublicServer.fromJson(Map<String, dynamic> j) => PublicServer(
-        id: j['id'] as String? ?? '',
-        name: j['name'] as String? ?? '(unnamed)',
-        description: _stripBnsSentinel(j['description'] as String? ?? ''),
-        gameType: j['game_type'] as String? ?? '',
-        playerCount: (j['player_count'] as num?)?.toInt() ?? 0,
-        passwordRequired: j['password_required'] as bool? ?? false,
-        hostname: j['hostname'] as String? ?? '',
-        ipAddress: j['ip_address'] as String? ?? '',
-        isShard: j['is_shard'] as bool? ?? false,
-        isRelayed: j['is_relayed'] as bool? ?? false,
-        allowSharding: j['allow_sharding'] as bool? ?? false,
-        modsWhitelist: j['mods_whitelist'] as String? ?? '',
-        modsBlacklist: j['mods_blacklist'] as String? ?? '',
-        modsRequired: j['mods_required'] as String? ?? '',
-      );
+  factory PublicServer.fromJson(Map<String, dynamic> j) {
+    final rawDesc = j['description'] as String? ?? '';
+    return PublicServer(
+      id: j['id'] as String? ?? '',
+      name: j['name'] as String? ?? '(unnamed)',
+      description: _stripBnsSentinel(rawDesc),
+      gameType: j['game_type'] as String? ?? '',
+      playerCount: (j['player_count'] as num?)?.toInt() ?? 0,
+      passwordRequired: j['password_required'] as bool? ?? false,
+      hostname: j['hostname'] as String? ?? '',
+      ipAddress: j['ip_address'] as String? ?? '',
+      isShard: j['is_shard'] as bool? ?? false,
+      isRelayed: j['is_relayed'] as bool? ?? false,
+      allowSharding: j['allow_sharding'] as bool? ?? false,
+      modsWhitelist: j['mods_whitelist'] as String? ?? '',
+      modsBlacklist: j['mods_blacklist'] as String? ?? '',
+      modsRequired: j['mods_required'] as String? ?? '',
+      bnsManifest: Ds2NativeSessionManifest.tryParseFromDescription(rawDesc),
+    );
+  }
 
   bool get hasMods =>
       modsWhitelist.trim().isNotEmpty ||
