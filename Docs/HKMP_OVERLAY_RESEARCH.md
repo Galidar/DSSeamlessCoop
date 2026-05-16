@@ -14,8 +14,11 @@ starting point for "Long-Term Vision: HKMP-Style Overlay" in
 | 1 — render-hook chain (CreateDevice → Factory → Present) | DONE  | earlier | per-frame callback inside DS2's render thread    |
 | 2 — screen-space overlay quad + full pipeline save/restore | DONE  | `3a0ae6c` | magenta line/banner drawn each frame, lighting engine unaffected |
 | 3 — world-space VP capture + 3D cube anchor             | DONE  | `806f6ad` (v14) → `979ddfc` (v15) | live VP read from DS2 memory, 3D cube sits on host's feet, world-anchored, rotates with camera |
-| 4 — multi-actor rendering (cubes for N peers)           | NEXT   | —       | extend the cube draw to a peer-pose array; render fake ghost first, then wire to network |
-| 5 — peer pose broadcast (UDP via BonfireService)        | TODO   | —       | publish player.pose at 30Hz from host's read of the locked ChrIns chain |
+| 4a — multi-actor rendering (cubes for N peers)          | DONE  | `76f0943` (v16) | host magenta cube + ghost cyan cube at host+5m, validated visually + telemetry (2 cubes/frame) |
+| 4b — IPC for peer-pose table (commands.jsonl handler)   | DONE  | `39a6c77` (v17) + `afac6e1` (v18) | append `render.set_peer_poses` lines and renderer draws / clears in <100ms |
+| 4c — UDP backbone (BonfireService bridge)               | DONE  | `4629897` (v0) + `24c8d3e` (v1) | loopback test passed in-game — ghost cube follows host with ~150ms round-trip lag |
+| 4d — LAN test with second PC                             | NEXT   | —       | set `BONFIRE_POSE_BRIDGE_PEERS` to each PC's IP, both see each other's cubes |
+| 5 — replace cubes with character meshes                  | TODO   | —       | port the FLVER reader (or use a placeholder humanoid) so peers look like players |
 | 6 — animation sync                                       | TODO   | —       | probe ChrIns+0x200..0x600 for the anim_id u32; broadcast alongside pose |
 
 ## 1. What the saponita (white sign soapstone) actually does
