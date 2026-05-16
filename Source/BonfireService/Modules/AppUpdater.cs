@@ -195,7 +195,13 @@ try {
         return "\"" + value.Replace("\"", "\\\"") + "\"";
     }
 
-    private readonly record struct ParsedVersion(int Major, int Minor, int Patch, int Build, string Prerelease)
+    // Made public so ReleaseDownloader can sort its list of candidate
+    // releases by the same comparator AppUpdater uses to detect
+    // "update available". Keeps the SemVer ordering authoritative in
+    // one place — prerelease tags lose to plain releases of the same
+    // numeric version (per SemVer 2.0), and two prereleases compare
+    // alphabetically on their suffix.
+    public readonly record struct ParsedVersion(int Major, int Minor, int Patch, int Build, string Prerelease)
         : IComparable<ParsedVersion>
     {
         public static ParsedVersion Parse(string value)
