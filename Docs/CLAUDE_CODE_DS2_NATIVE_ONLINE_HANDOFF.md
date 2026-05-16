@@ -635,3 +635,124 @@ Live validation 2026-05-15:
 - **Multiplayer effects (steps 7d-h):** rules.cycle / dried fingers /
   cursed pendant / crimson blossom / parchment counters are still
   service-side bookkeeping only.
+
+### 2026-05-15 (continued) — Browser, join target, live push, HKMP vision
+
+Four additional commits landed during the same session, pushing the
+project from "manifest stamped to disk" through to "live state visible
+to peers" and laying out the long-term overlay direction.
+
+1. **DS2 NATIVE SESSIONS browser** (`75bd65d`). Closes handoff step 8.
+   New Dart `Ds2NativeSessionManifest.tryParseFromDescription` mirrors
+   the C# parser; `PublicServer.bnsManifest` is populated alongside
+   the stripped display description.
+   `_Ds2NativeSessionsSection` renders a dedicated section between
+   `MY BONFIRES` and `PUBLIC BONFIRES` on the DS2 tab, hides the same
+   entries from the generic public list, and shows mode/rules/counter
+   chips + session_id per row. Join button shipped disabled with a
+   "next iteration" tooltip in this commit.
+
+2. **Join target arming, service backend** (`0e5fdcf`). Closes handoff
+   step 3 (DS2 binds to a selected host before launch).
+   New `Source\BonfireService\Modules\Ds2NativeJoinTarget.cs` holds a
+   single-shot target with disk persistence at
+   `Runtime\DS2Native\join_target.json`. Three RPC methods:
+   `ds2_runtime.set_join_target` / `clear_join_target` / `get_join_target`.
+   `game.launch_local` calls `Consume()` right after the Steam check;
+   when armed, it fetches the peer's public key via
+   `MasterServer.GetPublicKeyAsync` (same path as the public-server
+   `game.launch` already used — closes handoff step 4) and builds a
+   `LaunchRequest` against the target's hostname/port/key. Returns
+   `mode: "joined_peer_session"` for telemetry. Local Server.exe is
+   intentionally left running so a host can still advertise while
+   guesting elsewhere.
+
+3. **Join target arming, Flutter UI** (`50b3374`). Wires the Join
+   button.
+   `AppState.ds2JoinTarget` plus `refreshDs2JoinTarget` /
+   `armDs2JoinTarget` / `clearDs2JoinTarget`. The
+   `_Ds2NativeSessionRow` Join button is now live with a SnackBar
+   on success/error and morphs into a Cancel button when the row's
+   server matches the armed target. New `_Ds2JoinTargetBanner`
+   between the runtime banner and `MY BONFIRES` so the armed state
+   is visible without scrolling.
+   Validated end-to-end with a self-arm: `armed_at_utc` matched the
+   click, `join_target.json` materialised, the next launch returned
+   `mode: "joined_peer_session"` and the sidecar was deleted
+   post-`Consume()`.
+
+4. **Live manifest propagation** (`39ba0f6` + `88bc11a`). Closes the
+   `manifest_stale_pending_restart` gap left behind by 2105e86.
+   New `Source\BonfireService\Modules\Ds2NativeWebUIPush.cs` does
+   the two-step WebUI handshake (`POST /auth` → token → `POST
+   /settings` with `Auth-Token` header) so Server.exe's in-memory
+   `RuntimeConfig.ServerName`/`ServerDescription` get updated in
+   place every time `StampManifestIfChanged` writes the disk. The
+   next ~30 s heartbeat carries the fresh manifest to the master,
+   no Server.exe restart required.
+   The follow-up commit (`88bc11a`) handles the chicken-and-egg
+   that `Server::Initialize` only auto-generates `WebUIServerUsername`/
+   `WebUIServerPassword` on the **first** boot of a **non-default**
+   shard — a single-profile install would otherwise stay
+   unauthenticated forever. `Ds2NativeSessionCoordinator.Start`
+   now calls `EnsureCredentialsInConfig()` so a fresh
+   `bonfire-<hex>` / `<guid>` pair is populated before Server.exe
+   is next spawned.
+   Live validation: master `/api/v1/servers` returned our `DS2 Native
+   Probe` entry with `session_id` matching the current DS2 PID
+   (`..._33208`, not the boot snapshot) and `mode: guest` matching
+   the user's last Crystal Eye Orb use, timestamped at the exact
+   moment of that item use.
+
+### Long-term direction (HKMP-style overlay)
+
+The control plane is now done. The data plane — actually rendering
+the other player inside DS2 so the experience matches Yui's DS3
+Seamless / Hollow Knight Multiplayer — is the next major project.
+Reference repos on the user's machine:
+
+```text
+C:\Users\Diux\Desktop\HKMP-master\HKMP-master
+C:\Users\Diux\Desktop\HKMP-Entity-Sync-master\HKMP-Entity-Sync-master
+```
+
+HKMP works by injecting a mod DLL that samples local player state
+each frame, sends it to a standalone server, and spawns "fake
+player" actors driven by inbound peer state on each client. Each
+player owns their world independently; only the avatars are shared.
+The DS2 mapping is documented in detail in
+`Docs\DS2NativeRuntime.md` under "Long-Term Vision: HKMP-Style
+Overlay" with a concrete first-milestone breakdown (local-state
+read → outbound packet emission → inbound ingest → fake-player
+spawn → iterate on rate / smoothing / animation coverage).
+
+The infrastructure built through 2026-05-15 (BNS sentinel, browser,
+join target, live push, manifest-driven session identity) is the
+session-discovery layer that the overlay layer will run on top of:
+two Bonfires already agree on which `Server.exe` they share, who
+is host vs guest, and what rule preset is active. The overlay layer
+just adds an additional message type for player-position packets
+and a new client-side actor spawn path.
+
+### Next-session priorities
+
+1. **Experimental release bump** — tag a `v2.6.x-experimental` (or
+   v2.7.0-experimental) with the six commits above so the user's
+   brother can update Bonfire on his second PC and join the live
+   test. Use the existing in-app updater (`AppUpdater.cs`).
+2. **Real 2-PC test** — once both Bonfires are at the same version,
+   host on PC A, browse + Join from PC B, validate the join target
+   actually redirects DS2 through master and both players appear
+   in `server.log` as connected clients to the same `Server.exe`.
+3. **session.invade real matching** — wire Chaos Eye Orb into
+   `Source\Server.DarkSouls2\Server\GameService\GameManagers\
+   BreakIn\` so the orb actually triggers a private-only invasion
+   match. First item with a multiplayer side effect beyond
+   bookkeeping counters.
+4. **Param self-referential migration** — clean up the
+   `+0x18 = 62050000` artifact via `Ds2RegTool`, remove the tolerant
+   `native_id` workaround from `DS2_NativeRuntimeHook.cpp`.
+5. **HKMP-style overlay milestone 1** — local player state read
+   (position, rotation, animation state id). Live-validate with
+   Cheat Engine. Document in a new
+   `dsseamlesscoop-player-sync-map.md` reference.

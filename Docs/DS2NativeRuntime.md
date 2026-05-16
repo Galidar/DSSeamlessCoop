@@ -538,3 +538,199 @@ Live validation 2026-05-15:
   with escaped `\n`).
 - The Flutter bonfire list renders descriptions stripped of the sentinel
   line.
+
+## DS2 Native Sessions Browser (2026-05-15)
+
+The advertisement layer publishes the manifest to master; the browser
+layer surfaces it back in the UI so peers can discover and target it.
+
+Flutter side (`Source\bonfire\lib\state\app_state.dart` +
+`Source\bonfire\lib\screens\home_screen.dart`):
+
+- `Ds2NativeSessionManifest.tryParseFromDescription(String)` mirrors
+  the C# parser. Each `PublicServer` carries an optional
+  `bnsManifest` field populated from the raw description before
+  `_stripBnsSentinel` cleans it for display.
+- `_Ds2NativeSessionsSection` renders entries with non-null
+  `bnsManifest` filtered to the DS2 tab. Each row shows:
+  - Icon (host = fireplace, guest = person_add_alt, invader = globe)
+  - Name + clean description
+  - Mode chip (HOST / GUEST / INVADER / fallback) in palette-mapped
+    color (accent / secondary / warn)
+  - Rule preset chip
+  - Non-zero counter chips (taunt / infection / curse / recovery)
+  - `session <session_id>` subtitle line
+  - Player count + Join button
+- BNS entries are hidden from the generic `PUBLIC BONFIRES` section
+  to keep the demarcation clean.
+
+## Join Target Arming (2026-05-15)
+
+Module: `Source\BonfireService\Modules\Ds2NativeJoinTarget.cs`.
+
+Single-shot armed-target slot consumed by `game.launch_local`:
+
+- `Ds2NativeJoinTarget.Set(JoinTarget)` stores the target with a
+  best-effort sidecar at `Runtime\DS2Native\join_target.json` so a
+  BonfireService restart between arming and launching does not lose
+  the user's selection.
+- `Consume()` reads-and-clears atomically, used at the top of
+  `game.launch_local`.
+- `Get()` and `Clear()` round out the API for the read-only inspector
+  and user cancel.
+
+RPC surface added to `Source\BonfireService\Rpc\Methods.cs`:
+
+- `ds2_runtime.set_join_target {server_id, password?}` — looks up the
+  server in `MasterServer.ListServersAsync`, validates
+  `GameType==DarkSouls2`, validates the description carries the BNS
+  sentinel via `Ds2NativeSession.TryParseFromDescription`, snapshots
+  the entry and stores it via `Ds2NativeJoinTarget.Set`. Returns
+  `{armed:true, target:{...}}`.
+- `ds2_runtime.clear_join_target` — drops the armed target on user
+  cancel.
+- `ds2_runtime.get_join_target` — read-only inspector for the UI to
+  render the armed-target banner.
+
+`game.launch_local` consults `Ds2NativeJoinTarget.Consume()` right
+after the Steam validation. When non-null:
+
+1. Validates target `GameType` matches the launching profile.
+2. Fetches the peer's public key via
+   `MasterServer.GetPublicKeyAsync` (same path as `game.launch`
+   uses for public servers), normalises CRLF→LF to satisfy
+   `DS3_ReplaceServerAddressHook.k_key_length`.
+3. Builds a `LaunchRequest` with target's hostname/port/public_key
+   instead of the local profile's, leaves the local `Server.exe`
+   running untouched (the guest might still be hosting their own
+   session), spawns DS2 + injects, returns
+   `{ok, pid, server_name, join_target, mode:"joined_peer_session"}`.
+
+Flutter UI side:
+
+- `AppState.ds2JoinTarget` carries the parsed snapshot via
+  `refreshDs2JoinTarget()` (added to `refreshAll`) so persisted
+  arming survives service restarts.
+- `armDs2JoinTarget(serverId, password?)` / `clearDs2JoinTarget()`
+  wrap the RPCs.
+- `_Ds2NativeSessionRow` Join button is now live: clicking arms,
+  re-clicking the now-`Cancel` button clears, the matching row gets
+  a `TARGET ARMED` chip + `_HoverableRow.selected: true` highlight.
+- `_Ds2JoinTargetBanner` renders between the runtime banner and
+  `MY BONFIRES` whenever `ds2JoinTarget` is non-null, showing host
+  name + host:port + session mode/id + a Cancel button so the
+  arming can be backed out without scrolling to the BNS browser.
+
+## Live Manifest Propagation (2026-05-15)
+
+`Source\BonfireService\Modules\Ds2NativeWebUIPush.cs` closes the
+`manifest_stale_pending_restart` gap left by the initial advertise
+layer.
+
+Problem the gap created: Server.exe loads `RuntimeConfig` once at
+boot and re-broadcasts the in-memory `ServerName`/`ServerDescription`
+on the 30 s heartbeat. Any in-game manifest mutation (mode change,
+counter increment, rule cycle) was written to `config.json` on disk
+but Server.exe never picked it back up — peers stayed on the snapshot
+their host had loaded at boot.
+
+Fix: every successful `StampManifestIfChanged` write now POSTs the
+new `serverName`/`serverDescription` to Server.exe's WebUI
+`/settings` endpoint (`Source\Server\Server\WebUIService\Handlers\
+SettingsHandler.cpp`). That endpoint mutates Server.exe's in-memory
+`Config` in place and calls `SaveConfig()`, so the next 30 s
+heartbeat broadcasts the fresh manifest — no Server.exe restart
+needed.
+
+Authentication is the two-step WebUI handshake:
+
+1. `POST /auth {username, password}` → `{token}`. Credentials come
+   from `cfg.WebUIServerUsername` / `cfg.WebUIServerPassword`.
+2. `POST /settings` + header `Auth-Token: <token>` with body
+   `{serverName, serverDescription}`.
+
+Server.exe normally only auto-generates the WebUI credentials on the
+first boot of a non-default shard (`Server::Initialize` guarded on
+`!IsDefaultServer()`); a single-profile install would otherwise stay
+permanently unauthenticated. To fix this proactively,
+`Ds2NativeWebUIPush.EnsureCredentialsInConfig()` runs from
+`Ds2NativeSessionCoordinator.Start()` and populates `bonfire-<hex>`
+/ `<guid hex>` values for any empty pair before Server.exe is next
+spawned.
+
+`StampManifestIfChanged` now decides staleness as:
+
+```text
+stampedAfterBoot = serverRunning && stamp.utc > server.StartedAt.utc
+stale = stampedAfterBoot && (pushResult is null OR !pushResult.Success)
+```
+
+So the flag is only `true` when Server.exe is running, our stamp
+genuinely post-dates its boot, AND the live push didn't go through.
+The push outcome is surfaced under
+`effect.manifest_stamp.live_push = {success, server_reachable, status, error?}`
+in the service-state JSON so the UI can show granular diagnostics.
+
+Live validation 2026-05-15:
+
+- After redeploy and a single Bonfire item use,
+  `service_state.json` showed `manifest_stale_pending_restart: false`
+  and `live_push: {success:true, server_reachable:true,
+  status:"pushed"}`.
+- Master `/api/v1/servers` returned our `DS2 Native Probe` entry
+  with the **current** `session_id` (matching the live DS2 PID) and
+  `mode: guest` (matching the user's last Crystal Eye Orb use),
+  timestamped at the exact moment of the item use — not the
+  Server.exe boot snapshot.
+
+## Long-Term Vision: HKMP-Style Overlay
+
+The current stack (advertise / browser / join target / live push)
+gives two Bonfire instances a shared `Server.exe` and a shared
+session identity. What it does **not** yet do is make the players
+visible to each other inside DS2's world the way Yui's DS3 Seamless
+or Hollow Knight Multiplayer (HKMP — `C:\Users\Diux\Desktop\HKMP-master`
+and `C:\Users\Diux\Desktop\HKMP-Entity-Sync-master`) do. That is
+this project's eventual goal.
+
+HKMP's architecture, applied to DS2 by analogy:
+
+| HKMP layer | DS2 equivalent (target) |
+| --- | --- |
+| Injected `.dll` mod via Hollow Knight Modding API | Existing `Loader\Injector.dll` (DS2_NativeRuntimeHook.cpp + new sync hooks) |
+| Each player owns their world independently (bosses, NPCs, doors are per-client) | Same — each DS2 keeps its own progression. The shared layer is overlay-only. |
+| Real-time UDP/TCP packet stream of position, animation state, skin id, team | New `Source\Server.DarkSouls2\Server\GameService\GameManagers\PlayerSync\` manager + UDP fanout on the existing game port (50010), or a new sync port. Position + rotation + animation state at 20–30 Hz. |
+| Server-side broadcast of each client's state to all peers | DS3OS `GameService` already manages connected clients; an additional message type for `PlayerSync` payloads would slot in alongside the existing protobuf message types. |
+| Client-side spawn of "fake player" actor for each peer | This is the heavy lift. Each DS2 client needs to spawn a controllable actor (probably reusing the NPC phantom skeleton from summon sign placement) and drive its transform/animation from the received peer state every frame. Hook target: the chr/player update loop near the existing `0x17DC40` rest hook. |
+| Entity sync (enemies, bosses, world state) — the separate `HKMP-Entity-Sync` repo | The "experimental path" called out in the original handoff. Higher complexity, must come after player sync is stable. |
+
+Concrete first milestone for the overlay layer:
+
+1. **Local player state read.** Identify the DS2 in-process pointer
+   chain to the local player's transform (position, rotation,
+   current animation state id). Validate live via Cheat Engine /
+   x64dbg, like the existing `BobTable.GameManagerImp...0x70`
+   pattern that drives the selected-entry cache. Document in a new
+   `dsseamlesscoop-player-sync-map.md` reference.
+2. **Outbound packet emission.** Add a runtime thread in
+   `DS2_NativeRuntimeHook.cpp` that samples the local player state
+   at 20–30 Hz and pushes JSONL / binary packets through a new
+   sibling file (e.g. `<session>.player.jsonl`) or directly over
+   UDP. Start with file-based so it's debuggable, switch to network
+   once stable.
+3. **Inbound packet ingest.** Bonfire-side coordinator reads peer
+   packets from Server.exe and forwards to the local injector via
+   the existing command inbox channel.
+4. **Fake player spawn.** Hook DS2's NPC spawn path to inject a
+   controllable actor at the received peer position. The actor's
+   animation state is driven by the received payload each frame.
+5. **Iterate** on packet rate, smoothing, animation coverage,
+   damage handling (off by default, like HKMP's PvP toggle).
+
+Everything before this milestone — the BNS infrastructure built
+through 2026-05-15 — is the **control plane** that tells two
+Bonfires they are sharing a session and lets them establish a
+trusted server-mediated link. The overlay layer is the
+**data plane** that actually makes their characters visible to
+each other inside DS2. The control plane is now done; the data
+plane is the next major project.
