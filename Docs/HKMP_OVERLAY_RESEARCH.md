@@ -772,6 +772,101 @@ Trivial. The Bonfire↔BonfireService UDP backbone can carry this for
 8 simultaneous players at <16 KB/s — that's HKMP-grade sync done on a
 LAN without a sweat.
 
+## 13b. Camera & View-Projection chain (2026-05-16, Phase 3 v14)
+
+After ~10 rebuilds of cbuffer-snoop attempts (Phase 3 v6→v13) returned
+zero usable VP candidates — DS2 SOTFS composes `V × P` in the shader
+instead of storing the combined matrix — we switched to **reading the
+camera state directly from DS2's memory** via interactive Cheat Engine
+exploration. This worked on the first walk and gives us a stable,
+live VP without any GPU sync.
+
+### The chain (anchored on the existing `gm_imp_global` AOB)
+
+```
+gm_imp_global  resolved via AOB
+   48 8B 05 ?? ?? ?? ?? 48 8B 58 38 48 85 DB 74 ?? F6
+   (already done by DS2_NativeRuntimeHook; address published via
+   DS2_NativeRuntimeHook_GetGameManagerImpAddress())
+
+   *gm_imp_global      = gm
+   *(gm + 0xD0)        = p1   (== player ChrIns; also gm+0x18→+0x50)
+   *(p1 + 0xE8)        = p2
+   *(p2 + 0x18)        = p3
+   *(p3 + 0x28)        = camCfg
+```
+
+### `camCfg` field map (verified live)
+
+| Offset  | Type        | Meaning                                          |
+|---------|-------------|--------------------------------------------------|
+| `+0x4E0` | `float[16]` | **camera-to-world transform** (row-major)        |
+|         |             | row 0 = right axis (rx,ry,rz,0)                  |
+|         |             | row 1 = up axis    (ux,uy,uz,0)                  |
+|         |             | row 2 = forward    (fx,fy,fz,0)                  |
+|         |             | row 3 = eye world position (ex,ey,ez,1)          |
+| `+0x520` | `float[16]` | **D3D LH perspective projection** (row-major)    |
+|         |             | m[0][0] = 1/(aspect·tan(fovY/2))                 |
+|         |             | m[1][1] = 1/tan(fovY/2)                          |
+|         |             | m[2][2] = far/(far−near) ≈ 1.0                   |
+|         |             | m[2][3] = 1.0                                    |
+|         |             | m[3][2] = −near·m[2][2] ≈ −0.1                   |
+|         |             | m[3][3] = 0                                      |
+| `+0x3D4` | `float`    | aspect ratio (1.778 = 16:9)                      |
+| `+0x3D8` | `float`    | near plane (0.1)                                 |
+| `+0x3DC` | `float`    | far plane (5000)                                 |
+| `+0xD04` | `float`    | camFovY radians (0.7679 ≈ 44° vanilla)           |
+| `+0xD10` | `float`    | camera target Y offset above feet (chrOY = 1.42) |
+| `+0xD18` | `float`    | camera distance from target (3.6)                |
+
+### Verification math (live snapshot)
+
+At a sample frame:
+- Player position: `(-32.88, 6.60, -11.22)` (chr+0x90)
+- Camera eye:     `(-31.07, 8.17, -14.32)` (camCfg+0x4E0 row 3)
+- Camera target = player + (0, chrOY, 0) = `(-32.88, 8.02, -11.22)`
+- `target − eye` = `(-1.82, -0.15, 3.10)`, ‖.‖ = **3.6000 ✓** (= cfg_dist)
+- Forward axis (camCfg+0x4E0 row 2) = `(-0.5045, -0.0431, 0.8624)`
+- Normalized `(target − eye)` = `(-0.506, -0.042, 0.861)` ✓ matches row 2
+
+### View-Projection construction
+
+For an orthonormal rotation `R` + translation `t = eye`, the inverse
+(world → view) is `R^T | -R^T·eye`. So in C++ the view matrix is:
+
+```c
+float view[16] = {
+    rx,  ux,  fx,  0,
+    ry,  uy,  fy,  0,
+    rz,  uz,  fz,  0,
+    -(eye·right), -(eye·up), -(eye·forward), 1
+};
+```
+
+Then `VP = view × proj` via standard row-major matrix multiply.
+The result is uploaded row-major to the HLSL cbuffer; the shader uses
+`mul(VP, float4(world_pos, 1.0))`. Under HLSL's default column-major
+matrix interpretation of cbuffer bytes, this is equivalent to
+`clip_col = VP^T · world_col`, which equals
+`(world_row · VP)^T = clip_col`. ✓
+
+### Discovery method (Cheat Engine bridge)
+
+1. `AOBScan("48 8B 05 ?? ?? ?? ?? 48 8B 58 38 48 85 DB 74 ?? F6", "+W")`
+   resolves `gm_imp_global`.
+2. Walked `gm → ... → camCfg` by reading qword pointers.
+3. Searched `camCfg` for **4×4 orthonormal sub-matrices** with
+   translation within ~5 units of the player. Only one matched in the
+   first 0x1000 bytes: `camCfg + 0x4E0`.
+4. Searched for **projection-like matrices** (`m[2][3]=1, m[3][3]=0`):
+   24 candidates appeared, of which `camCfg + 0x520` has the diagonal
+   `(1.3922, 2.4751, 1.0, 1.0)` that decomposes cleanly into
+   `yScale = 1/tan(0.7679/2) = 2.4751` and `xScale = yScale/1.778 = 1.3922`.
+
+The full session is captured in `commit history (Phase 3 v14)` and in
+the heartbeat events the runtime emits with the new
+`render_live_vp_*` fields.
+
 ## 14. Next concrete milestones
 
 1. **Track 3 v4** (one rebuild): extend probe scan to ChrIns+0x200..0x400

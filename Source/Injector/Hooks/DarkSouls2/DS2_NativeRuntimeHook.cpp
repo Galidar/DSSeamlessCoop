@@ -165,6 +165,7 @@ namespace
     void** s_inventory_selected_item_entry_slot = nullptr;
     RuntimeWorkerConfig s_active_runtime_config;
     bool s_active_runtime_config_ready = false;
+    std::atomic<uintptr_t> s_published_gm_imp_global_addr{0};
 
 #pragma pack(push, 1)
     struct Ds2ItemGiveEntry
@@ -3742,6 +3743,90 @@ namespace
                     DS2_RenderHook_IsPresentHooked();
                 heartbeat["render_frame_count"] =
                     static_cast<uint64_t>(DS2_RenderHook_GetFrameCount());
+                // Phase 3 diagnostic: how many cbuffer captures the
+                // Map/Unmap hook matched, and the first/last row of
+                // the latest captured VP. Zero captures → filter
+                // never matched (no Map/Unmap call on a 64-1024 byte
+                // dynamic CB during this DS2 session).
+                const uint64_t vp_cnt = DS2_RenderHook_GetVPCaptureCount();
+                heartbeat["render_vp_capture_count"] = vp_cnt;
+                heartbeat["render_total_map_calls"] =
+                    DS2_RenderHook_GetTotalMapCalls();
+                heartbeat["render_total_unmap_calls"] =
+                    DS2_RenderHook_GetTotalUnmapCalls();
+                heartbeat["render_cb_map_count"] =
+                    DS2_RenderHook_GetCBufferMapCount();
+                uint32_t cb_sizes[4] = { 0, 0, 0, 0 };
+                DS2_RenderHook_GetFirstCBSizes(cb_sizes);
+                heartbeat["render_first_cb_sizes"] = {
+                    cb_sizes[0], cb_sizes[1], cb_sizes[2], cb_sizes[3] };
+                // UpdateSubresource counters — this is the path DS2
+                // actually uses for cbuffers (verified v11d).
+                heartbeat["render_update_sub_total"] =
+                    DS2_RenderHook_GetTotalUpdateSubCalls();
+                heartbeat["render_update_cb_count"] =
+                    DS2_RenderHook_GetUpdateCBCallCount();
+                uint32_t upd_sizes[4] = { 0, 0, 0, 0 };
+                DS2_RenderHook_GetFirstUpdateCBSizes(upd_sizes);
+                heartbeat["render_first_update_cb_sizes"] = {
+                    upd_sizes[0], upd_sizes[1], upd_sizes[2], upd_sizes[3] };
+                heartbeat["render_captured_cb_size"] =
+                    DS2_RenderHook_GetCapturedCBSize();
+                // v11g full buffer dump for VP offset hunting.
+                float dump[64] = {};
+                const uint32_t dump_floats =
+                    DS2_RenderHook_GetCapturedBufferDump(dump);
+                if (dump_floats > 0)
+                {
+                    nlohmann::json arr = nlohmann::json::array();
+                    for (uint32_t i = 0; i < dump_floats; ++i)
+                    {
+                        arr.push_back(dump[i]);
+                    }
+                    heartbeat["render_captured_buffer"] = arr;
+                }
+                // v12: parallel dump of the 576-byte cbuffer for
+                // side-by-side comparison with the 160-byte one.
+                float dump576[144] = {};
+                const uint32_t dump576_floats =
+                    DS2_RenderHook_GetCapturedBuffer576Dump(dump576);
+                if (dump576_floats > 0)
+                {
+                    nlohmann::json arr576 = nlohmann::json::array();
+                    for (uint32_t i = 0; i < dump576_floats; ++i)
+                    {
+                        arr576.push_back(dump576[i]);
+                    }
+                    heartbeat["render_captured_buffer_576"] = arr576;
+                }
+                float captured[16] = {};
+                if (DS2_RenderHook_GetCapturedVP(captured))
+                {
+                    heartbeat["render_vp_row0"] = {
+                        captured[0], captured[1], captured[2], captured[3] };
+                    heartbeat["render_vp_row3"] = {
+                        captured[12], captured[13], captured[14], captured[15] };
+                }
+                // v14: live VP read from memory (replaces the cbuffer
+                // capture path). Read count > 0 means the camera-config
+                // chain resolved and the overlay quad is being drawn
+                // with a real DS2 VP this frame.
+                heartbeat["render_live_vp_read_count"] =
+                    DS2_RenderHook_GetLiveVPReadCount();
+                heartbeat["render_live_vp_fail_count"] =
+                    DS2_RenderHook_GetLiveVPFailCount();
+                float live[16] = {};
+                if (DS2_RenderHook_TryGetLiveVP(live))
+                {
+                    heartbeat["render_live_vp_row0"] = {
+                        live[0],  live[1],  live[2],  live[3]  };
+                    heartbeat["render_live_vp_row1"] = {
+                        live[4],  live[5],  live[6],  live[7]  };
+                    heartbeat["render_live_vp_row2"] = {
+                        live[8],  live[9],  live[10], live[11] };
+                    heartbeat["render_live_vp_row3"] = {
+                        live[12], live[13], live[14], live[15] };
+                }
                 AppendRuntimeEvent(*config, "runtime.heartbeat", heartbeat);
             }
             if ((heartbeat_counter % 15) == 0)
@@ -3846,6 +3931,12 @@ bool DS2_NativeRuntimeHook::Install(Injector& injector)
             worker_config->GameImageSize);
     s_active_runtime_config = *worker_config;
     s_active_runtime_config_ready = true;
+    // Publish the resolved GameManagerImp global address so other
+    // hooks (DS2_RenderHook) can walk the locked host transform chain
+    // without duplicating the AOB scan.
+    s_published_gm_imp_global_addr.store(
+        worker_config->GameManagerImpGlobalAddress,
+        std::memory_order_release);
 
     const std::string event_log_text = worker_config->EventLog.string();
     const std::string command_inbox_text = worker_config->CommandInbox.string();
@@ -3907,4 +3998,9 @@ void DS2_NativeRuntimeHook::Uninstall()
 const char* DS2_NativeRuntimeHook::GetName()
 {
     return "DS2 Native Runtime";
+}
+
+uintptr_t DS2_NativeRuntimeHook_GetGameManagerImpAddress()
+{
+    return s_published_gm_imp_global_addr.load(std::memory_order_acquire);
 }
