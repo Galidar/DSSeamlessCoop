@@ -3645,11 +3645,32 @@ namespace
                 // Missing or malformed entries are skipped silently
                 // — the runtime worker is tolerant by design so a
                 // single bad peer message can't crash the renderer.
-                DS2_PeerPose poses[16] = {};
-                int written = 0;
+                //
+                // Accept BOTH shapes for the peers array:
+                //   (a) bare:     {"command":"...", "peers":[...]}
+                //   (b) wrapped:  {"command":"...", "payload":{"peers":[...]}}
+                // Shape (b) is what Ds2NativeRuntimeBridge.SendCommand
+                // produces (Bonfire RPC clients hit this path); shape
+                // (a) is the direct-write path used by Phase 4b tests
+                // and any custom writer that bypasses the bridge.
+                const nlohmann::json* peers_node = nullptr;
                 if (parsed.contains("peers") && parsed["peers"].is_array())
                 {
-                    for (const auto& peer_json : parsed["peers"])
+                    peers_node = &parsed["peers"];
+                }
+                else if (parsed.contains("payload") &&
+                         parsed["payload"].is_object() &&
+                         parsed["payload"].contains("peers") &&
+                         parsed["payload"]["peers"].is_array())
+                {
+                    peers_node = &parsed["payload"]["peers"];
+                }
+
+                DS2_PeerPose poses[16] = {};
+                int written = 0;
+                if (peers_node != nullptr)
+                {
+                    for (const auto& peer_json : *peers_node)
                     {
                         if (written >= 16) break;
                         if (!peer_json.is_object()) continue;
