@@ -21,6 +21,12 @@ public static class Firewall
     public const int WebUiTcpPort = 50005;
     public const string GameRangeTcp = "50060-50200";
     public const string GameRangeUdp = "50060-50200";
+    // Phase 4d (HKMP overlay): pose-bridge UDP listens here on both
+    // host and guest PCs. Must be reachable from the peer's WAN
+    // address — opens a hole the same way the existing DS3OS rules
+    // do. Cleaned up by RemoveRulesElevated() along with everything
+    // else if the user uninstalls.
+    public const int PoseBridgeUdpPort = 50031;
 
     public static readonly string[] RuleNames =
     {
@@ -31,6 +37,7 @@ public static class Firewall
         RulePrefix + " GameRange UDP",
         RulePrefix + " Server.exe",
         RulePrefix + " Loader.exe",
+        RulePrefix + " PoseBridge UDP",
     };
 
     public sealed record RuleStatus(string Name, bool Present);
@@ -66,6 +73,8 @@ public static class Firewall
         sb.AppendLine($"netsh advfirewall firewall add rule name=\"{RulePrefix} WebUI\" dir=in action=allow protocol=TCP localport={WebUiTcpPort}");
         sb.AppendLine($"netsh advfirewall firewall add rule name=\"{RulePrefix} GameRange TCP\" dir=in action=allow protocol=TCP localport={GameRangeTcp}");
         sb.AppendLine($"netsh advfirewall firewall add rule name=\"{RulePrefix} GameRange UDP\" dir=in action=allow protocol=UDP localport={GameRangeUdp}");
+        // Phase 4d HKMP overlay UDP backbone.
+        sb.AppendLine($"netsh advfirewall firewall add rule name=\"{RulePrefix} PoseBridge UDP\" dir=in action=allow protocol=UDP localport={PoseBridgeUdpPort}");
 
         if (!string.IsNullOrEmpty(serverExePath))
             sb.AppendLine($"netsh advfirewall firewall add rule name=\"{RulePrefix} Server.exe\" dir=in action=allow program=\"{serverExePath}\" enable=yes");

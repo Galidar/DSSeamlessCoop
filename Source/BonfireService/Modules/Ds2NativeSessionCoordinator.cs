@@ -217,6 +217,11 @@ public static class Ds2NativeSessionCoordinator
                 var preStartStamp = StampManifestIfChanged(memory);
                 serverEffect = EnsureLocalServerRunning(memory);
                 serverEffect["manifest_pre_start"] = preStartStamp;
+                // Phase 4d (HKMP overlay): start the pose bridge in
+                // host mode — listen on UDP 50031, no initial peers.
+                // Guests' first packet auto-registers their IP, so we
+                // don't need a separate signalling channel.
+                serverEffect["pose_bridge_started"] = TryStartPoseBridgeAsHost();
                 break;
 
             case "session.join":
@@ -227,6 +232,12 @@ public static class Ds2NativeSessionCoordinator
                 serverEffect["status"] = "guest_link_armed";
                 serverEffect["note"] =
                     "Join requests are armed in Bonfire state; connect to a Bonfire host before launch for the current DS2 network stack.";
+                // Phase 4d: start the pose bridge in guest mode —
+                // initial peer is the host's IP from the armed join
+                // target. Once the guest sends a packet to the host,
+                // the host auto-discovers the guest's IP via the
+                // listener and the link is bidirectional.
+                serverEffect["pose_bridge_started"] = TryStartPoseBridgeAsGuest();
                 break;
 
             case "session.invade":
@@ -244,6 +255,10 @@ public static class Ds2NativeSessionCoordinator
                 memory.Stage = "service_session_closed";
                 memory.OnlineIntent = "close_session";
                 serverEffect = CloseRuntimeStartedServer(memory);
+                // Phase 4d: tear down the pose bridge so no more
+                // UDP packets fly after the session is closed.
+                try { Ds2NativePoseBridge.Stop(); } catch { }
+                serverEffect["pose_bridge_stopped"] = true;
                 break;
 
             case "rules.cycle":
@@ -690,6 +705,91 @@ public static class Ds2NativeSessionCoordinator
         {
             return Task.CompletedTask;
         }
+    }
+
+    // ── Phase 4d (2026-05-16): pose-bridge lifecycle integration ────
+    //
+    // The HKMP-style overlay needs a UDP backbone alongside each
+    // bonfire-co-op session. We start it when the session opens and
+    // tear it down when the session closes, so it's invisible to the
+    // user — no env vars, no extra .bat launchers, just click host /
+    // click join and the cubes start flying between PCs.
+    //
+    // Default port is 50031; both ends MUST use the same port for
+    // auto-discovery to work (the listener registers
+    // src_ip:LOCAL_PORT, not the ephemeral src port the peer sent
+    // from). If we ever need per-session port rotation, we'd derive
+    // it from the session_id hash; for now a fixed port keeps the
+    // firewall rule simple.
+    private const int kDefaultPoseBridgePort = 50031;
+
+    private static JsonObject TryStartPoseBridgeAsHost()
+    {
+        var result = new JsonObject
+        {
+            ["role"] = "host",
+            ["port"] = kDefaultPoseBridgePort,
+        };
+        try
+        {
+            // Host doesn't know the guest's IP yet — it'll be learned
+            // by auto-discovery on the listener once the guest's
+            // first packet arrives.
+            var started = Ds2NativePoseBridge.EnsureStarted(
+                kDefaultPoseBridgePort, Array.Empty<string>());
+            result["started"] = started;
+            result["already_running"] = !started;
+        }
+        catch (Exception ex)
+        {
+            result["started"] = false;
+            result["error"] = ex.Message;
+        }
+        return result;
+    }
+
+    private static JsonObject TryStartPoseBridgeAsGuest()
+    {
+        var result = new JsonObject
+        {
+            ["role"] = "guest",
+            ["port"] = kDefaultPoseBridgePort,
+        };
+        try
+        {
+            var target = Ds2NativeJoinTarget.Get();
+            // Prefer the public hostname (master-server-listed) — works
+            // across NATs as long as the host has UDP 50031 forwarded.
+            // For LAN-only sessions the brother's join target should
+            // be the LAN IP and PrivateHostname would be the same.
+            var hostIp = target?.Hostname;
+            if (string.IsNullOrWhiteSpace(hostIp))
+            {
+                result["started"] = false;
+                result["error"] = "no armed join target — guest has nothing to point the bridge at";
+                return result;
+            }
+            var peer = $"{hostIp}:{kDefaultPoseBridgePort}";
+            result["peer"] = peer;
+
+            var started = Ds2NativePoseBridge.EnsureStarted(
+                kDefaultPoseBridgePort, new[] { peer });
+            if (!started)
+            {
+                // Already running — make sure the host is in the peer
+                // list (covers re-join after a session.leave that
+                // didn't fully tear down).
+                Ds2NativePoseBridge.AddPeer(peer);
+                result["already_running"] = true;
+            }
+            result["started"] = true;
+        }
+        catch (Exception ex)
+        {
+            result["started"] = false;
+            result["error"] = ex.Message;
+        }
+        return result;
     }
 
     private sealed class SessionMemory

@@ -471,6 +471,18 @@ public static class Ds2NativePoseBridge
             _peerTable[senderId] = new PeerEntry(
                 senderId, px, py, pz, yaw, DateTime.UtcNow);
             Interlocked.Increment(ref _receivedCount);
+
+            // Auto-discovery: the first valid packet we receive from
+            // an IP that isn't yet in our broadcast list automatically
+            // adds it. This is how the host learns about a guest in
+            // the bonfire-co-op flow — the guest sends first (they
+            // know the host IP from join target), the host sees the
+            // packet and adds the guest's IP as a peer for outbound
+            // broadcasts. No additional handshake needed.
+            if (senderId != _localSenderId)
+            {
+                MaybeRegisterDiscoveredPeer(result.RemoteEndPoint);
+            }
         }
     }
 
@@ -616,6 +628,62 @@ public static class Ds2NativePoseBridge
             }
             return hash;
         }
+    }
+
+    // Called from the listener when an unknown senderId sends a
+    // valid packet. We use the source IP + the configured local
+    // port (NOT the ephemeral source port) as the broadcast target.
+    // This means both ends must be running on the same well-known
+    // port — fine for the bonfire-co-op flow.
+    private static void MaybeRegisterDiscoveredPeer(IPEndPoint remote)
+    {
+        var target = new IPEndPoint(remote.Address, _localPort);
+        lock (Lock)
+        {
+            foreach (var existing in _peerEndpoints)
+            {
+                if (existing.Equals(target)) return;
+            }
+            _peerEndpoints.Add(target);
+            DebugLog($"Discovered new peer: {target}");
+        }
+    }
+
+    // Public helper for Ds2NativeSessionCoordinator. Adds a peer
+    // endpoint to the broadcast list if the bridge is running. Safe
+    // to call at any time; no-op if the endpoint is already present
+    // or the bridge isn't running.
+    public static bool AddPeer(string endpointRaw)
+    {
+        if (!TryParseEndpoint(endpointRaw, out var ep)) return false;
+        lock (Lock)
+        {
+            if (_watcherTask is null) return false;
+            foreach (var existing in _peerEndpoints)
+            {
+                if (existing.Equals(ep)) return true;
+            }
+            _peerEndpoints.Add(ep);
+            DebugLog($"Manually added peer: {ep}");
+            return true;
+        }
+    }
+
+    // Public helper for the session coordinator. Starts the bridge
+    // if it's not already running. Different from the RPC-driven
+    // Start in that callers don't need to construct the peer list
+    // — they can pass an empty list and rely on auto-discovery
+    // once the first packet arrives. Useful for the HOST side of
+    // the bonfire-co-op flow where the host doesn't know the guest's
+    // IP until they connect.
+    public static bool EnsureStarted(int localPort, IReadOnlyList<string> initialPeers)
+    {
+        lock (Lock)
+        {
+            if (_watcherTask is not null) return false; // already running
+        }
+        Start(localPort, initialPeers);
+        return true;
     }
 
     private static bool TryParseEndpoint(string raw, out IPEndPoint endpoint)
