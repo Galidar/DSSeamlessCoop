@@ -102,3 +102,37 @@ uint64_t DS2_RenderHook_GetLiveVPFailCount();
 // hasn't resolved yet on this frame. Safe to call from any thread —
 // the underlying read is wrapped in __try/__except.
 bool DS2_RenderHook_TryGetLiveVP(float out_vp[16]);
+
+// ── Phase 4a (v16, 2026-05-16): multi-actor public API ──────────────
+//
+// The render hook can now draw N cubes per frame, one per "peer
+// pose". Slot 0 is always the host (read live from chr+0x90 inside
+// DrawOverlay); slots 1..N come from this setter. During Phase 4a
+// we also emit a hard-coded ghost cube at host+(5,0,0) for visual
+// proof that the multi-draw pipeline works without any network in
+// the loop.
+//
+// In Phase 4b the BonfireService bridge thread will call
+// DS2_RenderHook_SetPeerPoses() at ~30 Hz with the array of peer
+// poses received over the UDP backbone. The lock around the table
+// is an SRWLock — readers (the Present thread) take shared, the
+// setter takes exclusive. Reads are wait-free on the contention
+// path.
+struct DS2_PeerPose
+{
+    float position[3];     // world-space feet position
+    float yaw_radians;     // facing direction, rotation around world Y
+    float color[3];        // RGB tint for this peer's cube
+    uint32_t valid;        // 0 = slot empty / departed, 1 = active
+};
+
+// Publish a new peer-pose table. `count` is clamped to the internal
+// kMaxPeers (currently 16). Slots past `count` are zeroed so the
+// renderer doesn't keep drawing stale entries. Safe to call from
+// any thread.
+void DS2_RenderHook_SetPeerPoses(const DS2_PeerPose* poses, int count);
+
+// Diagnostic accessors used by the runtime heartbeat.
+int      DS2_RenderHook_GetPeerCount();
+uint64_t DS2_RenderHook_GetMultiDrawFrames();
+uint64_t DS2_RenderHook_GetMultiDrawCubesTotal();

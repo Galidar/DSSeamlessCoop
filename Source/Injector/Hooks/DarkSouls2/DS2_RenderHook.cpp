@@ -129,6 +129,36 @@ namespace
     std::atomic<uint64_t> s_live_vp_read_count{0};
     std::atomic<uint64_t> s_live_vp_fail_count{0};
 
+    // v16 (Phase 4a): multi-actor render. DrawOverlay iterates over
+    // this table each frame and emits one cube per entry. The host's
+    // own pose is folded in implicitly at draw time (peer 0 is always
+    // the host, read from chr+0x90). Slots 1..N are filled either by
+    // (a) a hard-coded ghost during 4a sanity-check, or (b) the IPC
+    // setter DS2_RenderHook_SetPeerPoses() in 4b once BonfireService
+    // starts publishing peer poses from the network.
+    constexpr int kMaxPeers = 16;
+    struct PeerPoseEntry
+    {
+        float position[3];
+        float yaw_radians;
+        float color[3];
+        uint32_t valid;   // 0 = empty slot, 1 = active
+    };
+    static_assert(sizeof(PeerPoseEntry) == 32,
+                  "PeerPoseEntry layout must stay POD/32-byte for IPC");
+
+    // Double-buffered table. Reader (Present thread) takes a shared
+    // snapshot; setter (BonfireService bridge thread) writes
+    // exclusively. SRWLock is the lightest reader-writer primitive
+    // Win32 offers — same one CE uses internally.
+    SRWLOCK         s_peer_table_lock = SRWLOCK_INIT;
+    PeerPoseEntry   s_peer_table[kMaxPeers] = {};
+    std::atomic<int> s_peer_table_count{0};
+
+    // Diagnostic counters for the heartbeat.
+    std::atomic<uint64_t> s_multi_draw_frames{0};
+    std::atomic<uint64_t> s_multi_draw_cubes_total{0};
+
     // v11g: capture full 256 bytes (64 floats) of the first-of-frame
     // cbuffer so we can dump the entire content via the heartbeat and
     // visually identify where the VP matrix actually lives. Once we
@@ -408,29 +438,31 @@ namespace
 cbuffer OverlayCB : register(b0)
 {
     float4x4 VP;
-    float3 anchor;
-    float  scale;
+    float3   anchor;
+    float    scale;
+    float3   color;
+    float    yaw_radians;
 };
 
 struct VSOut
 {
     float4 pos    : SV_Position;
     float3 normal : NORMAL;
+    float3 color  : COLOR;
 };
 
-// v15: proper 3D cube (36 verts = 12 triangles = 6 faces). Centered
-// on the anchor with a +scale Y bias so the cube *sits* on the feet
-// instead of straddling them. v14 had a flat XZ quad at y_offset=0
-// which read on screen as a magenta "waterline" — geometrically
-// correct for a flat plane but useless as a peer-player placeholder.
+// v15 (Phase 3) → v16 (Phase 4a): same 36-vert unit cube, now with
+//   - per-instance yaw rotation around Y (cbuffer.yaw_radians) so a
+//     peer placeholder can face the direction the peer is actually
+//     facing in world.
+//   - per-instance color (cbuffer.color), so each peer is tinted
+//     differently (host=magenta, peer-1=cyan, etc.).
 //
-// Vertex order per face: 2 CCW triangles (front-face culling on RH,
-// back-face culling on LH — DS2 is LH so the winding here is set up
-// for CULL_BACK in LH). Per-vertex normal is folded into the output
-// so the PS can apply a cheap lambert-style shade.
+// The cube is still anchored at `anchor` (= peer's feet world pos)
+// and lifted by +scale Y so the cube sits on the feet rather than
+// straddling them.
 VSOut main(uint id : SV_VertexID)
 {
-    // 36-vertex unit cube spanning [-1, +1] on each axis.
     const float3 cube_verts[36] = {
         // -Y face (bottom)
         float3(-1,-1,-1), float3( 1,-1,-1), float3(-1,-1, 1),
@@ -451,29 +483,34 @@ VSOut main(uint id : SV_VertexID)
         float3(-1,-1, 1), float3( 1,-1, 1), float3(-1, 1, 1),
         float3(-1, 1, 1), float3( 1,-1, 1), float3( 1, 1, 1)
     };
-    // Per-face normal — 6 floats3 indexed by face (id / 6).
     const float3 face_normals[6] = {
-        float3( 0,-1, 0),  // -Y
-        float3( 0, 1, 0),  // +Y
-        float3(-1, 0, 0),  // -X
-        float3( 1, 0, 0),  // +X
-        float3( 0, 0,-1),  // -Z
-        float3( 0, 0, 1)   // +Z
+        float3( 0,-1, 0), float3( 0, 1, 0),
+        float3(-1, 0, 0), float3( 1, 0, 0),
+        float3( 0, 0,-1), float3( 0, 0, 1)
     };
 
-    // Anchor is the host's feet world position; lift by scale so the
-    // cube *sits on* the ground, not buried halfway.
-    float3 cube_local = cube_verts[id] * scale;
-    cube_local.y += scale;
-    float3 world_pos = anchor + cube_local;
+    // 1) scale to player-sized box
+    float3 v = cube_verts[id] * scale;
+    // 2) lift so cube sits on the feet, not buried halfway
+    v.y += scale;
+    // 3) rotate around world Y by yaw — for peer placeholders this
+    //    matches the peer's facing in their own world.
+    float cy = cos(yaw_radians);
+    float sy = sin(yaw_radians);
+    float3 rotated = float3(
+        cy * v.x + sy * v.z,
+        v.y,
+       -sy * v.x + cy * v.z);
+    // 4) translate to peer's world position
+    float3 world_pos = anchor + rotated;
 
     VSOut o;
-    // mul(M, v) is HLSL's column-vector convention; combined with our
-    // cbuffer being laid out row-major in memory, HLSL's default
-    // column-major matrix interpretation gives the correct clip-space
-    // transform without us needing to transpose VP on the C++ side.
     o.pos    = mul(VP, float4(world_pos, 1.0));
-    o.normal = face_normals[id / 6];
+    // Rotate normal too so lambert shading stays consistent after
+    // yaw rotation.
+    float3 n = face_normals[id / 6];
+    o.normal = float3(cy * n.x + sy * n.z, n.y, -sy * n.x + cy * n.z);
+    o.color  = color;
     return o;
 }
 )";
@@ -483,31 +520,33 @@ struct PSIn
 {
     float4 pos    : SV_Position;
     float3 normal : NORMAL;
+    float3 color  : COLOR;
 };
 
 float4 main(PSIn input) : SV_Target
 {
-    // v15: cheap lambert shade so the cube's faces are
-    // distinguishable. A flat magenta cube reads as a magenta blob;
-    // a shaded one immediately looks like a 3D solid.
-    // Hardcoded light pointing roughly down + forward.
+    // v15 → v16: same cheap lambert shade, but the base color is now
+    // per-instance (carried over from VS via the COLOR semantic).
     float3 light_dir = normalize(float3(0.4, -1.0, 0.3));
     float ndl = saturate(dot(normalize(input.normal), -light_dir));
-    float3 base = float3(1.0, 0.1, 0.9);  // magenta
-    float3 shaded = base * (0.35 + 0.65 * ndl);
+    float3 shaded = input.color * (0.35 + 0.65 * ndl);
     return float4(shaded, 0.95);
 }
 )";
 
-    // Layout MUST match the HLSL cbuffer (5×16 = 80 bytes).
+    // Layout MUST match the HLSL cbuffer.
+    //  v15 was 80 bytes (5×16).
+    //  v16 adds color + yaw_radians = 6×16 = 96 bytes.
     struct OverlayCBData
     {
-        float vp[16];
-        float anchor[3];
-        float scale;
+        float vp[16];          // offsets   0..63
+        float anchor[3];       // offsets  64..75
+        float scale;           // offset   76..79
+        float color[3];        // offsets  80..91
+        float yaw_radians;     // offset   92..95
     };
-    static_assert(sizeof(OverlayCBData) == 80,
-                  "OverlayCBData must match HLSL cbuffer (80 bytes)");
+    static_assert(sizeof(OverlayCBData) == 96,
+                  "OverlayCBData must match HLSL cbuffer (96 bytes)");
 
     // Compile both shaders + create shader objects. Called once on the
     // first Present that observes a cached device pointer. Sets
@@ -875,84 +914,149 @@ float4 main(PSIn input) : SV_Target
                     vp.MinDepth = 0.0f;
                     vp.MaxDepth = 1.0f;
 
-                    // Phase 3 v14: build the View-Projection matrix
-                    // by walking DS2's camera-config struct in memory
-                    // (TryReadCameraVP). The legacy cbuffer-snoop
-                    // path (s_captured_vp) is preserved for the
-                    // diagnostic accessors but is no longer used to
-                    // drive the draw.
+                    // Phase 3 v14: VP from DS2's camera config struct.
+                    // Phase 4a v16: build a per-frame draw list of N
+                    // cubes (host + ghost + IPC peers) and emit one
+                    // Map/Draw cycle per cube. State (RTV / blend /
+                    // shaders / cbuffer slot) is set ONCE before the
+                    // loop and restored AFTER, so this scales cleanly
+                    // to kMaxPeers without re-applying state each
+                    // draw.
                     float live_vp[16] = {};
                     const bool has_live_vp = TryReadCameraVP(live_vp);
                     if (has_live_vp && s_overlay_cbuffer != nullptr)
                     {
-                        float host_px = 76.0f, host_py = 1.6f, host_pz = -184.0f;
-                        TryReadHostPosition(host_px, host_py, host_pz);
-
-                        // Update our cbuffer with the live VP we just
-                        // computed from DS2's camera matrix + proj.
-                        D3D11_MAPPED_SUBRESOURCE mcb = {};
-                        HRESULT hrm = s_d3d_context->Map(
-                            s_overlay_cbuffer, 0,
-                            D3D11_MAP_WRITE_DISCARD, 0, &mcb);
-                        if (SUCCEEDED(hrm))
+                        // ── Build the per-frame draw list ─────────────
+                        // Slot 0 is always the host (read live from
+                        // chr+0x90). Slot 1 is a hard-coded "ghost"
+                        // cube 5 m east of the host so we can SEE that
+                        // the pipeline scales to N draws — this slot
+                        // disappears once Phase 4b/c wires the IPC.
+                        // Remaining slots come from s_peer_table[],
+                        // which BonfireService will fill via
+                        // DS2_RenderHook_SetPeerPoses() in Phase 4b.
+                        struct CubeDraw
                         {
+                            float pos[3];
+                            float yaw_radians;
+                            float color[3];
+                        };
+                        CubeDraw draws[kMaxPeers + 2];
+                        int draw_count = 0;
+
+                        float host_px = 76.0f, host_py = 1.6f, host_pz = -184.0f;
+                        const bool host_ok =
+                            TryReadHostPosition(host_px, host_py, host_pz);
+                        if (host_ok)
+                        {
+                            CubeDraw& d = draws[draw_count++];
+                            d.pos[0] = host_px;
+                            d.pos[1] = host_py;
+                            d.pos[2] = host_pz;
+                            d.yaw_radians = 0.0f;
+                            d.color[0] = 1.0f; d.color[1] = 0.1f; d.color[2] = 0.9f;  // magenta
+                        }
+
+                        // Phase 4a sanity ghost — fixed 5 m offset in
+                        // +X from the host. If we see TWO cubes in
+                        // game, the multi-draw pipeline works.
+                        if (host_ok)
+                        {
+                            CubeDraw& d = draws[draw_count++];
+                            d.pos[0] = host_px + 5.0f;
+                            d.pos[1] = host_py;
+                            d.pos[2] = host_pz;
+                            d.yaw_radians = 0.0f;
+                            d.color[0] = 0.1f; d.color[1] = 0.9f; d.color[2] = 0.9f;  // cyan
+                        }
+
+                        // Copy any IPC-supplied peer poses under a
+                        // shared lock — minimises contention since
+                        // BonfireService updates the table rarely
+                        // compared to draw frequency.
+                        AcquireSRWLockShared(&s_peer_table_lock);
+                        const int peer_n = s_peer_table_count.load(
+                            std::memory_order_acquire);
+                        for (int i = 0; i < peer_n && draw_count < kMaxPeers + 2; ++i)
+                        {
+                            const PeerPoseEntry& src = s_peer_table[i];
+                            if (!src.valid) continue;
+                            CubeDraw& d = draws[draw_count++];
+                            d.pos[0] = src.position[0];
+                            d.pos[1] = src.position[1];
+                            d.pos[2] = src.position[2];
+                            d.yaw_radians = src.yaw_radians;
+                            d.color[0] = src.color[0];
+                            d.color[1] = src.color[1];
+                            d.color[2] = src.color[2];
+                        }
+                        ReleaseSRWLockShared(&s_peer_table_lock);
+
+                        // ── Apply common overlay state ONCE ──────────
+                        s_d3d_context->RSSetViewports(1, &vp);
+                        s_d3d_context->OMSetRenderTargets(1, &rtv, nullptr);
+                        s_d3d_context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
+                        s_d3d_context->OMSetDepthStencilState(nullptr, 0);
+                        s_d3d_context->RSSetState(nullptr);
+                        s_d3d_context->IASetPrimitiveTopology(
+                            D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                        s_d3d_context->IASetInputLayout(nullptr);
+                        s_d3d_context->VSSetShader(s_overlay_vs, nullptr, 0);
+                        s_d3d_context->PSSetShader(s_overlay_ps, nullptr, 0);
+                        s_d3d_context->GSSetShader(nullptr, nullptr, 0);
+                        s_d3d_context->HSSetShader(nullptr, nullptr, 0);
+                        s_d3d_context->DSSetShader(nullptr, nullptr, 0);
+                        s_d3d_context->VSSetConstantBuffers(
+                            0, 1, &s_overlay_cbuffer);
+
+                        // ── Per-cube map + draw ──────────────────────
+                        for (int i = 0; i < draw_count; ++i)
+                        {
+                            const CubeDraw& cd = draws[i];
+                            D3D11_MAPPED_SUBRESOURCE mcb = {};
+                            HRESULT hrm = s_d3d_context->Map(
+                                s_overlay_cbuffer, 0,
+                                D3D11_MAP_WRITE_DISCARD, 0, &mcb);
+                            if (FAILED(hrm)) continue;
+
                             OverlayCBData* data =
                                 reinterpret_cast<OverlayCBData*>(mcb.pData);
                             memcpy(data->vp, live_vp, sizeof(data->vp));
-                            data->anchor[0] = host_px;
-                            data->anchor[1] = host_py;
-                            data->anchor[2] = host_pz;
-                            // v15: 2-unit cube (matches player body
-                            // size). Smaller than v14's 6-unit
-                            // ground quad — with a working VP we
-                            // don't need to oversize for visibility.
+                            data->anchor[0] = cd.pos[0];
+                            data->anchor[1] = cd.pos[1];
+                            data->anchor[2] = cd.pos[2];
                             data->scale = 1.0f;
+                            data->color[0] = cd.color[0];
+                            data->color[1] = cd.color[1];
+                            data->color[2] = cd.color[2];
+                            data->yaw_radians = cd.yaw_radians;
                             s_d3d_context->Unmap(s_overlay_cbuffer, 0);
 
-                            // ── Apply our overlay state ──────────────
-                            s_d3d_context->RSSetViewports(1, &vp);
-                            s_d3d_context->OMSetRenderTargets(1, &rtv, nullptr);
-                            s_d3d_context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
-                            s_d3d_context->OMSetDepthStencilState(nullptr, 0);
-                            s_d3d_context->RSSetState(nullptr);
-                            s_d3d_context->IASetPrimitiveTopology(
-                                D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
-                            s_d3d_context->IASetInputLayout(nullptr);
-                            s_d3d_context->VSSetShader(s_overlay_vs, nullptr, 0);
-                            s_d3d_context->PSSetShader(s_overlay_ps, nullptr, 0);
-                            s_d3d_context->GSSetShader(nullptr, nullptr, 0);
-                            s_d3d_context->HSSetShader(nullptr, nullptr, 0);
-                            s_d3d_context->DSSetShader(nullptr, nullptr, 0);
-                            s_d3d_context->VSSetConstantBuffers(
-                                0, 1, &s_overlay_cbuffer);
-
-                            // v15: 36 verts = 12 tris = 6-face cube.
-                            // (v14 used 6 verts for a flat XZ quad.)
                             s_d3d_context->Draw(36, 0);
+                        }
 
-                            // Diagnostic: log every 300 frames (~5s @ 60fps)
-                            // so we can grep the live VP from log if
-                            // the visual isn't right.
-                            static std::atomic<uint64_t> s_diag_seq{0};
-                            const uint64_t seq = s_diag_seq.fetch_add(1) + 1;
-                            if (seq % 300 == 1)
-                            {
-                                const uint64_t reads =
-                                    s_live_vp_read_count.load(std::memory_order_relaxed);
-                                const uint64_t fails =
-                                    s_live_vp_fail_count.load(std::memory_order_relaxed);
-                                Log("DS2_RenderHook: liveVP row0=%.3f,%.3f,%.3f,%.3f "
-                                    "row3=%.3f,%.3f,%.3f,%.3f "
-                                    "anchor=(%.2f,%.2f,%.2f) "
-                                    "live_reads=%llu live_fails=%llu",
-                                    live_vp[0],  live_vp[1],
-                                    live_vp[2],  live_vp[3],
-                                    live_vp[12], live_vp[13],
-                                    live_vp[14], live_vp[15],
-                                    host_px, host_py, host_pz,
-                                    static_cast<unsigned long long>(reads),
-                                    static_cast<unsigned long long>(fails));
-                            }
+                        s_multi_draw_frames.fetch_add(1,
+                            std::memory_order_relaxed);
+                        s_multi_draw_cubes_total.fetch_add(draw_count,
+                            std::memory_order_relaxed);
+
+                        // Diagnostic log every 300 frames (~5s @ 60fps).
+                        static std::atomic<uint64_t> s_diag_seq{0};
+                        const uint64_t seq = s_diag_seq.fetch_add(1) + 1;
+                        if (seq % 300 == 1)
+                        {
+                            const uint64_t reads =
+                                s_live_vp_read_count.load(std::memory_order_relaxed);
+                            const uint64_t fails =
+                                s_live_vp_fail_count.load(std::memory_order_relaxed);
+                            Log("DS2_RenderHook: drew %d cubes "
+                                "host=(%.2f,%.2f,%.2f) liveVP_row3=%.2f,%.2f,%.2f "
+                                "live_reads=%llu live_fails=%llu",
+                                draw_count,
+                                host_px, host_py, host_pz,
+                                live_vp[12], live_vp[13], live_vp[14],
+                                static_cast<unsigned long long>(reads),
+                                static_cast<unsigned long long>(fails));
                         }
                     }
                 }
@@ -1469,4 +1573,49 @@ uint64_t DS2_RenderHook_GetLiveVPFailCount()
 bool DS2_RenderHook_TryGetLiveVP(float out_vp[16])
 {
     return TryReadCameraVP(out_vp);
+}
+
+// ── Phase 4a (v16): multi-actor public API ──────────────────────────
+
+void DS2_RenderHook_SetPeerPoses(
+    const DS2_PeerPose* poses, int count)
+{
+    if (count < 0) count = 0;
+    if (count > kMaxPeers) count = kMaxPeers;
+
+    AcquireSRWLockExclusive(&s_peer_table_lock);
+    for (int i = 0; i < count; ++i)
+    {
+        s_peer_table[i].position[0]  = poses[i].position[0];
+        s_peer_table[i].position[1]  = poses[i].position[1];
+        s_peer_table[i].position[2]  = poses[i].position[2];
+        s_peer_table[i].yaw_radians  = poses[i].yaw_radians;
+        s_peer_table[i].color[0]     = poses[i].color[0];
+        s_peer_table[i].color[1]     = poses[i].color[1];
+        s_peer_table[i].color[2]     = poses[i].color[2];
+        s_peer_table[i].valid        = poses[i].valid ? 1u : 0u;
+    }
+    // Clear any stale entries past the new count so the renderer
+    // doesn't keep drawing departed peers.
+    for (int i = count; i < kMaxPeers; ++i)
+    {
+        s_peer_table[i].valid = 0u;
+    }
+    s_peer_table_count.store(count, std::memory_order_release);
+    ReleaseSRWLockExclusive(&s_peer_table_lock);
+}
+
+int DS2_RenderHook_GetPeerCount()
+{
+    return s_peer_table_count.load(std::memory_order_acquire);
+}
+
+uint64_t DS2_RenderHook_GetMultiDrawFrames()
+{
+    return s_multi_draw_frames.load(std::memory_order_relaxed);
+}
+
+uint64_t DS2_RenderHook_GetMultiDrawCubesTotal()
+{
+    return s_multi_draw_cubes_total.load(std::memory_order_relaxed);
 }

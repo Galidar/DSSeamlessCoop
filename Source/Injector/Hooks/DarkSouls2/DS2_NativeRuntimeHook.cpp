@@ -3815,6 +3815,16 @@ namespace
                     DS2_RenderHook_GetLiveVPReadCount();
                 heartbeat["render_live_vp_fail_count"] =
                     DS2_RenderHook_GetLiveVPFailCount();
+                // v16 Phase 4a: multi-actor draw diagnostics. Cubes/frame
+                // = cubes_total / frames; > 1 confirms the multi-draw
+                // pipeline is alive (host + ghost during 4a, host +
+                // peers in 4b/c).
+                heartbeat["render_multi_draw_frames"] =
+                    DS2_RenderHook_GetMultiDrawFrames();
+                heartbeat["render_multi_draw_cubes_total"] =
+                    DS2_RenderHook_GetMultiDrawCubesTotal();
+                heartbeat["render_peer_table_count"] =
+                    DS2_RenderHook_GetPeerCount();
                 float live[16] = {};
                 if (DS2_RenderHook_TryGetLiveVP(live))
                 {
