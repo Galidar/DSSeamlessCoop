@@ -1,6 +1,6 @@
 # Claude Code Handoff - DS2 Native Bonfire Online
 
-Last updated: 2026-05-15
+Last updated: 2026-05-16
 
 This handoff is for Claude Code continuing Diux's Dark Souls II Scholar of the
 First Sin private online experiment in `DSSeamlessCoop`.
@@ -31,9 +31,19 @@ experiment/ds2-native-runtime-custom-items
 Latest pushed commit at handoff time:
 
 ```text
-83325be0592a09b17aee68bc591f0179c8110f9d
-Add DS2 runtime session bridge and native prompts
+979ddfc  HKMP overlay Phase 3 v15: 3D cube placeholder + lambert shading
+806f6ad  HKMP overlay Phase 3 v14: live VP read from DS2 memory
+3a0ae6c  HKMP overlay Phase 2: screen-space overlay quad drawing in DS2's swap chain
+83325be  Add DS2 runtime session bridge and native prompts
 ```
+
+HKMP overlay status (see `Docs/HKMP_OVERLAY_RESEARCH.md` §13b/§13c):
+Phases 1-3 DONE. Live VP is built per-frame from DS2's camera-config
+struct (chain anchored on the existing `gm_imp_global` AOB,
+`+0xD0 → +0xE8 → +0x18 → +0x28 → camCfg`). A 3D magenta cube renders
+on the host's feet inside DS2's swap chain, world-anchored, with the
+Lighting Engine's post-passes undisturbed. Phase 4 = multi-actor
+rendering (peer-pose array of cubes).
 
 Remote:
 

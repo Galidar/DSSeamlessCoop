@@ -1,4 +1,4 @@
-# HKMP-Style Overlay — Research Baseline (2026-05-15)
+# HKMP-Style Overlay — Research Baseline (2026-05-15 → 2026-05-16)
 
 Captured during the live 2-PC LAN test with my brother on the
 `experiment/ds2-native-runtime-custom-items` branch (v2.7.1-experimental).
@@ -6,6 +6,17 @@ This document is the empirical ground truth I built up while two real
 DS2 clients were summoned together via white sign soapstone. It is the
 starting point for "Long-Term Vision: HKMP-Style Overlay" in
 `DS2NativeRuntime.md` and `dsseamlesscoop-runtime-map.md`.
+
+## Status snapshot (2026-05-16, post-Phase-3)
+
+| Phase | Status | Commit | Outcome                                          |
+|-------|--------|--------|--------------------------------------------------|
+| 1 — render-hook chain (CreateDevice → Factory → Present) | DONE  | earlier | per-frame callback inside DS2's render thread    |
+| 2 — screen-space overlay quad + full pipeline save/restore | DONE  | `3a0ae6c` | magenta line/banner drawn each frame, lighting engine unaffected |
+| 3 — world-space VP capture + 3D cube anchor             | DONE  | `806f6ad` (v14) → `979ddfc` (v15) | live VP read from DS2 memory, 3D cube sits on host's feet, world-anchored, rotates with camera |
+| 4 — multi-actor rendering (cubes for N peers)           | NEXT   | —       | extend the cube draw to a peer-pose array; render fake ghost first, then wire to network |
+| 5 — peer pose broadcast (UDP via BonfireService)        | TODO   | —       | publish player.pose at 30Hz from host's read of the locked ChrIns chain |
+| 6 — animation sync                                       | TODO   | —       | probe ChrIns+0x200..0x600 for the anim_id u32; broadcast alongside pose |
 
 ## 1. What the saponita (white sign soapstone) actually does
 
@@ -867,22 +878,71 @@ The full session is captured in `commit history (Phase 3 v14)` and in
 the heartbeat events the runtime emits with the new
 `render_live_vp_*` fields.
 
+## 13c. Phase 3 closure (2026-05-16, v15)
+
+Confirmed visually in-game: a magenta 3D cube of 6 distinguishable
+faces sits on the host's feet, stays anchored when the character
+moves, and rotates correctly when the camera orbits. The geometry
+follows the host through level transitions and the cube faces are
+clearly visible from any camera angle Souls allows.
+
+This closes Phase 3: **we can now draw arbitrary world-space
+geometry inside DS2's swap chain, anchored to any world-space
+coordinate, with the same projection DS2 uses for its own geometry**.
+Everything past this point is "what do we draw" rather than "can we
+draw at all".
+
+The architecture supporting future iterations:
+- `DS2_RenderHook::DrawOverlay` already saves & restores every D3D11
+  immediate-context state it touches (OM/RS/IA/Shaders/VS_CB0), so
+  adding more draws inside this hook is purely additive — won't
+  disturb the rage-vitamins Lighting Engine post-passes.
+- `TryReadCameraVP()` builds the per-frame VP in <1µs. We can call it
+  once and feed the same VP to N draws without re-walking the chain.
+- The HLSL cbuffer is dynamically mapped per draw (WRITE_DISCARD),
+  so we can rewrite `anchor + scale + color + per-actor rotation`
+  per cube without allocating new buffers.
+
 ## 14. Next concrete milestones
 
-1. **Track 3 v4** (one rebuild): extend probe scan to ChrIns+0x200..0x400
-   for stamina/SM/equip_load, and add sibling-offset scan to find brother's
-   ChrIns chain.
-2. **Track 4 — live broadcast** (substantial work): cache the chain in
-   `RuntimeWorkerConfig`, add a `player.pose` event at 30Hz, write a
-   small UDP broadcaster in BonfireService that publishes the pose
-   stream to peer Bonfires, write a corresponding receiver.
-3. **Track 5 — fake-actor spawn** (research + experimentation): figure
-   out how DS2 allocates phantom slots from `RequestSummonSign` push
-   messages. If we can forge a "synthetic summon" with our own
-   `player_struct` blob keyed to a fake CSteamID, we get a renderable
-   phantom slot we own. Drive it from the Track 4 pose stream.
-4. **Track 6 — animation sync**: probe ChrIns+0x200..0x600 for the
-   animation_id field. Souls engines hold the current animation as a
-   uint32 event ID. Once we sync animation_id along with pose, the
-   phantom looks like a real player.
+### Track A — multi-actor rendering (next rebuild)
+
+Extend `DrawOverlay` to iterate over a peer-pose array and emit one
+cube per entry. The cube shader already accepts an `anchor` cbuffer
+field; widening the cbuffer to also carry per-instance rotation and
+color lets each peer render with its own facing + tint. Initial
+implementation hard-codes a ghost cube at `host_pos + (5, 0, 0)` to
+validate the pipeline scales to N draws without breaking the lighting
+engine; subsequent commits wire the array to the network input.
+
+### Track B — Track 4 live broadcast
+
+Cache the locked `gm → +0x18 → +0x50 → ChrIns` chain inside
+`RuntimeWorkerConfig`. Add a `player.pose` runtime event at 30Hz with
+the 64-byte payload defined in §13. Write a small UDP broadcaster in
+BonfireService that publishes the pose stream to peer Bonfires on the
+LAN, and a corresponding receiver that drops poses into the Track-A
+peer-pose array.
+
+### Track C — Track 6 animation sync
+
+Probe `ChrIns+0x200..0x600` for the `animation_id` field (a u32 that
+indexes a global animation event table). Once we sync animation_id
+alongside pose, the cube placeholders can be replaced with actual
+character models that play the right anim per frame.
+
+### Track D — Track 5 fake-actor spawn (research)
+
+Figure out how DS2 allocates phantom slots from `RequestSummonSign`
+push messages. If we can forge a "synthetic summon" with our own
+`player_struct` blob keyed to a fake CSteamID, we get a renderable
+phantom slot we own. Drive it from the Track 4 pose stream and the
+cube renderer becomes redundant — peer players appear as proper DS2
+phantoms with no overlay needed.
+
+The branch choice between (A+B+C) and D is genuine: A+B+C is a
+fully custom overlay (HKMP-pure), D rides DS2's native phantom
+system. The overlay path is more work but bypasses every limitation
+of vanilla phantoms (4-player cap, fog-gate despawn, hostility
+constraints). D is less work but inherits those limits.
 
