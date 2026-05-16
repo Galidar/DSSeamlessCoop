@@ -134,6 +134,49 @@ public static class Methods
                 Ds2NativeRuntimeBridge.SendCommand(sessionId, command, payload));
         });
 
+        // ----- DS2 native runtime: HKMP-style pose bridge -----
+        //
+        // Phase 4c of the overlay (2026-05-16). Once started, the
+        // bridge tails the host Injector's events.jsonl for
+        // player.live_transform updates and broadcasts them over UDP
+        // to the configured peer endpoints; in the reverse direction
+        // it listens for peer broadcasts and republishes them to the
+        // Injector's commands.jsonl as render.set_peer_poses commands.
+        //
+        // Params (start):
+        //   local_port  int  (UDP port we listen on; default 50031)
+        //   peers       []   ("host:port" strings; can include 127.0.0.1
+        //                     for loopback testing on a single PC)
+
+        server.Register("ds2_runtime.pose_bridge.start", async (@params, _) =>
+        {
+            await Task.Yield();
+            var localPort = (int)(@params.GetInt("local_port") ?? 50031);
+            var peers = new List<string>();
+            if (@params?["peers"] is System.Text.Json.Nodes.JsonArray arr)
+            {
+                foreach (var node in arr)
+                {
+                    if (node is null) continue;
+                    var s = node.GetValue<string>();
+                    if (!string.IsNullOrWhiteSpace(s)) peers.Add(s);
+                }
+            }
+            return Ds2NativePoseBridge.Start(localPort, peers);
+        });
+
+        server.Register("ds2_runtime.pose_bridge.stop", async (@params, _) =>
+        {
+            await Task.Yield();
+            return Ds2NativePoseBridge.Stop();
+        });
+
+        server.Register("ds2_runtime.pose_bridge.status", async (@params, _) =>
+        {
+            await Task.Yield();
+            return Ds2NativePoseBridge.Status();
+        });
+
         // ----- DS2 native runtime: join target arming -----
         //
         // Flow: Flutter's DS2 Native Sessions browser calls set_join_target

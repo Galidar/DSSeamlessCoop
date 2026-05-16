@@ -37,6 +37,19 @@ public static class Program
         var server = new RpcServer();
         Methods.Register(server);
         Ds2NativeSessionCoordinator.Start(server);
+
+        // Phase 4c bootstrap: if the env vars are set we auto-start
+        // the pose bridge without waiting for the Flutter UI to RPC
+        // it. Useful for the single-PC loopback test (see
+        // HKMP_OVERLAY_RESEARCH.md §14 Track B) and for LAN
+        // deployments where the user wants the bridge live from
+        // service startup. Format:
+        //
+        //   BONFIRE_POSE_BRIDGE_PORT=50031
+        //   BONFIRE_POSE_BRIDGE_PEERS=127.0.0.1:50031        (loopback)
+        //   BONFIRE_POSE_BRIDGE_PEERS=192.168.1.5:50031,...  (LAN)
+        TryAutoStartPoseBridge();
+
         try
         {
             await server.RunAsync();
@@ -45,7 +58,27 @@ public static class Program
         finally
         {
             Ds2NativeSessionCoordinator.Stop();
+            try { Ds2NativePoseBridge.Stop(); } catch { }
         }
+    }
+
+    private static void TryAutoStartPoseBridge()
+    {
+        var peersEnv = Environment.GetEnvironmentVariable("BONFIRE_POSE_BRIDGE_PEERS");
+        if (string.IsNullOrWhiteSpace(peersEnv)) return;
+
+        var portEnv = Environment.GetEnvironmentVariable("BONFIRE_POSE_BRIDGE_PORT");
+        if (!int.TryParse(portEnv, out var port) || port <= 0 || port > 65535)
+        {
+            port = 50031;
+        }
+
+        var peers = peersEnv
+            .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+            .ToList();
+
+        try { Ds2NativePoseBridge.Start(port, peers); }
+        catch { /* env-var-driven startup is best-effort */ }
     }
 
     private static string ResolveServiceVersion()
