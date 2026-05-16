@@ -33,6 +33,16 @@ public static class Ds2NativeSessionCoordinator
             _server = server;
             _cts = new CancellationTokenSource();
             PrimeExistingActionLogs();
+            // Proactively populate WebUI credentials in config.json so the
+            // live-manifest push can authenticate against Server.exe's
+            // /settings endpoint. Server.exe only auto-generates these on
+            // first boot of a non-default shard; a single-profile install
+            // would otherwise stay unauthenticated forever and live-push
+            // would fall back to the disk-stamp + stale-flag path on every
+            // item use. The new credentials take effect on the NEXT
+            // Server.exe boot — already-running servers keep the empty
+            // credentials they cached at startup.
+            try { Ds2NativeWebUIPush.EnsureCredentialsInConfig(); } catch { }
             _worker = Task.Run(() => WorkerLoopAsync(_cts.Token));
         }
     }

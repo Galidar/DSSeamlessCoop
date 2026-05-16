@@ -31,6 +31,36 @@ public static class Ds2NativeWebUIPush
         string Status,
         string? ErrorMessage);
 
+    /// <summary>
+    /// Ensures <c>config.json</c> has non-empty WebUIServerUsername /
+    /// WebUIServerPassword so the live-push handshake can authenticate.
+    /// Server.exe normally only auto-generates these on first boot of a
+    /// non-default shard (see <c>Server::Initialize</c>); a single-profile
+    /// install therefore ends up with empty credentials and a permanently
+    /// unauthenticated /settings endpoint until something fills them in.
+    ///
+    /// Returns true if a write happened (and Server.exe will need to be
+    /// restarted to pick the new credentials up — it caches the in-memory
+    /// RuntimeConfig at boot). Returns false if credentials were already
+    /// present or config.json is missing.
+    /// </summary>
+    public static bool EnsureCredentialsInConfig()
+    {
+        if (!Paths.ConfigExists) return false;
+
+        var cfg = ServerConfig.Load(Paths.ConfigFile);
+        if (!string.IsNullOrEmpty(cfg.WebUIServerUsername) &&
+            !string.IsNullOrEmpty(cfg.WebUIServerPassword))
+        {
+            return false;
+        }
+
+        cfg.WebUIServerUsername =
+            "bonfire-" + Guid.NewGuid().ToString("N")[..8];
+        cfg.WebUIServerPassword = Guid.NewGuid().ToString("N");
+        return cfg.SaveOver(Paths.ConfigFile);
+    }
+
     private static readonly HttpClient Http = new()
     {
         Timeout = TimeSpan.FromSeconds(3),
