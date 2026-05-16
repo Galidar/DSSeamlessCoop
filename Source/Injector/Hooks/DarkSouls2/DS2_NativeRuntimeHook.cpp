@@ -8,6 +8,7 @@
  */
 
 #include "Injector/Hooks/DarkSouls2/DS2_NativeRuntimeHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_RenderHook.h"
 #include "Injector/Injector/Injector.h"
 #include "Shared/Core/Utils/Logging.h"
 #include "Shared/Core/Utils/Strings.h"
@@ -18,6 +19,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
@@ -518,6 +520,23 @@ namespace
     };
 
     void EmitInventoryProbeAndMaybeArm(const RuntimeWorkerConfig& config);
+    void EmitWorldTransformProbe(const RuntimeWorkerConfig& config);
+    void EmitPlayerLiveTransform(const RuntimeWorkerConfig& config);
+    void EmitGuestSearchProbe(const RuntimeWorkerConfig& config);
+
+    // SEH-safe wrappers — these have NO C++ objects with destructors,
+    // which is required to use __try/__except (MSVC C2712).
+    void SafeEmitPlayerLiveTransform(const RuntimeWorkerConfig* config)
+    {
+        __try { EmitPlayerLiveTransform(*config); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { }
+    }
+    void SafeEmitGuestSearchProbe(const RuntimeWorkerConfig* config)
+    {
+        __try { EmitGuestSearchProbe(*config); }
+        __except (EXCEPTION_EXECUTE_HANDLER) { }
+    }
+
     void GrantBonfireRuntimeItems(
         const RuntimeWorkerConfig& config,
         void* bonfire_context,
@@ -2909,6 +2928,520 @@ namespace
         }
     }
 
+    // ───────────────────────────────────────────────────────────────────
+    // HKMP overlay research — Track 2 (client-side memory probe).
+    //
+    // Scans `GameManagerImp + outer_off` (0x00..0x300 stride 8) for
+    // heap-like pointer values, then for each child object inspects
+    // `child + inner_off` (0x20..0x300 stride 4) for float quads matching
+    // [px, py, pz, w] in the world-coordinate ranges we observed via the
+    // server-side `PLAYER_STATUS_JSON` ground truth in Track 1.
+    //
+    // Candidates are emitted to `world.transform_probe` events; we walk
+    // around in-game and look for the candidate whose values track the
+    // wire-side PLAYER_STATUS_JSON entries within ±0.5 units. That offset
+    // chain becomes the locked-in transform pointer for the HKMP overlay.
+    //
+    // See Docs/HKMP_OVERLAY_RESEARCH.md §10 for the validation plan.
+    nlohmann::json ProbeWorldTransformCandidates(const RuntimeWorkerConfig& config)
+    {
+        nlohmann::json payload;
+        payload["game_manager_imp_global"] =
+            HexPointer(config.GameManagerImpGlobalAddress);
+
+        if (config.GameManagerImpGlobalAddress == 0)
+        {
+            payload["resolved"] = false;
+            payload["reason"] = "GameManagerImp AOB not found";
+            return payload;
+        }
+
+        uintptr_t gm_imp = 0;
+        if (!TryReadPointer(config.GameManagerImpGlobalAddress, gm_imp))
+        {
+            payload["resolved"] = false;
+            payload["reason"] = "GameManagerImp pointer not yet populated";
+            return payload;
+        }
+        payload["game_manager_imp_object"] = HexPointer(gm_imp);
+
+        // Windows x64 heap typically lives in the 0x7FF... high-half range.
+        // Anything below 0x7FF000000000 is either a tagged pointer or
+        // garbage; reject it before dereferencing.
+        constexpr uintptr_t kMinHeapPtr = 0x00007FF000000000ULL;
+        constexpr uintptr_t kMaxHeapPtr = 0x00007FFFFFFFFFFFULL;
+
+        auto isHeapPtr = [&](uintptr_t p) {
+            return p >= kMinHeapPtr && p <= kMaxHeapPtr;
+        };
+
+        // Helper: scan `obj + inner_off` for float quads matching the
+        // world-position ranges we observed via PLAYER_STATUS_JSON. Emits
+        // any hits into `out` annotated with `depth` and the offset chain.
+        auto scanFloatQuads = [&](
+            uintptr_t obj,
+            const char* chain_prefix,
+            int depth,
+            nlohmann::json& out,
+            size_t& cap_counter,
+            size_t cap_limit) -> bool
+        {
+            for (uintptr_t inner_off = 0x20; inner_off <= 0x500; inner_off += 4)
+            {
+                float px = 0.0f, py = 0.0f, pz = 0.0f, w = 0.0f;
+                if (!TryReadValue(obj + inner_off + 0,  px)) continue;
+                if (!TryReadValue(obj + inner_off + 4,  py)) continue;
+                if (!TryReadValue(obj + inner_off + 8,  pz)) continue;
+                if (!TryReadValue(obj + inner_off + 12, w))  continue;
+
+                if (!std::isfinite(px) || !std::isfinite(py) ||
+                    !std::isfinite(pz) || !std::isfinite(w))
+                {
+                    continue;
+                }
+
+                // Accept anything in the plausible world-position envelope.
+                const bool px_ok = px >= -2000.0f && px <= 2000.0f;
+                const bool py_ok = py >= -200.0f  && py <= 200.0f;
+                const bool pz_ok = pz >= -2000.0f && pz <= 2000.0f;
+                const bool w_ok  = w  >= -4.0f    && w  <= 4.0f;
+
+                // Reject (0,0,0) origin + tiny shader constants. World
+                // positions for this area run at |px|>60, |pz|>170 — require
+                // either axis to escape the [-10,+10] noise band.
+                const float ax = std::fabs(px);
+                const float az = std::fabs(pz);
+                const bool magnitude_ok = (ax > 10.0f) || (az > 10.0f);
+
+                if (!(px_ok && py_ok && pz_ok && w_ok && magnitude_ok))
+                {
+                    continue;
+                }
+
+                // v5: Strict emit gate — only consider this a candidate
+                // if the homogeneous coordinate w is 1.0 (within 0.01).
+                // Without this gate v4 found that direction/velocity
+                // vectors (w=0) flooded the cap before we could scan
+                // past outer_off=0x00, never reaching gm+0x18 where the
+                // host lives. With this gate the cap is reserved for
+                // actual position vectors.
+                const bool w_is_one = std::fabs(w - 1.0f) < 0.01f;
+                if (!w_is_one) continue;
+
+                // Area-specific likely_player hint (Forest of Fallen
+                // Giants envelope) for downstream sorting.
+                const bool likely_player =
+                    (px >= 50.0f  && px <= 250.0f) &&
+                    (pz >= -350.0f && pz <= -100.0f) &&
+                    (py >= -30.0f && py <= 30.0f);
+
+                nlohmann::json c;
+                c["depth"] = depth;
+                c["chain"] = StringFormat(
+                    "%s+0x%X",
+                    chain_prefix,
+                    static_cast<unsigned>(inner_off));
+                c["obj_ptr"] = HexPointer(obj);
+                c["inner_off"] = static_cast<unsigned>(inner_off);
+                c["px"] = px;
+                c["py"] = py;
+                c["pz"] = pz;
+                c["w"]  = w;
+                c["w_is_one"] = w_is_one;
+                c["likely_player"] = likely_player;
+                out.push_back(c);
+
+                ++cap_counter;
+                if (cap_counter >= cap_limit)
+                {
+                    return true;  // capped
+                }
+            }
+            return false;
+        };
+
+        nlohmann::json candidates = nlohmann::json::array();
+        int slots_scanned_lvl1 = 0;
+        int slots_with_valid_ptr_lvl1 = 0;
+        int slots_scanned_lvl2 = 0;
+        int slots_with_valid_ptr_lvl2 = 0;
+        size_t cap_counter = 0;
+        constexpr size_t kCapLimit = 200;
+        bool capped = false;
+
+        // Level 1: enumerate GameManagerImp + outer_off → child object
+        for (uintptr_t outer_off = 0x0; outer_off <= 0x600; outer_off += 8)
+        {
+            ++slots_scanned_lvl1;
+            uintptr_t child = 0;
+            if (!TryReadPointer(gm_imp + outer_off, child) || !isHeapPtr(child))
+            {
+                continue;
+            }
+            ++slots_with_valid_ptr_lvl1;
+
+            // First, scan the level-1 child directly for transform quads.
+            {
+                std::string prefix = StringFormat(
+                    "gm+0x%X→[0x%llX]",
+                    static_cast<unsigned>(outer_off),
+                    static_cast<unsigned long long>(child));
+                if (scanFloatQuads(child, prefix.c_str(), 1, candidates, cap_counter, kCapLimit))
+                {
+                    capped = true;
+                    break;
+                }
+            }
+
+            // Level 2: enumerate child + middle_off → grandchild object,
+            // then scan grandchild for transform quads. v4 widened the
+            // middle range from 0x100 to 0x400 to catch the guest's
+            // phantom ChrIns which lives deeper in the intermediate
+            // (the host is at child+0x50; phantoms appear to be at
+            // child+0x100..+0x300 based on missing matches in v3).
+            for (uintptr_t middle_off = 0x0; middle_off <= 0x400; middle_off += 8)
+            {
+                ++slots_scanned_lvl2;
+                uintptr_t grandchild = 0;
+                if (!TryReadPointer(child + middle_off, grandchild) ||
+                    !isHeapPtr(grandchild))
+                {
+                    continue;
+                }
+                ++slots_with_valid_ptr_lvl2;
+
+                std::string prefix = StringFormat(
+                    "gm+0x%X→+0x%X→[0x%llX]",
+                    static_cast<unsigned>(outer_off),
+                    static_cast<unsigned>(middle_off),
+                    static_cast<unsigned long long>(grandchild));
+                if (scanFloatQuads(
+                        grandchild,
+                        prefix.c_str(),
+                        2,
+                        candidates,
+                        cap_counter,
+                        kCapLimit))
+                {
+                    capped = true;
+                    break;
+                }
+            }
+
+            if (capped)
+            {
+                break;
+            }
+        }
+
+        payload["resolved"] = true;
+        payload["scanned_outer_slots"] = slots_scanned_lvl1;
+        payload["valid_outer_ptrs"] = slots_with_valid_ptr_lvl1;
+        payload["scanned_middle_slots"] = slots_scanned_lvl2;
+        payload["valid_middle_ptrs"] = slots_with_valid_ptr_lvl2;
+        payload["candidate_count"] = static_cast<int>(candidates.size());
+        payload["w_is_one_count"] = static_cast<int>(std::count_if(
+            candidates.begin(),
+            candidates.end(),
+            [](const nlohmann::json& c) { return c.value("w_is_one", false); }));
+        payload["likely_player_count"] = static_cast<int>(std::count_if(
+            candidates.begin(),
+            candidates.end(),
+            [](const nlohmann::json& c) { return c.value("likely_player", false); }));
+        payload["capped"] = capped;
+        payload["candidates"] = candidates;
+        return payload;
+    }
+
+    void EmitWorldTransformProbe(const RuntimeWorkerConfig& config)
+    {
+        nlohmann::json probe = ProbeWorldTransformCandidates(config);
+        AppendRuntimeEvent(config, "world.transform_probe", probe);
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // HKMP overlay — Track 3 (live ChrIns dump for yaw / HP discovery).
+    //
+    // Uses the LOCKED player transform chain `gm+0x18 → +0x50` to read
+    // the host's ChrIns directly each tick, then scans ChrIns+0x00..0x200
+    // for additional fields:
+    //   - yaw_candidates: single floats in [-π, +π], excluding the known
+    //     homogeneous w-coords at +0x9C / +0xAC (always 1.0 / 0.0).
+    //   - int_candidates: uint32 in the [1..50000] range — plausible for
+    //     HP / stamina / soul level / counters.
+    //
+    // We'll find yaw post-hoc by intersecting `yaw_candidates` with
+    // PLAYER_STATUS_JSON's `loc_u5` (server-side, ~1/20s rate) — the
+    // offset whose value tracks `loc_u5` is the rotation offset.
+    //
+    // See Docs/HKMP_OVERLAY_RESEARCH.md §11-§12.
+    void EmitPlayerLiveTransform(const RuntimeWorkerConfig& config)
+    {
+        nlohmann::json payload;
+
+        if (config.GameManagerImpGlobalAddress == 0)
+        {
+            payload["resolved"] = false;
+            payload["reason"] = "GameManagerImp AOB not found";
+            AppendRuntimeEvent(config, "player.live_transform", payload);
+            return;
+        }
+
+        // Walk the locked chain: GameManagerImpGlobal → gm_imp → +0x18 → +0x50
+        uintptr_t gm_imp = 0;
+        uintptr_t intermediate = 0;
+        uintptr_t chrins = 0;
+        if (!TryReadPointer(config.GameManagerImpGlobalAddress, gm_imp))
+        {
+            payload["resolved"] = false;
+            payload["reason"] = "GameManagerImp pointer not yet populated";
+            AppendRuntimeEvent(config, "player.live_transform", payload);
+            return;
+        }
+        if (!TryReadPointer(gm_imp + 0x18, intermediate))
+        {
+            payload["resolved"] = false;
+            payload["reason"] = "gm+0x18 read failed";
+            payload["gm_imp"] = HexPointer(gm_imp);
+            AppendRuntimeEvent(config, "player.live_transform", payload);
+            return;
+        }
+        if (!TryReadPointer(intermediate + 0x50, chrins))
+        {
+            payload["resolved"] = false;
+            payload["reason"] = "intermediate+0x50 read failed";
+            payload["gm_imp"] = HexPointer(gm_imp);
+            payload["intermediate"] = HexPointer(intermediate);
+            AppendRuntimeEvent(config, "player.live_transform", payload);
+            return;
+        }
+
+        payload["resolved"] = true;
+        payload["gm_imp"] = HexPointer(gm_imp);
+        payload["intermediate"] = HexPointer(intermediate);
+        payload["chrins"] = HexPointer(chrins);
+
+        // Read the locked position (validation)
+        float px = 0.0f, py = 0.0f, pz = 0.0f, w = 0.0f;
+        TryReadValue(chrins + 0x90, px);
+        TryReadValue(chrins + 0x94, py);
+        TryReadValue(chrins + 0x98, pz);
+        TryReadValue(chrins + 0x9C, w);
+        payload["px"] = px;
+        payload["py"] = py;
+        payload["pz"] = pz;
+        payload["pos_w"] = w;
+
+        // Scan ChrIns+0x00..0x200 for:
+        //   - yaw_candidates: float in [-π, +π], excluding 0.0 and 1.0
+        //     (those are homogeneous coords or initial-state placeholders),
+        //     and excluding the known position offsets.
+        //   - int_candidates: uint32 in [1, 50000] — likely HP, stamina,
+        //     soul level, soul memory, counters. Excluding the position
+        //     offsets' bit-pattern.
+        nlohmann::json yaw_candidates = nlohmann::json::array();
+        nlohmann::json int_candidates = nlohmann::json::array();
+
+        for (uintptr_t off = 0x00; off <= 0x200; off += 4)
+        {
+            // Skip the locked position floats to keep candidate lists small.
+            if (off == 0x90 || off == 0x94 || off == 0x98 || off == 0x9C ||
+                off == 0xA0 || off == 0xA4 || off == 0xA8 || off == 0xAC)
+            {
+                continue;
+            }
+
+            float f = 0.0f;
+            uint32_t u = 0;
+            if (!TryReadValue(chrins + off, f)) continue;
+            if (!TryReadValue(chrins + off, u)) continue;
+
+            // Yaw filter: finite, in [-π, +π], not too close to 0.0 or 1.0
+            // (those are common shader / init constants and would flood the
+            // list). We expect yaw to oscillate as the player turns.
+            const bool fin = std::isfinite(f);
+            const bool yaw_range = (f >= -3.2f && f <= 3.2f);
+            const bool not_zero = std::fabs(f) > 0.01f;
+            const bool not_one  = std::fabs(f - 1.0f) > 0.01f;
+            const bool not_neg_one = std::fabs(f + 1.0f) > 0.01f;
+            if (fin && yaw_range && not_zero && not_one && not_neg_one)
+            {
+                nlohmann::json e;
+                e["off"] = static_cast<unsigned>(off);
+                e["val"] = f;
+                yaw_candidates.push_back(e);
+            }
+
+            // Integer filter: u in [1, 50000]. Diux's expected values are
+            // hp=792, stam=92, sl=23, sm=16271, archetype=7, agility=89,
+            // covenant=0..11. We'll look for these post-hoc.
+            if (u >= 1 && u <= 50000)
+            {
+                nlohmann::json e;
+                e["off"] = static_cast<unsigned>(off);
+                e["val"] = static_cast<int>(u);
+                int_candidates.push_back(e);
+            }
+        }
+
+        payload["yaw_candidate_count"] = static_cast<int>(yaw_candidates.size());
+        payload["int_candidate_count"] = static_cast<int>(int_candidates.size());
+        payload["yaw_candidates"] = yaw_candidates;
+        payload["int_candidates"] = int_candidates;
+
+        AppendRuntimeEvent(config, "player.live_transform", payload);
+    }
+
+    // ───────────────────────────────────────────────────────────────────
+    // HKMP overlay — Track 5 prep: find the guest's (brother's) ChrIns
+    // by full-heap value search.
+    //
+    // The previous probe (world.transform_probe) walked GameManagerImp's
+    // pointer tree and missed the guest's transform — it's at a depth
+    // beyond 2 hops or in a subtree not enumerated. This probe does
+    // it the other way: scan EVERY committed-readable-writable page in
+    // DS2's address space for 4-float quads with w=1.0 (homogeneous
+    // position marker) that DON'T match the host's current position.
+    //
+    // Any hit is a candidate non-host ChrIns transform — phantoms, NPCs,
+    // signs, etc. Cross-match with PLAYER_STATUS_JSON for pid=2 (Evil)
+    // post-hoc.
+    //
+    // Cost: scan ~500MB of heap at 4-byte stride takes ~1-2s per probe.
+    // Run every 5th heartbeat (~10s) to avoid CPU drain.
+    void EmitGuestSearchProbe(const RuntimeWorkerConfig& config)
+    {
+        nlohmann::json payload;
+
+        // Resolve host position so we can exclude it from results.
+        float host_px = 0.0f, host_py = 0.0f, host_pz = 0.0f;
+        bool have_host = false;
+        if (config.GameManagerImpGlobalAddress != 0)
+        {
+            uintptr_t gm_imp = 0, intermediate = 0, chrins = 0;
+            if (TryReadPointer(config.GameManagerImpGlobalAddress, gm_imp) &&
+                TryReadPointer(gm_imp + 0x18, intermediate) &&
+                TryReadPointer(intermediate + 0x50, chrins))
+            {
+                if (TryReadValue(chrins + 0x90, host_px) &&
+                    TryReadValue(chrins + 0x94, host_py) &&
+                    TryReadValue(chrins + 0x98, host_pz))
+                {
+                    have_host = true;
+                }
+            }
+        }
+        payload["host_known"] = have_host;
+        if (have_host)
+        {
+            payload["host_px"] = host_px;
+            payload["host_py"] = host_py;
+            payload["host_pz"] = host_pz;
+        }
+
+        // Iterate process heap pages
+        SYSTEM_INFO si;
+        GetSystemInfo(&si);
+        uintptr_t addr = reinterpret_cast<uintptr_t>(si.lpMinimumApplicationAddress);
+        const uintptr_t max_addr =
+            reinterpret_cast<uintptr_t>(si.lpMaximumApplicationAddress);
+
+        nlohmann::json hits = nlohmann::json::array();
+        uint64_t pages_scanned = 0;
+        uint64_t bytes_scanned = 0;
+        constexpr size_t kHitCap = 500;
+        bool capped = false;
+
+        while (addr < max_addr && !capped)
+        {
+            MEMORY_BASIC_INFORMATION mbi = {};
+            if (VirtualQuery(reinterpret_cast<void*>(addr), &mbi, sizeof(mbi)) == 0)
+            {
+                addr += 0x1000;
+                continue;
+            }
+
+            const uintptr_t region_base = reinterpret_cast<uintptr_t>(mbi.BaseAddress);
+            const size_t region_size = mbi.RegionSize;
+
+            // Only scan committed, readable+writable game-state pages.
+            // Skip RO (module images, static data) and huge regions
+            // (asset blobs are typically > 50MB single allocations).
+            const bool is_committed = (mbi.State == MEM_COMMIT);
+            const bool is_rw =
+                ((mbi.Protect & 0xFF) == PAGE_READWRITE) ||
+                ((mbi.Protect & 0xFF) == PAGE_EXECUTE_READWRITE);
+            const bool not_guarded = (mbi.Protect & PAGE_GUARD) == 0;
+            const bool reasonable_size = region_size < (64ULL * 1024 * 1024);
+
+            if (is_committed && is_rw && not_guarded && reasonable_size)
+            {
+                ++pages_scanned;
+                bytes_scanned += region_size;
+
+                // Stride 4 bytes; need 16 bytes per check (px,py,pz,w).
+                // Each read uses TryReadValue (SEH-wrapped) so a
+                // mid-scan page invalidation can't propagate.
+                for (size_t off = 0; off + 16 <= region_size; off += 4)
+                {
+                    const uintptr_t ptr = region_base + off;
+                    float px = 0.0f, py = 0.0f, pz = 0.0f, w = 0.0f;
+                    if (!TryReadValue(ptr,      px)) continue;
+                    if (!TryReadValue(ptr + 4,  py)) continue;
+                    if (!TryReadValue(ptr + 8,  pz)) continue;
+                    if (!TryReadValue(ptr + 12, w))  continue;
+
+                    if (!std::isfinite(px) || !std::isfinite(py) ||
+                        !std::isfinite(pz) || !std::isfinite(w))
+                    {
+                        continue;
+                    }
+                    if (std::fabs(w - 1.0f) > 0.01f) continue;
+                    if (px < -1000.0f || px > 1000.0f) continue;
+                    if (py < -200.0f  || py > 200.0f)  continue;
+                    if (pz < -1000.0f || pz > 1000.0f) continue;
+
+                    // Reject origin / shader constants
+                    if (std::fabs(px) < 5.0f && std::fabs(pz) < 5.0f) continue;
+
+                    // Reject hits within 0.5u of the host's current
+                    // position (those are the host's ChrIns + mirrors).
+                    if (have_host &&
+                        std::fabs(px - host_px) < 0.5f &&
+                        std::fabs(pz - host_pz) < 0.5f &&
+                        std::fabs(py - host_py) < 0.5f)
+                    {
+                        continue;
+                    }
+
+                    nlohmann::json h;
+                    h["addr"] = HexPointer(ptr);
+                    h["chrins_likely"] = HexPointer(ptr - 0x90);
+                    h["px"] = px;
+                    h["py"] = py;
+                    h["pz"] = pz;
+                    hits.push_back(h);
+
+                    if (hits.size() >= kHitCap)
+                    {
+                        capped = true;
+                        break;
+                    }
+                }
+            }
+
+            addr = region_base + region_size;
+        }
+
+        payload["pages_scanned"] = pages_scanned;
+        payload["bytes_scanned"] = bytes_scanned;
+        payload["hit_count"] = static_cast<int>(hits.size());
+        payload["capped"] = capped;
+        payload["hits"] = hits;
+
+        AppendRuntimeEvent(config, "guest.search", payload);
+    }
+
     nlohmann::json MakeStatusPayload(const RuntimeWorkerConfig& config)
     {
         nlohmann::json payload;
@@ -3197,11 +3730,36 @@ namespace
                 nlohmann::json heartbeat;
                 heartbeat["counter"] = heartbeat_counter;
                 heartbeat["command_inbox_size"] = command_offset;
+                // HKMP overlay Phase 1 verification: surface every stage
+                // flag of the render hook pipeline so we can pinpoint
+                // exactly where the chain breaks if any stage misses.
+                heartbeat["render_hook_installed"] = DS2_RenderHook_IsInstalled();
+                heartbeat["render_create_device_hooked"] =
+                    DS2_RenderHook_IsCreateDeviceHooked();
+                heartbeat["render_factory_hooked"] =
+                    DS2_RenderHook_IsFactoryHooked();
+                heartbeat["render_present_hooked"] =
+                    DS2_RenderHook_IsPresentHooked();
+                heartbeat["render_frame_count"] =
+                    static_cast<uint64_t>(DS2_RenderHook_GetFrameCount());
                 AppendRuntimeEvent(*config, "runtime.heartbeat", heartbeat);
             }
             if ((heartbeat_counter % 15) == 0)
             {
                 EmitInventoryProbeAndMaybeArm(*config);
+            }
+            // HKMP overlay Track 3: use the LOCKED chain (gm+0x18 → +0x50)
+            // to read the player ChrIns directly each tick. The Safe
+            // wrapper traps any SEH so a mid-tick AV doesn't kill the
+            // worker thread.
+            SafeEmitPlayerLiveTransform(config.get());
+
+            // HKMP overlay Track 5 prep: full-heap value-search for the
+            // guest's (brother's) ChrIns. Runs every 5th heartbeat
+            // (~10s). See Docs/HKMP_OVERLAY_RESEARCH.md §14 Track 5.
+            if ((heartbeat_counter % 5) == 0)
+            {
+                SafeEmitGuestSearchProbe(config.get());
             }
 
             Sleep(2000);

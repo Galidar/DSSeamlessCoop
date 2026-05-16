@@ -24,6 +24,13 @@
 
 #include "Shared/Core/Network/NetConnection.h"
 
+// HKMP overlay research (2026-05-15): structured player-state telemetry
+// dumped per RequestUpdatePlayerStatus message into server.log so we can
+// see the actual Vec3 positions / HP / area transitions on the wire
+// without writing any new transport. Grep `PLAYER_STATUS_JSON` in
+// server.log to extract a JSONL stream. See Docs/HKMP_OVERLAY_RESEARCH.md.
+#include "ThirdParty/nlohmann/json.hpp"
+
 DS2_PlayerDataManager::DS2_PlayerDataManager(Server* InServerInstance)
     : ServerInstance(InServerInstance)
 {
@@ -157,6 +164,91 @@ MessageHandleResult DS2_PlayerDataManager::Handle_RequestUpdatePlayerStatus(Game
         State.GetPlayerStatus_Mutable().mutable_stats_info()->clear_unknown_21();
     }
     State.GetPlayerStatus_Mutable().MergeFrom(status);
+
+    // ───────────────────────────────────────────────────────────────────────
+    // HKMP overlay research — Track 1 (server-side player-state telemetry).
+    //
+    // Emit one JSONL line per RequestUpdatePlayerStatus message into
+    // server.log with prefix `PLAYER_STATUS_JSON`. The DS2 client already
+    // serializes position (Vec3 in PlayerLocation) + HP/stamina/soul stats
+    // every `player_status_send_delay` seconds (default 300s, clamp
+    // 60..50000); this dump exposes those values so the eventual HKMP-style
+    // overlay can validate any in-memory transform discovery against the
+    // protocol's ground truth. See Docs/HKMP_OVERLAY_RESEARCH.md §6 Track 1.
+    {
+        const auto& Merged = State.GetPlayerStatus();
+        nlohmann::json line = nlohmann::json::object();
+        line["pid"]         = State.GetPlayerId();
+        line["steam_id"]    = State.GetSteamId();
+        line["name"]        = State.GetCharacterName();
+        line["delta_bytes"] = static_cast<int>(bytes.size());
+
+        if (Merged.has_player_location()) {
+            const auto& loc = Merged.player_location();
+            if (loc.has_online_area_id())          line["area"]     = loc.online_area_id();
+            if (loc.has_online_activity_area_id()) line["activity"] = loc.online_activity_area_id();
+            if (loc.has_cell_id())                 line["cell"]     = loc.cell_id();
+            if (loc.has_position()) {
+                line["px"] = loc.position().x();
+                line["py"] = loc.position().y();
+                line["pz"] = loc.position().z();
+            }
+            if (loc.has_unknown_5())               line["loc_u5"]   = loc.unknown_5();
+        }
+
+        if (Merged.has_player_status()) {
+            const auto& s = Merged.player_status();
+            if (s.has_soul_level())         line["sl"]        = s.soul_level();
+            if (s.has_soul_memory())        line["sm"]        = s.soul_memory();
+            if (s.has_sitting_at_bonfire()) line["sat_bf"]    = s.sitting_at_bonfire();
+            if (s.has_human_effigy_burnt()) line["effigy"]    = s.human_effigy_burnt();
+            if (s.has_covenant())           line["cov"]       = s.covenant();
+            if (s.has_character_id())       line["char_id"]   = s.character_id();
+            if (s.has_play_time_seconds())  line["playtime_s"] = s.play_time_seconds();
+            if (s.has_archetype())          line["archetype"] = s.archetype();
+        }
+
+        if (Merged.has_physical_status()) {
+            const auto& ph = Merged.physical_status();
+            if (ph.has_health())     line["hp"]    = ph.health();
+            if (ph.has_stamina())    line["stam"]  = ph.stamina();
+            if (ph.has_equip_load()) line["equip"] = ph.equip_load();
+            if (ph.has_poise())      line["poise"] = ph.poise();
+            if (ph.has_curse_resist())   line["curse_res"]   = ph.curse_resist();
+            if (ph.has_petrify_resist()) line["petrify_res"] = ph.petrify_resist();
+            if (ph.has_agility())        line["agility"]     = ph.agility();
+        }
+
+        if (Merged.has_item_using_info()) {
+            const auto& it = Merged.item_using_info();
+            nlohmann::json iu = nlohmann::json::object();
+            if (it.has_using_dried_fingers()) iu["dried_fingers"] = it.using_dried_fingers();
+            if (it.has_named_ring_god())      iu["named_ring"]    = it.named_ring_god();
+            if (it.has_guardians_seal())      iu["guardians"]     = it.guardians_seal();
+            if (it.has_bell_keepers_seal())   iu["bell_keepers"]  = it.bell_keepers_seal();
+            if (it.has_crest_of_the_rat())    iu["rat_crest"]     = it.crest_of_the_rat();
+            line["item_using"] = iu;
+        }
+
+        // Record which top-level AllStatus fields the client actually included
+        // in this delta packet. Useful to understand what DS2 sends per tick
+        // vs. only on transitions (e.g. position may be sent every packet,
+        // stats only on level-up).
+        nlohmann::json deltaKeys = nlohmann::json::array();
+        if (status.has_player_location())   deltaKeys.push_back("location");
+        if (status.has_player_status())     deltaKeys.push_back("status");
+        if (status.has_item_using_info())   deltaKeys.push_back("item_using_info");
+        if (status.has_stats_info())        deltaKeys.push_back("stats_info");
+        if (status.has_attributes())        deltaKeys.push_back("attributes");
+        if (status.has_physical_status())   deltaKeys.push_back("physical_status");
+        if (status.has_weapon_status())     deltaKeys.push_back("weapon_status");
+        if (status.has_armor_status())      deltaKeys.push_back("armor_status");
+        if (status.has_server_side_status())deltaKeys.push_back("server_side_status");
+        if (status.has_equipment_info())    deltaKeys.push_back("equipment_info");
+        line["delta_keys"] = deltaKeys;
+
+        LogS(Client->GetName().c_str(), "PLAYER_STATUS_JSON %s", line.dump().c_str());
+    }
 
     // Keep track of the players character name, useful for logging.
     if (State.GetPlayerStatus().player_status().has_name())

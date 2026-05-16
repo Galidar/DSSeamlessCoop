@@ -24,6 +24,7 @@
 #include "Injector/Hooks/DarkSouls2/DS2_NativeRuntimeHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_ModFileOverrideHook.h"
 #include "Injector/Hooks/DarkSouls2/DS2_LogProtobufsHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_RenderHook.h"
 #include "Injector/Hooks/Shared/ReplaceServerPortHook.h"
 #include "Injector/Hooks/Shared/ChangeSaveGameFilenameHook.h"
 
@@ -148,6 +149,13 @@ bool Injector::Init()
             }
 
             Hooks.push_back(std::make_unique<DS2_NativeRuntimeHook>());
+
+            // HKMP overlay Phase 1 (v8b — export-hook approach).
+            // Hooks d3d11!D3D11CreateDeviceAndSwapChain so we capture
+            // DS2's REAL swap chain (whatever the lighting engine
+            // returns) and VMT-hook its Present. No dummy creation, so
+            // the lighting engine's _swapchain tracking stays intact.
+            Hooks.push_back(std::make_unique<DS2_RenderHook>());
 
             if (Config.EnableModFileOverrides ||
                 Config.EnableSeperateSaveFiles ||
