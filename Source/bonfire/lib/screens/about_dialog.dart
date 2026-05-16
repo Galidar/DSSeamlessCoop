@@ -23,8 +23,12 @@ class _AboutDialog extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = Palette.of(context);
+    // Prefer the local service version (always populated from ping)
+    // over the GitHub-derived updateStatus, which can be null when
+    // the API probe hasn't returned yet or hit a network issue.
+    final app = context.watch<AppState>();
     final version =
-        context.watch<AppState>().updateStatus?.currentVersion ?? 'unknown';
+        app.serviceVersion ?? app.updateStatus?.currentVersion ?? 'unknown';
     return Dialog(
       backgroundColor: p.surface,
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(R.md)),

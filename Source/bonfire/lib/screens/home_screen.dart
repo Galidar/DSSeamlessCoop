@@ -2200,7 +2200,12 @@ class _BottomBar extends StatelessWidget {
           const EdgeInsets.symmetric(horizontal: Sp.xl, vertical: Sp.sm + 2),
       child: Row(
         children: [
-          Text('Bonfire v${app.updateStatus?.currentVersion ?? 'unknown'}',
+          // Service version (from the local ping RPC) is the source of
+          // truth — never depends on a successful GitHub probe. The
+          // updateStatus.currentVersion fallback is kept for back-compat
+          // with older services that didn't populate the ping payload.
+          Text(
+              'Bonfire v${app.serviceVersion ?? app.updateStatus?.currentVersion ?? 'unknown'}',
               style: BT.caption.copyWith(color: p.textMuted)),
           const SizedBox(width: Sp.lg),
           if (selected != null)

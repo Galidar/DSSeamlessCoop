@@ -565,11 +565,42 @@ class Ds2RuntimeSessionState {
 class AppState extends ChangeNotifier {
   AppState(this._rpc) {
     _notificationSub = _rpc.notifications.listen(_onNotification);
+    // Service version comes back from the cheap local ping RPC and
+    // never depends on GitHub reachability — use it for the
+    // bottom-bar "Bonfire v…" display so the UI never reads
+    // "vunknown" when the GitHub update probe is slow / rate-limited /
+    // offline (which was happening when both PCs hammered the
+    // /releases endpoint during the v2.8.x rollout).
+    scheduleMicrotask(_refreshServiceVersion);
     scheduleMicrotask(() => refreshUpdateStatus(silent: true));
     _updateTimer = Timer.periodic(
       const Duration(minutes: 30),
       (_) => refreshUpdateStatus(silent: true),
     );
+  }
+
+  // Local service version, populated from `ping`. Stays null only if
+  // BonfireService isn't running, which is already a fatal state
+  // surfaced by the boot screens — by the time AppState exists the
+  // ping has already succeeded once in main.dart, so this refresh
+  // call is a no-op as far as failure paths go.
+  String? serviceVersion;
+
+  Future<void> _refreshServiceVersion() async {
+    try {
+      final raw = await _rpc.call('ping');
+      if (raw is Map<String, dynamic>) {
+        final v = raw['version'];
+        if (v is String && v.isNotEmpty) {
+          serviceVersion = v;
+          notifyListeners();
+        }
+      }
+    } catch (_) {
+      // ping failure is already handled at the main.dart boot stage;
+      // here we just leave serviceVersion null and the UI falls back
+      // to 'unknown'.
+    }
   }
 
   final RpcClient _rpc;
