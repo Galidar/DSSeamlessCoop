@@ -3478,7 +3478,12 @@ namespace
             command == "world.recover" ||
             command == "inventory.probe" ||
             command == "player.sync.request" ||
-            command == "world.sync.request";
+            command == "world.sync.request" ||
+            // v17 Phase 4b: BonfireService publishes peer poses
+            // received over the UDP backbone by appending a
+            // command of this name to commands.jsonl. The render
+            // hook's peer table is replaced in full each time.
+            command == "render.set_peer_poses";
     }
 
     void ApplyRuntimeCommandState(
@@ -3626,6 +3631,77 @@ namespace
                 payload["note"] = "inventory probe emitted";
                 AppendRuntimeEvent(config, "command.received", payload);
                 EmitInventoryProbeAndMaybeArm(config);
+                return;
+            }
+
+            if (command == "render.set_peer_poses")
+            {
+                // Replace the render hook's peer-pose table in full
+                // from the JSON array. Each entry shape:
+                //   { "position": [x,y,z],
+                //     "yaw_radians": <float, default 0>,
+                //     "color":      [r,g,b], (defaults to white)
+                //     "valid":      <bool/int, default true> }
+                // Missing or malformed entries are skipped silently
+                // — the runtime worker is tolerant by design so a
+                // single bad peer message can't crash the renderer.
+                DS2_PeerPose poses[16] = {};
+                int written = 0;
+                if (parsed.contains("peers") && parsed["peers"].is_array())
+                {
+                    for (const auto& peer_json : parsed["peers"])
+                    {
+                        if (written >= 16) break;
+                        if (!peer_json.is_object()) continue;
+
+                        DS2_PeerPose pose = {};
+                        pose.color[0] = 1.0f;
+                        pose.color[1] = 1.0f;
+                        pose.color[2] = 1.0f;
+                        pose.valid = 1;
+
+                        auto pos = peer_json.find("position");
+                        if (pos == peer_json.end() ||
+                            !pos->is_array() || pos->size() < 3)
+                        {
+                            continue;
+                        }
+                        pose.position[0] = (*pos)[0].get<float>();
+                        pose.position[1] = (*pos)[1].get<float>();
+                        pose.position[2] = (*pos)[2].get<float>();
+
+                        if (auto yaw = peer_json.find("yaw_radians");
+                            yaw != peer_json.end() && yaw->is_number())
+                        {
+                            pose.yaw_radians = yaw->get<float>();
+                        }
+
+                        if (auto col = peer_json.find("color");
+                            col != peer_json.end() && col->is_array() &&
+                            col->size() >= 3)
+                        {
+                            pose.color[0] = (*col)[0].get<float>();
+                            pose.color[1] = (*col)[1].get<float>();
+                            pose.color[2] = (*col)[2].get<float>();
+                        }
+
+                        if (auto valid = peer_json.find("valid");
+                            valid != peer_json.end())
+                        {
+                            if (valid->is_boolean())
+                                pose.valid = valid->get<bool>() ? 1u : 0u;
+                            else if (valid->is_number_integer())
+                                pose.valid = valid->get<int>() != 0 ? 1u : 0u;
+                        }
+
+                        poses[written++] = pose;
+                    }
+                }
+
+                DS2_RenderHook_SetPeerPoses(poses, written);
+                payload["peer_count"] = written;
+                payload["note"] = "peer pose table replaced";
+                AppendRuntimeEvent(config, "command.applied", payload);
                 return;
             }
 

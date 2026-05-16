@@ -957,18 +957,14 @@ float4 main(PSIn input) : SV_Target
                             d.color[0] = 1.0f; d.color[1] = 0.1f; d.color[2] = 0.9f;  // magenta
                         }
 
-                        // Phase 4a sanity ghost — fixed 5 m offset in
-                        // +X from the host. If we see TWO cubes in
-                        // game, the multi-draw pipeline works.
-                        if (host_ok)
-                        {
-                            CubeDraw& d = draws[draw_count++];
-                            d.pos[0] = host_px + 5.0f;
-                            d.pos[1] = host_py;
-                            d.pos[2] = host_pz;
-                            d.yaw_radians = 0.0f;
-                            d.color[0] = 0.1f; d.color[1] = 0.9f; d.color[2] = 0.9f;  // cyan
-                        }
+                        // v17 Phase 4b: the hard-coded cyan ghost
+                        // from v16 has been removed. Peers must now
+                        // arrive via DS2_RenderHook_SetPeerPoses()
+                        // (= a 'render.set_peer_poses' command on the
+                        // worker inbox). With no IPC peers we draw
+                        // exactly ONE magenta cube on the host —
+                        // additional cubes are unambiguous proof
+                        // that the IPC bridge is alive.
 
                         // Copy any IPC-supplied peer poses under a
                         // shared lock — minimises contention since
