@@ -554,20 +554,21 @@ class _ServerListView extends StatelessWidget {
     // Dedupe: hide any public-list entry whose name matches one of the
     // user's local bonfires for this game (their advertised server shouldn't
     // appear twice).
+    //
+    // BNS-flagged DS2 native sessions are intentionally kept in this list as
+    // well — the v2.6.0 one-click "Travel to this fire" UX is the simpler
+    // path to peer joining, and the dedicated DS2 NATIVE SESSIONS section
+    // above just gives a richer manifest-aware view + persistent arming for
+    // users who want it.
     final myNames = myProfiles
         .map((p) => p.name.trim().toLowerCase())
         .where((n) => n.isNotEmpty)
         .toSet();
-    // Also hide BNS-flagged DS2 native sessions from the generic public list —
-    // they get their own section above so the user can tell apart a co-op
-    // host from a plain DS3OS-style public server.
-    final deduped = (myNames.isEmpty
-            ? all
-            : all
-                .where((s) => !myNames.contains(s.name.trim().toLowerCase()))
-                .toList())
-        .where((s) => s.bnsManifest == null)
-        .toList();
+    final deduped = myNames.isEmpty
+        ? all
+        : all
+            .where((s) => !myNames.contains(s.name.trim().toLowerCase()))
+            .toList();
 
     // Apply optional filters: hide sealed (passworded) + minimum player count.
     final afterFilters = deduped
