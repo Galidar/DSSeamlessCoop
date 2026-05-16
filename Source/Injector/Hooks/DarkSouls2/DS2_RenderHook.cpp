@@ -412,38 +412,90 @@ cbuffer OverlayCB : register(b0)
     float  scale;
 };
 
-struct VSOut { float4 pos : SV_Position; };
+struct VSOut
+{
+    float4 pos    : SV_Position;
+    float3 normal : NORMAL;
+};
 
+// v15: proper 3D cube (36 verts = 12 triangles = 6 faces). Centered
+// on the anchor with a +scale Y bias so the cube *sits* on the feet
+// instead of straddling them. v14 had a flat XZ quad at y_offset=0
+// which read on screen as a magenta "waterline" — geometrically
+// correct for a flat plane but useless as a peer-player placeholder.
+//
+// Vertex order per face: 2 CCW triangles (front-face culling on RH,
+// back-face culling on LH — DS2 is LH so the winding here is set up
+// for CULL_BACK in LH). Per-vertex normal is folded into the output
+// so the PS can apply a cheap lambert-style shade.
 VSOut main(uint id : SV_VertexID)
 {
-    // v13: cube at PLAYER FEET (y_offset=0) and 3x bigger so it's
-    // visible even with DS2's vertical camera pitch clamp. Souls
-    // cameras can't pitch all the way up, so a quad floating above
-    // the player can be outside the view frustum entirely.
-    float3 offsets[6] = {
-        float3(-1.0, 0.0, -1.0),
-        float3( 1.0, 0.0, -1.0),
-        float3(-1.0, 0.0,  1.0),
-        float3( 1.0, 0.0, -1.0),
-        float3( 1.0, 0.0,  1.0),
-        float3(-1.0, 0.0,  1.0)
+    // 36-vertex unit cube spanning [-1, +1] on each axis.
+    const float3 cube_verts[36] = {
+        // -Y face (bottom)
+        float3(-1,-1,-1), float3( 1,-1,-1), float3(-1,-1, 1),
+        float3( 1,-1,-1), float3( 1,-1, 1), float3(-1,-1, 1),
+        // +Y face (top)
+        float3(-1, 1,-1), float3(-1, 1, 1), float3( 1, 1,-1),
+        float3( 1, 1,-1), float3(-1, 1, 1), float3( 1, 1, 1),
+        // -X face (left)
+        float3(-1,-1,-1), float3(-1,-1, 1), float3(-1, 1,-1),
+        float3(-1, 1,-1), float3(-1,-1, 1), float3(-1, 1, 1),
+        // +X face (right)
+        float3( 1,-1,-1), float3( 1, 1,-1), float3( 1,-1, 1),
+        float3( 1, 1,-1), float3( 1, 1, 1), float3( 1,-1, 1),
+        // -Z face (back)
+        float3(-1,-1,-1), float3(-1, 1,-1), float3( 1,-1,-1),
+        float3( 1,-1,-1), float3(-1, 1,-1), float3( 1, 1,-1),
+        // +Z face (front)
+        float3(-1,-1, 1), float3( 1,-1, 1), float3(-1, 1, 1),
+        float3(-1, 1, 1), float3( 1,-1, 1), float3( 1, 1, 1)
     };
-    float3 world_pos = anchor + offsets[id] * scale;
+    // Per-face normal — 6 floats3 indexed by face (id / 6).
+    const float3 face_normals[6] = {
+        float3( 0,-1, 0),  // -Y
+        float3( 0, 1, 0),  // +Y
+        float3(-1, 0, 0),  // -X
+        float3( 1, 0, 0),  // +X
+        float3( 0, 0,-1),  // -Z
+        float3( 0, 0, 1)   // +Z
+    };
+
+    // Anchor is the host's feet world position; lift by scale so the
+    // cube *sits on* the ground, not buried halfway.
+    float3 cube_local = cube_verts[id] * scale;
+    cube_local.y += scale;
+    float3 world_pos = anchor + cube_local;
+
     VSOut o;
-    // v13: TRANSPOSED multiply order in case captured matrix is
-    // column-major. mul(M, v) treats M as if its columns are basis
-    // vectors; mul(v, M) treats rows as basis. We were doing v×M
-    // before; flip to M×v.
-    o.pos = mul(VP, float4(world_pos, 1.0));
+    // mul(M, v) is HLSL's column-vector convention; combined with our
+    // cbuffer being laid out row-major in memory, HLSL's default
+    // column-major matrix interpretation gives the correct clip-space
+    // transform without us needing to transpose VP on the C++ side.
+    o.pos    = mul(VP, float4(world_pos, 1.0));
+    o.normal = face_normals[id / 6];
     return o;
 }
 )";
 
     static constexpr const char* kOverlayPSSource = R"(
-float4 main() : SV_Target
+struct PSIn
 {
-    // Bright magenta with alpha — visible against any DS2 backdrop.
-    return float4(1.0, 0.1, 0.9, 0.95);
+    float4 pos    : SV_Position;
+    float3 normal : NORMAL;
+};
+
+float4 main(PSIn input) : SV_Target
+{
+    // v15: cheap lambert shade so the cube's faces are
+    // distinguishable. A flat magenta cube reads as a magenta blob;
+    // a shaded one immediately looks like a 3D solid.
+    // Hardcoded light pointing roughly down + forward.
+    float3 light_dir = normalize(float3(0.4, -1.0, 0.3));
+    float ndl = saturate(dot(normalize(input.normal), -light_dir));
+    float3 base = float3(1.0, 0.1, 0.9);  // magenta
+    float3 shaded = base * (0.35 + 0.65 * ndl);
+    return float4(shaded, 0.95);
 }
 )";
 
@@ -850,10 +902,11 @@ float4 main() : SV_Target
                             data->anchor[0] = host_px;
                             data->anchor[1] = host_py;
                             data->anchor[2] = host_pz;
-                            // v13: bigger quad (6 units wide instead
-                            // of 2) so it's visible even if the
-                            // matrix is a bit off.
-                            data->scale = 3.0f;
+                            // v15: 2-unit cube (matches player body
+                            // size). Smaller than v14's 6-unit
+                            // ground quad — with a working VP we
+                            // don't need to oversize for visibility.
+                            data->scale = 1.0f;
                             s_d3d_context->Unmap(s_overlay_cbuffer, 0);
 
                             // ── Apply our overlay state ──────────────
@@ -873,7 +926,9 @@ float4 main() : SV_Target
                             s_d3d_context->VSSetConstantBuffers(
                                 0, 1, &s_overlay_cbuffer);
 
-                            s_d3d_context->Draw(6, 0);
+                            // v15: 36 verts = 12 tris = 6-face cube.
+                            // (v14 used 6 verts for a flat XZ quad.)
+                            s_d3d_context->Draw(36, 0);
 
                             // Diagnostic: log every 300 frames (~5s @ 60fps)
                             // so we can grep the live VP from log if
