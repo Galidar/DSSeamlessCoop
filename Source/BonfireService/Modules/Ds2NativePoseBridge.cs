@@ -62,15 +62,18 @@ public static class Ds2NativePoseBridge
 
     // ── Timing knobs ─────────────────────────────────────────────────
     // Local pose poll: how often we re-read events.jsonl to look for a
-    // new player.live_transform. 33 ms ≈ 30 Hz, matches the typical
-    // game tick rate of the Injector worker.
-    private static readonly TimeSpan PosePollInterval = TimeSpan.FromMilliseconds(33);
+    // new player.live_transform. v0 used 33 ms ≈ 30 Hz which produced
+    // visible game slowdown — contention on events.jsonl writes from
+    // the Injector side. v1 drops to 100 ms ≈ 10 Hz: still well above
+    // human animation perception threshold, and now the file is mostly
+    // closed from the bridge side when the Injector wants to write.
+    private static readonly TimeSpan PosePollInterval = TimeSpan.FromMilliseconds(100);
 
     // Inbox write cadence: how often we re-publish the current peer
-    // table to the local Injector. 50 ms = 20 Hz; lower than the
-    // broadcast rate so we don't spam the Injector if peers send
-    // faster than we drain.
-    private static readonly TimeSpan InboxWriteInterval = TimeSpan.FromMilliseconds(50);
+    // table to the local Injector. Bumped from 50 ms → 100 ms for the
+    // same contention reasons as above; the Injector's command poll
+    // loop is on a 1 s tick anyway, so faster writes are wasted.
+    private static readonly TimeSpan InboxWriteInterval = TimeSpan.FromMilliseconds(100);
 
     // Peer TTL: drop a peer from the table if we haven't seen any
     // pose update from them in this window. Bigger = smoother on
@@ -84,7 +87,14 @@ public static class Ds2NativePoseBridge
     private static Task? _watcherTask;
     private static Task? _listenerTask;
     private static Task? _inboxWriterTask;
-    private static UdpClient? _udp;
+    // v1: separate UdpClient instances for send and receive. The single
+    // shared client used in v0 deadlocked or got into an inconsistent
+    // state under concurrent Send + ReceiveAsync because UdpClient is
+    // explicitly NOT documented thread-safe. With two clients the
+    // listener can stay parked on ReceiveAsync forever while the
+    // broadcaster fires Send freely from the watcher thread.
+    private static UdpClient? _udpRecv;
+    private static UdpClient? _udpSend;
     private static int _localPort;
     private static long _localSenderId;
     private static readonly List<IPEndPoint> _peerEndpoints = new();
@@ -99,6 +109,17 @@ public static class Ds2NativePoseBridge
     private static volatile PoseSample? _latestLocalPose;
     private static string? _lastEventLogPath;
     private static long _lastEventLogOffset;
+
+    // Cached path resolution. v0 called Directory.EnumerateFiles on
+    // every loop iteration (~20 times/sec across 3 loops) which —
+    // combined with the Injector's own writes — caused noticeable
+    // game slowdown. The session file path doesn't change during a
+    // session, so we cache it for kSessionPathTtl and re-resolve
+    // only when stale.
+    private static readonly TimeSpan SessionPathTtl = TimeSpan.FromSeconds(2);
+    private static string? _cachedEventLogPath;
+    private static DateTime _cachedEventLogAt = DateTime.MinValue;
+    private static string? _cachedCommandsInboxPath;
 
     private sealed record PeerEntry(
         long SenderId,
@@ -128,11 +149,16 @@ public static class Ds2NativePoseBridge
                 return Status();
 
             _localPort = localPort > 0 ? localPort : 50031;
-            _udp = new UdpClient(_localPort, AddressFamily.InterNetwork);
-            // Don't crash if a peer is briefly unreachable — UDP is
-            // fire-and-forget by design.
-            _udp.Client.ReceiveBufferSize = 1 << 16;
-            _udp.Client.SendBufferSize = 1 << 16;
+            // Receive socket — bound to the well-known port that peers
+            // unicast their pose packets to.
+            _udpRecv = new UdpClient(_localPort, AddressFamily.InterNetwork);
+            _udpRecv.Client.ReceiveBufferSize = 1 << 16;
+            // Send socket — ephemeral local port, just for outbound.
+            // Keeping send/receive on separate sockets sidesteps
+            // UdpClient's non-thread-safety guarantees.
+            _udpSend = new UdpClient(AddressFamily.InterNetwork);
+            _udpSend.Client.SendBufferSize = 1 << 16;
+            DebugLog($"Start: recv bound on :{_localPort}, send on ephemeral port");
 
             _peerEndpoints.Clear();
             foreach (var raw in peerEndpoints)
@@ -150,6 +176,9 @@ public static class Ds2NativePoseBridge
             _latestLocalPose = null;
             _lastEventLogPath = null;
             _lastEventLogOffset = 0;
+            _cachedEventLogPath = null;
+            _cachedCommandsInboxPath = null;
+            _cachedEventLogAt = DateTime.MinValue;
 
             _cts = new CancellationTokenSource();
             _watcherTask     = Task.Run(() => WatcherLoopAsync(_cts.Token));
@@ -164,13 +193,16 @@ public static class Ds2NativePoseBridge
         lock (Lock)
         {
             try { _cts?.Cancel(); } catch { }
-            try { _udp?.Dispose(); } catch { }
-            _udp = null;
+            try { _udpRecv?.Dispose(); } catch { }
+            try { _udpSend?.Dispose(); } catch { }
+            _udpRecv = null;
+            _udpSend = null;
             _watcherTask = null;
             _listenerTask = null;
             _inboxWriterTask = null;
             _cts = null;
             _peerTable.Clear();
+            DebugLog("Stop: all sockets and tasks released");
         }
         return Status();
     }
@@ -225,6 +257,8 @@ public static class Ds2NativePoseBridge
     // "outbound" half of the bridge.
     private static async Task WatcherLoopAsync(CancellationToken ct)
     {
+        DebugLog("WatcherLoop: started");
+        long iter = 0;
         while (!ct.IsCancellationRequested)
         {
             try
@@ -232,6 +266,7 @@ public static class Ds2NativePoseBridge
                 var path = LatestEventLog();
                 if (path != null && _lastEventLogPath != path)
                 {
+                    DebugLog($"WatcherLoop: switched session log to {Path.GetFileName(path)}");
                     _lastEventLogPath = path;
                     _lastEventLogOffset = 0;
                 }
@@ -245,19 +280,51 @@ public static class Ds2NativePoseBridge
                     BroadcastPose(pose);
                 }
             }
-            catch (Exception) { /* swallow — runtime worker design */ }
-
+            catch (Exception ex)
+            {
+                DebugLog($"WatcherLoop iter={iter} threw {ex.GetType().Name}: {ex.Message}");
+            }
+            iter++;
+            if (iter % 100 == 0)
+            {
+                var p = _latestLocalPose;
+                DebugLog($"WatcherLoop alive: iter={iter} hasPose={p != null} broadcast={_broadcastCount}");
+            }
             try { await Task.Delay(PosePollInterval, ct); }
             catch (OperationCanceledException) { break; }
+            catch (Exception ex) { DebugLog($"WatcherLoop Task.Delay threw {ex.GetType().Name}: {ex.Message}"); break; }
         }
+        DebugLog($"WatcherLoop: exiting (iter={iter})");
     }
 
     private static string? LatestEventLog()
     {
-        if (!Directory.Exists(RuntimeRoot)) return null;
-        return Directory.EnumerateFiles(RuntimeRoot, "*.events.jsonl")
+        // Cheap fast path: cached path still valid AND still recent.
+        var now = DateTime.UtcNow;
+        if (_cachedEventLogPath is not null &&
+            now - _cachedEventLogAt < SessionPathTtl)
+        {
+            return _cachedEventLogPath;
+        }
+
+        if (!Directory.Exists(RuntimeRoot))
+        {
+            _cachedEventLogPath = null;
+            _cachedCommandsInboxPath = null;
+            _cachedEventLogAt = now;
+            return null;
+        }
+        var newest = Directory.EnumerateFiles(RuntimeRoot, "*.events.jsonl")
             .OrderByDescending(File.GetLastWriteTimeUtc)
             .FirstOrDefault();
+        if (newest != _cachedEventLogPath)
+        {
+            // New session — invalidate the derived commands-inbox cache too.
+            _cachedEventLogPath = newest;
+            _cachedCommandsInboxPath = null;
+        }
+        _cachedEventLogAt = now;
+        return _cachedEventLogPath;
     }
 
     private static void ScanForNewPoses(string path, ref long offset)
@@ -319,7 +386,7 @@ public static class Ds2NativePoseBridge
     // ── UDP broadcaster (called from the watcher loop) ───────────────
     private static void BroadcastPose(PoseSample pose)
     {
-        if (_udp is null || _peerEndpoints.Count == 0) return;
+        if (_udpSend is null || _peerEndpoints.Count == 0) return;
 
         Span<byte> packet = stackalloc byte[PacketSize];
         BinaryPrimitives.WriteUInt32LittleEndian(packet[0..4], Magic);
@@ -337,12 +404,13 @@ public static class Ds2NativePoseBridge
         {
             try
             {
-                _udp.Send(bytes, bytes.Length, ep);
+                _udpSend.Send(bytes, bytes.Length, ep);
                 Interlocked.Increment(ref _broadcastCount);
             }
-            catch
+            catch (Exception ex)
             {
                 // peer unreachable — fine, UDP is fire-and-forget.
+                DebugLog($"BroadcastPose send to {ep} failed: {ex.GetType().Name} {ex.Message}");
             }
         }
     }
@@ -350,18 +418,20 @@ public static class Ds2NativePoseBridge
     // ── UDP listener ─────────────────────────────────────────────────
     private static async Task ListenerLoopAsync(CancellationToken ct)
     {
-        if (_udp is null) return;
+        if (_udpRecv is null) return;
+        DebugLog("ListenerLoop: started");
         while (!ct.IsCancellationRequested)
         {
             UdpReceiveResult result;
             try
             {
-                result = await _udp.ReceiveAsync(ct);
+                result = await _udpRecv.ReceiveAsync(ct);
             }
-            catch (OperationCanceledException) { break; }
-            catch (ObjectDisposedException) { break; }
-            catch (Exception)
+            catch (OperationCanceledException) { DebugLog("ListenerLoop: cancelled"); break; }
+            catch (ObjectDisposedException) { DebugLog("ListenerLoop: socket disposed"); break; }
+            catch (Exception ex)
             {
+                DebugLog($"ListenerLoop ReceiveAsync threw {ex.GetType().Name}: {ex.Message}");
                 Interlocked.Increment(ref _droppedCount);
                 continue;
             }
@@ -412,17 +482,30 @@ public static class Ds2NativePoseBridge
     // sender_id so two peers always get visually distinct cubes.
     private static async Task InboxWriterLoopAsync(CancellationToken ct)
     {
+        DebugLog("InboxWriterLoop: started");
+        long iter = 0;
         while (!ct.IsCancellationRequested)
         {
             try
             {
                 WritePeerTableToInbox();
             }
-            catch { /* swallow */ }
-
+            catch (Exception ex)
+            {
+                DebugLog($"InboxWriterLoop iter={iter} WritePeerTableToInbox threw {ex.GetType().Name}: {ex.Message}");
+            }
+            iter++;
+            // Periodic heartbeat — confirms the loop is alive even
+            // when commands.jsonl writes are silent.
+            if (iter % 100 == 0)
+            {
+                DebugLog($"InboxWriterLoop alive: iter={iter} peers={_peerTable.Count} broadcast={_broadcastCount} received={_receivedCount}");
+            }
             try { await Task.Delay(InboxWriteInterval, ct); }
             catch (OperationCanceledException) { break; }
+            catch (Exception ex) { DebugLog($"InboxWriterLoop Task.Delay threw {ex.GetType().Name}: {ex.Message}"); break; }
         }
+        DebugLog($"InboxWriterLoop: exiting (iter={iter})");
     }
 
     private static void WritePeerTableToInbox()
@@ -455,11 +538,16 @@ public static class Ds2NativePoseBridge
                 ["valid"] = true,
             });
         }
+        // ToJsonString() without options uses the default compact
+        // writer — same convention as Ds2NativeRuntimeBridge.SendCommand
+        // and friends. Passing JsonSerializerOptions here breaks under
+        // PublishSingleFile because the JSON source generator hasn't
+        // emitted metadata for our anon JsonObject shape.
         var line = new JsonObject
         {
             ["command"] = "render.set_peer_poses",
             ["peers"] = peers,
-        }.ToJsonString(new JsonSerializerOptions { WriteIndented = false });
+        }.ToJsonString();
 
         // Use UTF-8 no-BOM and append a single newline so the
         // Injector's std::getline picks the line cleanly. Multiple
@@ -470,18 +558,45 @@ public static class Ds2NativePoseBridge
 
     private static string? LatestCommandsInbox()
     {
+        // LatestEventLog manages its own TTL; we just piggyback on
+        // its cache invalidation to know when to recompute.
         var eventLog = LatestEventLog();
         if (eventLog is null) return null;
+        if (_cachedCommandsInboxPath is not null) return _cachedCommandsInboxPath;
+
         var fileName = Path.GetFileName(eventLog);
         if (!fileName.EndsWith(".events.jsonl", StringComparison.OrdinalIgnoreCase))
             return null;
         var stem = fileName[..^".events.jsonl".Length];
-        return Path.Combine(
+        _cachedCommandsInboxPath = Path.Combine(
             Path.GetDirectoryName(eventLog) ?? RuntimeRoot,
             stem + ".commands.jsonl");
+        return _cachedCommandsInboxPath;
     }
 
     // ── Helpers ──────────────────────────────────────────────────────
+
+    // Append-only debug log so we can diagnose the bridge from
+    // outside without RPC stdin access. Each line is timestamped UTC
+    // ISO. Path is well-known + sibling of the runtime root. Best
+    // effort — never throws.
+    private static readonly object DebugLogLock = new();
+    private static string DebugLogPath =>
+        Path.Combine(Paths.InstallRoot, "Runtime", "DS2Native", "pose_bridge.debug.log");
+    private static void DebugLog(string message)
+    {
+        try
+        {
+            lock (DebugLogLock)
+            {
+                File.AppendAllText(
+                    DebugLogPath,
+                    $"{DateTime.UtcNow:O} {message}\n",
+                    new UTF8Encoding(false));
+            }
+        }
+        catch { /* swallow */ }
+    }
 
     private static long StableMachineHash()
     {
