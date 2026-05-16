@@ -35,6 +35,13 @@ public sealed class ServerConfig
     /// LoginServerPort config field. Default 50050 matches DS3OS upstream.
     /// </summary>
     public int LoginServerPort { get; set; } = 50050;
+    /// <summary>
+    /// WebUI HTTP port for the in-process admin endpoints
+    /// (<c>/auth</c>, <c>/settings</c>, etc.). Used by the live-manifest
+    /// push path to update Server.exe's in-memory <c>ServerDescription</c>
+    /// without a full restart. Default 50005 matches DS3OS upstream.
+    /// </summary>
+    public int WebUIServerPort { get; set; } = 50005;
 
     public static ServerConfig Load(string path)
     {
@@ -61,6 +68,7 @@ public sealed class ServerConfig
         cfg.WebUIServerUsername   = ReadString(text, "WebUIServerUsername")   ?? cfg.WebUIServerUsername;
         cfg.WebUIServerPassword   = ReadString(text, "WebUIServerPassword")   ?? cfg.WebUIServerPassword;
         cfg.LoginServerPort       = ReadInt(text,    "LoginServerPort")       ?? cfg.LoginServerPort;
+        cfg.WebUIServerPort       = ReadInt(text,    "WebUIServerPort")       ?? cfg.WebUIServerPort;
         return cfg;
     }
 

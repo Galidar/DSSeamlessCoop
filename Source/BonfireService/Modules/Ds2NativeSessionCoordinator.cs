@@ -500,17 +500,59 @@ public static class Ds2NativeSessionCoordinator
             memory.LastStampedUtc = DateTime.UtcNow;
 
             // If Server.exe is already running, the manifest we just wrote
-            // won't be picked up until it restarts. We can detect that by
-            // comparing process start time against our stamp time.
+            // won't be picked up until it restarts — UNLESS we can push it
+            // live via Server.exe's WebUI /settings endpoint. The push closes
+            // the staleness gap so peer Bonfires see fresh manifest data on
+            // the next master heartbeat (~30s), no Server.exe restart needed.
             var serverStatus = ServerProcess.QueryStatus();
-            memory.ManifestStalePendingRestart = serverStatus.Running &&
+            var stampedAfterBoot = serverStatus.Running &&
                 serverStatus.StartedAt.HasValue &&
                 memory.LastStampedUtc > serverStatus.StartedAt.Value.ToUniversalTime();
+
+            Ds2NativeWebUIPush.PushResult? pushResult = null;
+            if (stampedAfterBoot)
+            {
+                try
+                {
+                    pushResult = Ds2NativeWebUIPush.PushAsync(cfg, cfg.WebUIServerPort)
+                        .GetAwaiter()
+                        .GetResult();
+                }
+                catch (Exception pushEx)
+                {
+                    pushResult = new Ds2NativeWebUIPush.PushResult(
+                        Success: false,
+                        ServerReachable: false,
+                        Status: "push_threw",
+                        ErrorMessage: pushEx.Message);
+                }
+            }
+
+            // Stale only if Server.exe is running, our stamp post-dates its
+            // boot, AND the live push failed/was-skipped. If the push went
+            // through, Server.exe's in-memory ServerDescription matches disk
+            // and the next master heartbeat will broadcast it.
+            memory.ManifestStalePendingRestart = stampedAfterBoot &&
+                (pushResult is null || !pushResult.Success);
 
             envelope["status"] = shouldClear ? "manifest_cleared" : "manifest_stamped";
             envelope["manifest_json"] = newManifestJson;
             envelope["pending_restart"] = memory.ManifestStalePendingRestart;
             envelope["server_started_at"] = serverStatus.StartedAt?.ToUniversalTime().ToString("O");
+            if (pushResult is not null)
+            {
+                var pushNode = new JsonObject
+                {
+                    ["success"] = pushResult.Success,
+                    ["server_reachable"] = pushResult.ServerReachable,
+                    ["status"] = pushResult.Status,
+                };
+                if (!string.IsNullOrEmpty(pushResult.ErrorMessage))
+                {
+                    pushNode["error"] = pushResult.ErrorMessage;
+                }
+                envelope["live_push"] = pushNode;
+            }
             return envelope;
         }
         catch (Exception ex)
