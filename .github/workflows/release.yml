@@ -54,9 +54,19 @@ jobs:
             exit 1
           fi
           FULL="${VERSION}${POSTFIX}"
+          # .NET's AssemblyVersion / FileVersion attributes only
+          # accept strict major[.minor[.build[.revision]]] — no
+          # prerelease suffixes. Strip everything from the first
+          # '-' onwards (so "2.8.0-experimental" → "2.8.0") and pad
+          # to four parts so SemVer 3-part versions also pass.
+          NUMERIC="${FULL%%-*}"
+          while [[ $(echo "$NUMERIC" | tr -cd '.' | wc -c) -lt 3 ]]; do
+            NUMERIC="${NUMERIC}.0"
+          done
           echo "version=${VERSION}" >> "$GITHUB_OUTPUT"
           echo "postfix=${POSTFIX}" >> "$GITHUB_OUTPUT"
           echo "full=${FULL}" >> "$GITHUB_OUTPUT"
+          echo "numeric=${NUMERIC}" >> "$GITHUB_OUTPUT"
           echo "tag=v${FULL}" >> "$GITHUB_OUTPUT"
           echo "asset_name=DSSeamlessCoop_V${FULL}.zip" >> "$GITHUB_OUTPUT"
 
@@ -93,6 +103,12 @@ jobs:
         run: msbuild /m /p:Configuration=${{ env.BUILD_CONFIGURATION }} ${{ env.SOLUTION_FILE_PATH }} /t:Build
 
       # ---- BonfireService (.NET 8 self-contained single-file) ----
+      #
+      # Version property accepts arbitrary semver (gets stored in
+      # AssemblyInformationalVersion). FileVersion / AssemblyVersion
+      # require strict numeric major.minor.build.revision per
+      # CS7034 — the "numeric" output above strips '-experimental'
+      # and pads to 4 parts.
       - name: Publish BonfireService
         run: >
           dotnet publish ./Source/BonfireService/BonfireService.csproj
@@ -100,8 +116,8 @@ jobs:
           -p:PublishSingleFile=true
           -p:IncludeNativeLibrariesForSelfExtract=true
           -p:Version=${{ steps.version.outputs.full }}
-          -p:FileVersion=${{ steps.version.outputs.version }}
-          -p:AssemblyVersion=${{ steps.version.outputs.version }}
+          -p:FileVersion=${{ steps.version.outputs.numeric }}
+          -p:AssemblyVersion=${{ steps.version.outputs.numeric }}
           -o ${{ github.workspace }}/Source/bonfire/build/bonfire_service/
 
       # ---- Bonfire (Flutter desktop) ----
