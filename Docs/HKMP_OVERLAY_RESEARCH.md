@@ -17,7 +17,7 @@ starting point for "Long-Term Vision: HKMP-Style Overlay" in
 | 4a — multi-actor rendering (cubes for N peers)          | DONE  | `76f0943` (v16) | host magenta cube + ghost cyan cube at host+5m, validated visually + telemetry (2 cubes/frame) |
 | 4b — IPC for peer-pose table (commands.jsonl handler)   | DONE  | `39a6c77` (v17) + `afac6e1` (v18) | append `render.set_peer_poses` lines and renderer draws / clears in <100ms |
 | 4c — UDP backbone (BonfireService bridge)               | DONE  | `4629897` (v0) + `24c8d3e` (v1) | loopback test passed in-game — ghost cube follows host with ~150ms round-trip lag |
-| 4d — LAN test with second PC                             | NEXT   | —       | set `BONFIRE_POSE_BRIDGE_PEERS` to each PC's IP, both see each other's cubes |
+| 4d — LAN test with second PC                             | DONE   | `f580f29` (v2.8.5) end-of-chain | both PCs see each other's cubes in DS2 (host + brother on same LAN, 2026-05-16) |
 | 5 — replace cubes with character meshes                  | TODO   | —       | port the FLVER reader (or use a placeholder humanoid) so peers look like players |
 | 6 — animation sync                                       | TODO   | —       | probe ChrIns+0x200..0x600 for the anim_id u32; broadcast alongside pose |
 
@@ -905,6 +905,52 @@ The architecture supporting future iterations:
 - The HLSL cbuffer is dynamically mapped per draw (WRITE_DISCARD),
   so we can rewrite `anchor + scale + color + per-actor rotation`
   per cube without allocating new buffers.
+
+## 13d. Phase 4d closure (2026-05-16, v2.8.0 → v2.8.5)
+
+LAN test with Diux + brother on the same subnet. Goal: each side
+sees a cube placeholder at the other's world position. Took six
+incremental releases to land cleanly because every layer of the
+stack had at least one corner-case bug that only surfaces with two
+PCs talking to each other.
+
+The release chain, with what each fixed:
+
+| Tag | Headline |
+|-----|----------|
+| v2.8.0 | Phase 4d wired: bridge auto-starts on session.create / session.join from the in-game orb. First LAN attempt revealed the auto-update was broken because /releases/latest excludes prereleases. |
+| v2.8.1 | AppUpdater switched to /releases?per_page=30 — clients see prerelease updates too. |
+| v2.8.2 | UI version label fell back to GitHub-derived currentVersion (showed "vunknown" until the probe succeeded). Now reads from the local ping RPC unconditionally. |
+| v2.8.3 | Pose bridge auto-starts from heartbeat whenever DarkSoulsII.exe is alive, no in-game orb required. Removed the trap of "host clicked Light, never used the orb, bridge never woke up". |
+| v2.8.4 | Injector worker thread sometimes hangs on a chain-walk SEH in pre-world loading — events.jsonl freezes, the bridge that tailed it for pose source went silent. Added Ds2MemoryReader: AOB-scans DarkSoulsII.exe and walks the chain via ReadProcessMemory from the BonfireService side, completely bypassing the Injector worker. Pose now reliable on the broadcast side. |
+| v2.8.5 | Peers were configured from master-listed Hostname (WAN) only; same-LAN co-op routed packets all the way out to the public internet and got dropped by the host's router on the return path. Now peers list includes BOTH Hostname (WAN, e.g. 190.114.43.66) and PrivateHostname (LAN, e.g. 192.168.68.54). LAN traffic stays on the switch. |
+
+Two non-code issues fixed during the test:
+
+1. **Windows firewall rule for UDP 50031.** Added to `Firewall.cs`
+   in v2.8.0 but the rule re-application path only runs at install
+   time. Incremental updates left the rule missing on both PCs.
+   Manual `netsh advfirewall firewall add rule name="DS3OS PoseBridge
+   UDP" dir=in action=allow protocol=UDP localport=50031` unblocked
+   inbound packets. Future work: have BonfireService check and
+   re-apply on startup.
+
+2. **Hung Injector worker thread.** Surfaces if the runtime worker's
+   chain-walk SEH catches during DS2's pre-world loading phase —
+   the thread enters a state where it stops emitting heartbeats AND
+   stops polling commands.jsonl, even though the render hook (in a
+   different thread) keeps drawing the host magenta cube. The fix
+   tonight was empirical: tell the user to End Task DarkSoulsII.exe
+   from Task Manager and re-launch from Bonfire. A fresh DS2
+   process gets a fresh worker. Real fix is to (a) figure out the
+   exact code path that causes the hang and patch it, or (b) move
+   commands.jsonl polling into the render hook thread which is
+   independently alive. Filed for a future session.
+
+End-state telemetry from the working LAN test:
+- bridge: `peers=1 broadcast=7543 received=6164` (after ~13 min)
+- 732 `command.applied` events with `peer_count=1` on the host side
+- Injector log: `drew 2 cubes` on both PCs (own magenta + peer color)
 
 ## 14. Next concrete milestones
 
