@@ -102,3 +102,8 @@ bonfire.log
 boot.txt
 testlauncher.log
 testlauncher.log.err
+
+# Track C — Ghidra static-analysis artifacts (regenerable from
+# Tools/build_ds2_item_names.py-style workflow + Ghidra headless).
+# decompiled.c is ~111 MB; the binary copy is the 27 MB DS2 exe.
+Docs/ghidra-out/
