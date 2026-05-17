@@ -58,22 +58,100 @@ The slot manager array's first 6 entries are the phantom slots
 documented in `TRACK_C_RE_SESSION_01.md` (slots 0=local, 1=phantom,
 2–5=empty pre-allocated 1MB each).
 
-## The request struct (param_1 of FUN_1401A1650)
+## The request struct (param_1 of FUN_1401A1650) — FULLY MAPPED
 
-This is the struct we have to allocate + populate to drive the
-spawn. From the decompiled body, the fields actually consumed are:
+**Update (Phase 2B.2B complete)**: walked every `param_1 + 0xXX`
+access inside FUN_1401A1650 and the upstream dispatcher
+`FUN_1401A0D20` (RVA 0x1A0D20). The struct is much smaller than
+feared — only 7 fields touched by the spawn entry.
 
-| Offset | Type | Use | Source from our SHM |
+**Outer wrapper struct** (~0x30 bytes — call it `Ds2PhantomRequest`):
+
+| Offset | Width | Direction | Meaning |
 |---|---|---|---|
-| `+0x10` | `void*` | **OUTPUT — spawned PlayerCtrl ptr** | n/a, we read it after the call |
-| `+0x29` | `u8` | Phantom-type flag (controls NetworkPlayer vs GhostPlayer name + 0x12/0x13 inner-type) | always 0 for white phantom |
-| (TBD) | varies | position/rotation, player_id, equipment hash, ... | from our SHM peer entry |
+| `+0x08` | `int` | **IN/OUT** state machine: `0=spawn`, `1=alive`, `2=leaving`, `3=dead`. Set 0 to drive a fresh spawn. Engine flips to 1 on success. |
+| **`+0x10`** | `PlayerCtrl*` | **OUT** | Spawned phantom pointer. Read this after the call. Null = spawn refused. |
+| `+0x18` | u32 | reset to 0 by `FUN_1401A1650` | internal state |
+| `+0x1C` | u32 | reset to 0xFFFFFFFF | error/slot sentinel |
+| **`+0x20`** | `void*` | **IN — REQUIRED non-zero** | Pointer to the inner request struct (see below). |
+| `+0x28` | u8 | reset to 0 | internal flag |
+| **`+0x29`** | u8 | **IN** | Phantom type: 0=NetworkPlayer/white, 1=GhostPlayer/red. Drives `0x12+flag` → 0x12 or 0x13 in the inner spawn struct, which selects the wide-string name format (`L"NetworkPlayer_%06u"` vs `L"GhostPlayer_%06u"`). |
 
-**The full struct layout still needs more reading** of FUN_1401A1650's
-body before we can populate it accurately. The unmapped fields are
-read at offsets like `+0x10`, `+0x29`, and via deep indirections.
-Next-session work: walk every `param_1 + 0xXX` deref inside
-FUN_1401A1650 and document.
+**Inner data struct** (`*(outer + 0x20)`):
+
+| Offset | Width | Direction | Meaning |
+|---|---|---|---|
+| `+0x08` | qword | IN | Pointer to peer identity / character data. Read by 3 sibling validators (`FUN_1401A2680/2740/2800`) that fill local stack buffers later passed into `FUN_1401A0E40`. Exact shape TBD — Phase 2B.2C work. |
+| `+0x14` | u32 | IN | **player_id** — the integer that ends up formatted into `NetworkPlayer_%06u` (= our `000100` etc). |
+
+## State machine — `FUN_1401A0D20` dispatcher
+
+```c
+void FUN_1401A0D20(Ds2PhantomRequest* req) {
+    switch (req->state /* +0x08 */) {
+    case 0: if (req->inner /* +0x20 */ != 0
+                && FUN_1401A0DC0(req))     // validate
+                FUN_1401A1650(req);          // SPAWN (sets state→1 on success)
+            break;
+    case 1: FUN_1401A1C30(req);              // alive — tick / sync
+            break;
+    case 2: FUN_1401A1CB0(req);              // leaving — start despawn
+            break;
+    case 3: FUN_1401A1580(req); ...          // dead — cleanup
+            break;
+    }
+}
+```
+
+So the **complete lifecycle in one struct**: allocate a
+`Ds2PhantomRequest`, set state=0, populate inner, call the
+dispatcher (or skip the pre-validate and call `FUN_1401A1650`
+directly). Engine handles all 4 lifecycle phases.
+
+## Implementation update (Phase 2B.2A shipped, 2B.2B partial)
+
+### ✅ Phase 2B.2A — shipped in v2.9.10 (commit 17e570f)
+
+- `Ds2MemoryReader.TryReadWorldMgr()` reads `*(gm_imp_global + 0x18)`
+- `bridge.status` exposes `spawn_chain.world_mgr_ptr` + the
+  spawn-chain RVAs.
+
+### ✅ Phase 2B.2B (this update) — outer wrapper fully mapped
+
+- 7 outer-struct fields + state machine documented above.
+- Inner struct partially mapped: `+0x08` data ptr, `+0x14` player_id.
+- Inner `+0x08` shape still pending — needs reading
+  `FUN_1401A2680/2740/2800` validator bodies.
+
+### 🚧 Phase 2B.2C — synthetic spawn
+
+Pre-conditions before 2B.2C can attempt a live spawn:
+
+1. **Finish inner `+0x08` mapping** (RE the 3 validators).
+2. **Decide on player_id allocation policy** — engine seems to
+   want unique u32 IDs per peer; we can derive deterministically
+   from our SHM `sender_id` (low 24 bits + offset).
+3. **Decide on call mechanism** — option (a) call FUN_1401A1650
+   directly (skip pre-validate; faster but skips a safety net),
+   option (b) call FUN_1401A0D20 with state=0 (lets the engine's
+   own validator run). **Recommend (b) first** — if engine
+   refuses, we learn safely.
+
+Then 2B.2C itself:
+
+1. Build a Ds2PhantomRequest + Ds2InnerRequest on the heap from
+   the Injector side.
+2. Resolve world_mgr (already done via 2B.2A).
+3. Call the dispatcher. If state flips to 1, read `+0x10` for
+   the PlayerCtrl ptr.
+4. Verify in CE: RTTI on the new pointer = "PlayerCtrl", and
+   crucially, **the character appears in-game**.
+
+### 🚧 Phase 2B.2D — wire SHM
+
+Same as before — replace hardcoded values with peer SHM lookups.
+
+### 🚧 Phase 2B.2E — bypass slot cap (only if we hit it)
 
 ## Implementation plan (Phase 2B.2)
 
