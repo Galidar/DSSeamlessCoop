@@ -8,6 +8,7 @@
  */
 
 #include "Injector/Hooks/DarkSouls2/DS2_NativeRuntimeHook.h"
+#include "Injector/Hooks/DarkSouls2/DS2_PoseShm.h"
 #include "Injector/Hooks/DarkSouls2/DS2_RenderHook.h"
 #include "Injector/Injector/Injector.h"
 #include "Shared/Core/Utils/Logging.h"
@@ -4060,6 +4061,16 @@ bool DS2_NativeRuntimeHook::Install(Injector& injector)
     Log("DS2 native runtime command bridge active: events=%s commands=%s",
         event_log_text.c_str(),
         command_inbox_text.c_str());
+
+    // Plan v3 Track B: spin up the shared-memory pose poller. The
+    // thread is idempotent — calling StartPollThread() a second time
+    // (e.g. on a reload) is a no-op. The thread itself handles the
+    // case where BonfireService hasn't created the section yet,
+    // backing off to a 250 ms retry until the section appears.
+    if (!DS2_PoseShm::StartPollThread())
+    {
+        Warning("DS2_PoseShm poll thread failed to start; pose IPC will fall back to commands.jsonl polling.");
+    }
 
     return true;
 }

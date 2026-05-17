@@ -29,6 +29,8 @@ SET(SOURCES
     Hooks/DarkSouls2/DS2_LogProtobufsHook.cpp
     Hooks/DarkSouls2/DS2_RenderHook.h
     Hooks/DarkSouls2/DS2_RenderHook.cpp
+    Hooks/DarkSouls2/DS2_PoseShm.h
+    Hooks/DarkSouls2/DS2_PoseShm.cpp
     Hooks/Shared/ReplaceServerPortHook.h
     Hooks/Shared/ReplaceServerPortHook.cpp
     Hooks/Shared/ChangeSaveGameFilenameHook.h

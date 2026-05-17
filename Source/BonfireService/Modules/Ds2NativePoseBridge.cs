@@ -70,10 +70,19 @@ public static class Ds2NativePoseBridge
     private static readonly TimeSpan PosePollInterval = TimeSpan.FromMilliseconds(100);
 
     // Inbox write cadence: how often we re-publish the current peer
-    // table to the local Injector. Bumped from 50 ms → 100 ms for the
-    // same contention reasons as above; the Injector's command poll
-    // loop is on a 1 s tick anyway, so faster writes are wasted.
-    private static readonly TimeSpan InboxWriteInterval = TimeSpan.FromMilliseconds(100);
+    // table.
+    //
+    // v2.9.1 (Plan v3 Track B): we now write to a shared-memory
+    // ringbuffer (Ds2PoseShm) instead of only the commands.jsonl file.
+    // The Injector reads SHM on a 5 ms cycle so we can re-publish at
+    // 30 Hz (33 ms) without contention — the file path still ticks at
+    // 100 ms as a debug/fallback channel for non-SHM consumers.
+    private static readonly TimeSpan InboxWriteInterval = TimeSpan.FromMilliseconds(33);
+
+    // Diagnostic: how often we drop a line into the debug log to confirm
+    // the SHM path is alive. Computed as multiples of InboxWriteInterval
+    // (so ~3 s between SHM heartbeats at 30 Hz).
+    private const int ShmHeartbeatEveryIter = 90;
 
     // Peer TTL: drop a peer from the table if we haven't seen any
     // pose update from them in this window. Bigger = smoother on
@@ -180,6 +189,14 @@ public static class Ds2NativePoseBridge
             _cachedCommandsInboxPath = null;
             _cachedEventLogAt = DateTime.MinValue;
 
+            // Plan v3 Track B: open the shared-memory peer-pose pipe.
+            // Best-effort — if the OS refuses the mapping the bridge
+            // still works via commands.jsonl fallback.
+            var shmReady = Ds2PoseShm.TryOpen();
+            DebugLog(shmReady
+                ? $"Start: shared-memory pose pipe open at {Ds2PoseShm.MapName}"
+                : "Start: shared-memory pose pipe FAILED to open — falling back to commands.jsonl only");
+
             _cts = new CancellationTokenSource();
             _watcherTask     = Task.Run(() => WatcherLoopAsync(_cts.Token));
             _listenerTask    = Task.Run(() => ListenerLoopAsync(_cts.Token));
@@ -202,6 +219,10 @@ public static class Ds2NativePoseBridge
             _inboxWriterTask = null;
             _cts = null;
             _peerTable.Clear();
+            // Plan v3 Track B: release the shared section so a clean
+            // restart re-seeds the header (avoids stale generation
+            // confusing a consumer that re-attaches mid-restart).
+            Ds2PoseShm.Close();
             DebugLog("Stop: all sockets and tasks released");
         }
         return Status();
@@ -259,6 +280,13 @@ public static class Ds2NativePoseBridge
                     ["sampled_utc"] = lp.SampledAtUtc.ToString("O"),
                 }
                 : null,
+            // Plan v3 Track B diagnostics — exposes whether the shared
+            // section is alive and the current generation so the UI or
+            // a debug RPC can show the user that low-latency IPC is in
+            // play (instead of falling back to file polling).
+            ["shm_open"] = Ds2PoseShm.IsOpen,
+            ["shm_generation"] = Ds2PoseShm.LastGeneration,
+            ["shm_map_name"] = Ds2PoseShm.MapName,
         };
     }
 
@@ -539,10 +567,11 @@ public static class Ds2NativePoseBridge
             }
             iter++;
             // Periodic heartbeat — confirms the loop is alive even
-            // when commands.jsonl writes are silent.
-            if (iter % 100 == 0)
+            // when commands.jsonl writes are silent. Cadence widened
+            // from 100→300 iters now that SHM bumps the loop to 30 Hz.
+            if (iter % 300 == 0)
             {
-                DebugLog($"InboxWriterLoop alive: iter={iter} peers={_peerTable.Count} broadcast={_broadcastCount} received={_receivedCount}");
+                DebugLog($"InboxWriterLoop alive: iter={iter} peers={_peerTable.Count} broadcast={_broadcastCount} received={_receivedCount} shm_open={Ds2PoseShm.IsOpen} shm_gen={Ds2PoseShm.LastGeneration}");
             }
             try { await Task.Delay(InboxWriteInterval, ct); }
             catch (OperationCanceledException) { break; }
@@ -553,10 +582,7 @@ public static class Ds2NativePoseBridge
 
     private static void WritePeerTableToInbox()
     {
-        var commandsInbox = LatestCommandsInbox();
-        if (commandsInbox is null) return;
-
-        // Prune expired peers.
+        // Prune expired peers first (shared between SHM + file paths).
         var now = DateTime.UtcNow;
         foreach (var (id, entry) in _peerTable)
         {
@@ -564,6 +590,49 @@ public static class Ds2NativePoseBridge
             {
                 _peerTable.TryRemove(id, out _);
             }
+        }
+
+        // Plan v3 Track B — fast path: publish the snapshot to the
+        // shared-memory pipe. The Injector reads this at 200 Hz so
+        // end-to-end latency collapses to network RTT + one frame.
+        // Builds a stack-allocated array (max 16 peers × 64 bytes =
+        // 1 KB) so the hot path never touches the managed heap.
+        Span<Ds2PoseShm.PeerEntry> shmPeers =
+            stackalloc Ds2PoseShm.PeerEntry[Ds2PoseShm.MaxPeers];
+        int shmCount = 0;
+        foreach (var (_, entry) in _peerTable)
+        {
+            if (shmCount >= Ds2PoseShm.MaxPeers) break;
+            var (r, g, b) = ColorFromSenderId(entry.SenderId);
+            shmPeers[shmCount++] = new Ds2PoseShm.PeerEntry
+            {
+                SenderId = entry.SenderId,
+                Px = entry.Px,
+                Py = entry.Py,
+                Pz = entry.Pz,
+                YawRadians = entry.YawRadians,
+                ColorR = r,
+                ColorG = g,
+                ColorB = b,
+                Valid = 1u,
+            };
+        }
+        if (Ds2PoseShm.IsOpen)
+        {
+            Ds2PoseShm.Publish(shmPeers[..shmCount]);
+        }
+
+        // Slow path / debug fallback: keep appending to commands.jsonl
+        // so an older Injector build still receives pose updates and
+        // the file remains a forensic record of what was published.
+        // The file write cadence drops to every 3rd iteration (~100 ms)
+        // to reduce disk pressure now that SHM owns the hot path.
+        var commandsInbox = LatestCommandsInbox();
+        if (commandsInbox is null) return;
+
+        if (System.Threading.Interlocked.Increment(ref _commandsInboxTick) % 3 != 0)
+        {
+            return;
         }
 
         // Build the command. Even when the table is empty we still
@@ -598,6 +667,10 @@ public static class Ds2NativePoseBridge
         // is incremental.
         File.AppendAllText(commandsInbox, line + "\n", new UTF8Encoding(false));
     }
+
+    // Counter used to slow the commands.jsonl writes once SHM owns the
+    // hot path. v2.9.1 Track B: SHM ticks at 30 Hz, file ticks at 10 Hz.
+    private static int _commandsInboxTick;
 
     private static string? LatestCommandsInbox()
     {
