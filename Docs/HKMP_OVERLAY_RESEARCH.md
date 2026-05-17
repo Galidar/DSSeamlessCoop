@@ -952,6 +952,108 @@ End-state telemetry from the working LAN test:
 - 732 `command.applied` events with `peer_count=1` on the host side
 - Injector log: `drew 2 cubes` on both PCs (own magenta + peer color)
 
+## 13e. Phase B (phantom hijacking) — pre-work (2026-05-16)
+
+Pivot from FLVER parsing (months) to **phantom position hijacking**
+(days). Strategy:
+
+1. Brother summons via vanilla saponita → DS2 internally allocates a
+   phantom `ChrIns` in the host's world, fully populated with the
+   peer's mesh / armor / animation. Steam P2P relays his pose for
+   DS2 to apply each frame.
+2. We **don't** parse FLVER, **don't** synthesise a fake ChrIns.
+   Instead we let DS2 do all the heavy rendering and just override
+   the phantom's transform field every frame from our network state.
+3. Net effect: DS2 renders his real character, but the position
+   it shows comes from our UDP backbone instead of Steam P2P. We can
+   make him appear anywhere we want — including past fog gates,
+   across map cells, etc. The 4-phantom cap still applies (DS2 only
+   allocates the slot via legitimate summon) but for 2-player tests
+   that's a non-issue.
+
+### B1 — locate the phantom ChrIns (requires brother online)
+
+Strategy: brother summons, his pose is known from our bridge's
+`peer_table` entry; AOB-scan for those 3 floats in DS2 memory; among
+the matches, pick the one whose surrounding struct looks like a
+ChrIns (vptr in DS2 module range, +0x90 layout matching the host
+chain we already characterised).
+
+Existing candidate from §11.4: `gm+0x20 → +0x1A0`. Two prior samples
+showed a 6.25-unit move. Worth re-validating.
+
+### B2 — characterise the phantom struct (requires brother online)
+
+Once the ChrIns pointer is locked, dump 0x100 bytes and compare to
+the host's known layout:
+
+| Host (known) | Phantom (to verify) |
+|--------------|---------------------|
+| +0x90 px / +0x94 py / +0x98 pz | likely same offset |
+| +0x60..+0x80 rotation cos/sin pair | likely same |
+| +0x168 HP u32 | likely same |
+| vptr @ 0 | will be different — phantom subclass of ChrIns |
+
+Also probe for the animation_id u32 (somewhere in +0x200..+0x600
+based on §11.5).
+
+### B3 — Injector override hook (no brother needed)
+
+In DS2_RenderHook.cpp, alongside DrawOverlay's per-frame work,
+add a thin helper that:
+
+```cpp
+bool TryWritePhantomPose(int peer_slot, float px, float py, float pz);
+```
+
+Implementation skeleton (placeholder offsets until B2 confirms):
+
+```cpp
+const uintptr_t gm_imp_global =
+    DS2_NativeRuntimeHook_GetGameManagerImpAddress();
+if (gm_imp_global == 0) return false;
+__try {
+    uintptr_t gm = *(uintptr_t*)gm_imp_global; if (!gm) return false;
+    // Tentative — confirm in B1
+    uintptr_t phantom_root = *(uintptr_t*)(gm + 0x20);
+    if (!phantom_root) return false;
+    uintptr_t phantom_chr = *(uintptr_t*)(phantom_root + 0x1A0);
+    if (!phantom_chr) return false;
+    // Position write — offset same as host until B2 finds otherwise
+    *(float*)(phantom_chr + 0x90) = px;
+    *(float*)(phantom_chr + 0x94) = py;
+    *(float*)(phantom_chr + 0x98) = pz;
+    return true;
+} __except (EXCEPTION_EXECUTE_HANDLER) { return false; }
+```
+
+Called from the per-frame loop after the cube draw, gated by an
+"enable phantom hijack" flag so we don't accidentally write
+garbage during normal solo play.
+
+### B4 — live test (requires brother online)
+
+Brother summons. Saponita-spawned phantom appears in host's world
+at the Steam-P2P-relayed position. Enable hijack. Phantom snaps to
+our bridge-relayed peer pose. Verify movement tracks our UDP
+stream, not Steam P2P.
+
+### Risk register
+
+- **DS2 might fight the write**: vanilla code writes to the same
+  field every frame from Steam P2P. Our override could race with
+  that update and produce a flicker. Mitigations: write AFTER DS2's
+  update (hook at a later point in the frame), or freeze DS2's own
+  write by intercepting the source-position copy.
+- **Phantom slot might fall through fog gates** anyway: even with
+  position override, DS2's logic for "phantom too far → despawn"
+  might still trigger. If yes, we extend B with also overriding
+  whatever distance check exists.
+- **Anti-cheat / kick-from-server**: server side validates phantom
+  state. If our position is too far from where Steam P2P says, the
+  server might disconnect us. Mitigation: keep the override delta
+  bounded.
+
 ## 14. Next concrete milestones
 
 ### Track A — multi-actor rendering (next rebuild)

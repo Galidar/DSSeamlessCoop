@@ -844,6 +844,105 @@ float4 main(PSIn input) : SV_Target
         }
     }
 
+    // ── Phase B (phantom hijacking) skeleton ─────────────────────────
+    //
+    // When the brother summons via saponita (white sign soapstone),
+    // DS2 allocates a phantom ChrIns inside our world. That ChrIns is
+    // fully populated — real mesh, real armor, real animation state.
+    // Vanilla DS2 keeps the phantom's transform in sync with the peer
+    // over Steam P2P each frame. We OVERRIDE that transform from our
+    // own UDP backbone (see Ds2NativePoseBridge) so the phantom moves
+    // along OUR network-relayed path, decoupling from Steam P2P. End
+    // result: real DS2 character mesh + animation, but its world
+    // position is driven by the same peer_table the cube overlay uses.
+    //
+    // STATUS: skeleton with placeholder chain offsets. The real chain
+    // needs B1/B2 (Cheat Engine probe with brother summoned via
+    // saponita) to confirm. Until then this function is gated OFF and
+    // a no-op so it can't accidentally corrupt vanilla ChrIns memory
+    // during solo play.
+    //
+    // Current best guess from §11.4 research:
+    //   gm + 0x20 → phantom_root
+    //   phantom_root + 0x1A0 → phantom_chrins
+    //   phantom_chrins + 0x90  → px, py, pz
+    //
+    // Once B1 confirms the chain we flip kPhantomHijackEnabled to
+    // true and the per-frame writes activate.
+    constexpr bool kPhantomHijackEnabled = false;
+    constexpr uintptr_t kPhantomRootOffset      = 0x20;   // gm + ?
+    constexpr uintptr_t kPhantomChrPtrOffset    = 0x1A0;  // phantom_root + ?
+    constexpr uintptr_t kPhantomPositionOffset  = 0x90;   // phantom_chr + ?
+
+    std::atomic<uint64_t> s_phantom_writes{0};
+    std::atomic<uint64_t> s_phantom_skips{0};
+
+    // Write a peer's world position into the corresponding phantom
+    // ChrIns slot. Called every frame from DrawOverlay AFTER the cube
+    // pass, gated on kPhantomHijackEnabled. Wrapped in SEH so a stale
+    // pointer can never crash DS2.
+    //
+    // Returns true if a write actually happened, false if we bailed
+    // (no game manager, null chain pointer, gate disabled, etc.). The
+    // caller treats both outcomes as fine — phantom hijacking is
+    // strictly additive on top of the cube overlay.
+    bool TryWritePhantomPose(int peer_slot, float px, float py, float pz)
+    {
+        (void)peer_slot;  // B2: multiple phantom slots (host + 3) — for
+                          //     now we only target the first allocated.
+
+        if (!kPhantomHijackEnabled)
+        {
+            s_phantom_skips.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+
+        const uintptr_t gm_imp_global =
+            DS2_NativeRuntimeHook_GetGameManagerImpAddress();
+        if (gm_imp_global == 0)
+        {
+            s_phantom_skips.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+
+        __try
+        {
+            uintptr_t gm = *reinterpret_cast<const uintptr_t*>(gm_imp_global);
+            if (gm == 0) { s_phantom_skips.fetch_add(1, std::memory_order_relaxed); return false; }
+
+            uintptr_t phantom_root = *reinterpret_cast<const uintptr_t*>(
+                gm + kPhantomRootOffset);
+            if (phantom_root == 0) { s_phantom_skips.fetch_add(1, std::memory_order_relaxed); return false; }
+
+            uintptr_t phantom_chr = *reinterpret_cast<const uintptr_t*>(
+                phantom_root + kPhantomChrPtrOffset);
+            if (phantom_chr == 0) { s_phantom_skips.fetch_add(1, std::memory_order_relaxed); return false; }
+
+            // Sanity: vptr must be in the DS2 module range, otherwise
+            // we're about to scribble on random memory. The Injector
+            // module range starts in the 0x7FF7_F000_0000 area on
+            // typical Win10 ASLR; if the vptr is wildly outside that,
+            // bail.
+            uintptr_t vptr = *reinterpret_cast<const uintptr_t*>(phantom_chr);
+            if (vptr < 0x7FF7'0000'0000ull || vptr > 0x7FF8'0000'0000ull)
+            {
+                s_phantom_skips.fetch_add(1, std::memory_order_relaxed);
+                return false;
+            }
+
+            *reinterpret_cast<float*>(phantom_chr + kPhantomPositionOffset + 0) = px;
+            *reinterpret_cast<float*>(phantom_chr + kPhantomPositionOffset + 4) = py;
+            *reinterpret_cast<float*>(phantom_chr + kPhantomPositionOffset + 8) = pz;
+            s_phantom_writes.fetch_add(1, std::memory_order_relaxed);
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            s_phantom_skips.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+    }
+
     // Draw the screen-space overlay quad. Called from HookedPresent
     // BEFORE the chained Present. CRITICAL: save & restore every piece
     // of D3D11 immediate-context state we touch so the lighting engine
@@ -1058,6 +1157,23 @@ float4 main(PSIn input) : SV_Target
                             // + head (36) = humanoid placeholder.
                             // v15..v18 used 36 verts (single cube).
                             s_d3d_context->Draw(72, 0);
+
+                            // Phase B skeleton: write this peer's
+                            // pose into the corresponding phantom
+                            // ChrIns slot. No-op while
+                            // kPhantomHijackEnabled is false (current
+                            // default — flip on once B1/B2 confirm
+                            // the chain offsets). Slot index 0 means
+                            // "first allocated phantom" — for the
+                            // single-brother test case this is the
+                            // saponita-summoned guest.
+                            if (i > 0)  // i==0 is host, skip
+                            {
+                                TryWritePhantomPose(i - 1,
+                                                    cd.pos[0],
+                                                    cd.pos[1],
+                                                    cd.pos[2]);
+                            }
                         }
 
                         s_multi_draw_frames.fetch_add(1,
