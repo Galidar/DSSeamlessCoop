@@ -1177,10 +1177,33 @@ self-sufficient without UI help.
    the freshest beacon (peer endpoint = packet source IP +
    beacon-advertised port, defends against host
    misconfiguration). RPC: `ds2_runtime.lan_beacon.status`.*
-5. **Track C — mesh capture from memory** — Cheat Engine session
-   (brother as saponita-summoned phantom), Ds2MemoryReader
-   extensions, render hook FLVER submit. Multi-session research
-   work, ships as v3.0.0 when ready.
+5. **Track C — character-data sync + engine-cooperative render**
+   — re-scoped after external research
+   (see `Docs/TRACK_C_SAPONITA_RESEARCH.md`). The phantom mesh
+   is NOT transmitted by the network: both PCs have all assets
+   already, the saponita just exchanges a few-KB
+   "character data" recipe (equipment IDs, char editor params)
+   plus continuous runtime state (animation id + frame,
+   position, HP, stamina) and the receiver reconstructs
+   locally. Two engine paths to evaluate:
+
+   - **Engine-cooperative**: locate `SprjChrDataModule`
+     (Omni's reversed struct, present in Sekiro and other
+     FromSoft games), find the constructor / load-from-net
+     function, hook our peer's character_data through it and
+     let the engine do the asset lookup + skinning +
+     animation playback. Override the phantom-limit checks so
+     the result is rendered without vanilla constraints
+     (4-cap, fog-gate despawn, Soul Memory matching).
+   - **Standalone overlay**: keep our D3D11 cube pipeline,
+     extend it to copy the relevant `cXXXX.flv` vertex
+     buffer the moment the game loads it on its own ChrIns,
+     draw a fixed-pose silhouette at the overlay anchor.
+     Coarser but doesn't need internal-function hooks.
+
+   Ships as v3.0.0 when the cube becomes a recognisable peer
+   character. Tracking next CE session in
+   `Docs/TRACK_C_SAPONITA_RESEARCH.md` "Concrete next session".
 
 ### Track B notes (v2.9.1 implementation)
 
