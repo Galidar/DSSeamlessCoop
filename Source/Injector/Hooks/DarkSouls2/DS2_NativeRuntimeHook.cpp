@@ -65,6 +65,32 @@ namespace
     // that one in parallel as a wider net. We log + forward, no
     // game-logic change.
     constexpr uintptr_t kPlayerCtrlCtorRva = 0x37EBE0;
+    // Track C Phase 2B.2C-v1 — phantom-spawn entry point.
+    // FUN_1401A1650 receives a Ds2PhantomRequest pointer in RCX; on
+    // success the spawned PlayerCtrl ends up at *(req + 0x10). The
+    // inner data buffer lives at *(req + 0x20) and starts with the
+    // magic u16 = 0x39 (FUN_1401A29C0 builder convention, verified
+    // by FUN_1401A2F60 validator at decompiled.c line ~349319).
+    //
+    // We hook this entry ONLY in capture mode (env var
+    // BONFIRE_DS2_SPAWN_CAPTURE=1), purely as an observer that dumps
+    // the request shape to disk before forwarding. The goal is to
+    // harvest one real template from a vanilla saponita summon so
+    // Phase 2B.2C-v2/v3 can replay or substitute the buffer.
+    constexpr uintptr_t kSpawnEntryRva = 0x1A1650;
+    // Outer wrapper size (Ds2PhantomRequest). The struct has 7
+    // documented fields up to +0x29; we dump 0x40 bytes to capture
+    // any unmapped tail data the engine might rely on.
+    constexpr size_t kSpawnOuterCaptureSize = 0x40;
+    // Inner buffer cap. The format goes up to +0x1F0 + count*4 +
+    // variable_payload. Real instances are typically 0x300..0x800
+    // bytes; 8 KB is a comfortable ceiling. SafeReadBlock bails on
+    // bad reads so we'll never walk into unmapped memory.
+    constexpr size_t kSpawnInnerCaptureMax = 0x2000;
+    // How many captures to retain per session. We don't need many;
+    // 1-2 real templates is enough. Cap to avoid flooding disk if
+    // the hook fires repeatedly.
+    constexpr int kSpawnCaptureMaxPerSession = 5;
     constexpr uintptr_t kEyeOrbUseValidationRva = 0x2D3B20;
     constexpr uintptr_t kItemGiveRva = 0x1AC3D0;
     constexpr uintptr_t kItemStructConvertRva = 0x05D950;
@@ -193,6 +219,14 @@ namespace
     // declare 4-arg to preserve those registers when forwarding —
     // even though the constructor body itself only reads param_1.
     using PlayerCtrlCtorFn = void*(__fastcall*)(void* this_ptr, void* arg2, void* arg3, void* arg4);
+    // Track C Phase 2B.2C-v1: FUN_1401A1650 entry.
+    // Ghidra signature: `void FUN_1401A1650(longlong param_1)` —
+    // single arg in RCX, returns void. RDX/R8/R9 are unused but we
+    // declare 4 args to preserve them across the trampoline (DS2's
+    // caller might still have them populated even though the body
+    // ignores them).
+    using SpawnEntryFn = void(__fastcall*)(void* request,
+        void* arg2_unused, void* arg3_unused, void* arg4_unused);
     using ItemGiveFn = void(__fastcall*)(void* inventory_bag_list, void* item_spawn_list, int32_t item_count);
     using ItemStructConvertFn = void(__fastcall*)(void* display_stack, void* item_spawn_list, int32_t item_count, int32_t show_popup);
     using ItemPopupDisplayFn = void(__fastcall*)(void* item_display_manager, void* display_stack);
@@ -211,6 +245,12 @@ namespace
     PlayerCtrlCtorFn s_original_player_ctrl_ctor = nullptr;
     LONG s_player_ctrl_ctor_observer_state = 0;
     std::atomic<uint64_t> s_player_ctrl_ctor_hit_count{0};
+    // Track C Phase 2B.2C-v1: spawn-entry capture observer state.
+    SpawnEntryFn s_original_spawn_entry = nullptr;
+    LONG s_spawn_entry_observer_state = 0;
+    std::atomic<uint64_t> s_spawn_entry_hit_count{0};
+    std::atomic<int> s_spawn_entry_captures_remaining{
+        kSpawnCaptureMaxPerSession};
     ItemUseValidationFn s_original_item_use_validation = nullptr;
     InventoryAdjustQuantityFn s_original_inventory_adjust_quantity = nullptr;
     InventoryUseItemFn s_original_inventory_use_item = nullptr;
@@ -2950,6 +2990,358 @@ namespace
         return true;
     }
 
+    // Track C Phase 2B.2C-v1 — SEH-safe variable-length reader.
+    //
+    // POD-only body so MSVC accepts __try/__except (C2712 prevents
+    // mixing SEH with C++ unwind). Reads up to `cap` bytes from `src`
+    // into `out`, stopping at the first faulting page. Returns the
+    // number of bytes successfully copied.
+    size_t SafeSpawnEntry_ReadBytes(
+        const void* src, size_t cap, uint8_t* out)
+    {
+        size_t copied = 0;
+        __try
+        {
+            const uint8_t* p = static_cast<const uint8_t*>(src);
+            for (size_t i = 0; i < cap; ++i)
+            {
+                out[i] = p[i];
+                copied = i + 1;
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            // Partial read; copied reflects how far we got.
+        }
+        return copied;
+    }
+    bool SafeSpawnEntry_ReadU16(const uint16_t* p, uint16_t* out_val)
+    {
+        __try
+        {
+            *out_val = *p;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            *out_val = 0;
+            return false;
+        }
+    }
+    bool SafeSpawnEntry_ReadU64(const uint64_t* p, uint64_t* out_val)
+    {
+        __try
+        {
+            *out_val = *p;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            *out_val = 0;
+            return false;
+        }
+    }
+
+    // Track C Phase 2B.2C-v1 — capture-and-forward hook for the
+    // engine's phantom-spawn entry FUN_1401A1650.
+    //
+    // Layout we expect at `request` (Ds2PhantomRequest, see
+    // TRACK_C_PHASE_2B2_DESIGN.md):
+    //   +0x08  u32   state (0=spawn, 1=alive, 2=leaving, 3=dead)
+    //   +0x10  ptr   OUT: spawned PlayerCtrl* (post-call)
+    //   +0x20  ptr   IN:  inner data buffer
+    //   +0x29  u8    phantom_type flag
+    //
+    // Inner buffer (Ds2PlayerSnapshot):
+    //   +0x00  u16   magic = 0x39
+    //   +0x02  u16   primary_count
+    //   +0x04  u32   sequence_id
+    //   +0x0C..+0x1EF  fixed sub-record area (0x1E4 bytes)
+    //   +0x1F0..       packed variable entries
+    //
+    // We're purely observational: snapshot before, snapshot after,
+    // forward unchanged. Never modify game state.
+    void __fastcall SpawnEntryHook(
+        void* request, void* arg2, void* arg3, void* arg4)
+    {
+        const uint64_t hit_n = s_spawn_entry_hit_count.fetch_add(
+            1, std::memory_order_relaxed) + 1;
+
+        // Reserve a capture slot atomically. If we've used all
+        // budgeted captures, fall through with logging-only behaviour
+        // (no disk writes, just the event in the JSONL).
+        int remaining = s_spawn_entry_captures_remaining.fetch_sub(
+            1, std::memory_order_relaxed);
+        const bool will_dump = (remaining > 0) && (request != nullptr);
+
+        // Snapshot the outer wrapper. SEH-guarded — if `request`
+        // happens to point at unmapped memory we just bail.
+        uint8_t outer_block[kSpawnOuterCaptureSize] = {};
+        size_t outer_copied = 0;
+        if (request != nullptr)
+        {
+            outer_copied = SafeSpawnEntry_ReadBytes(
+                request, kSpawnOuterCaptureSize, outer_block);
+        }
+
+        // Pull the inner pointer from outer+0x20.
+        uint64_t inner_qword = 0;
+        bool inner_qword_ok = false;
+        if (request != nullptr && outer_copied >= 0x28)
+        {
+            const uint64_t* p =
+                reinterpret_cast<const uint64_t*>(
+                    static_cast<const uint8_t*>(request) + 0x20);
+            inner_qword_ok = SafeSpawnEntry_ReadU64(p, &inner_qword);
+        }
+        const void* inner_ptr =
+            reinterpret_cast<const void*>(inner_qword);
+
+        // Read magic + counts from the inner buffer.
+        uint16_t inner_magic = 0;
+        uint16_t inner_primary_count = 0;
+        bool inner_magic_ok = false;
+        bool inner_count_ok = false;
+        if (inner_qword_ok && inner_ptr != nullptr)
+        {
+            inner_magic_ok = SafeSpawnEntry_ReadU16(
+                reinterpret_cast<const uint16_t*>(inner_ptr),
+                &inner_magic);
+            inner_count_ok = SafeSpawnEntry_ReadU16(
+                reinterpret_cast<const uint16_t*>(
+                    static_cast<const uint8_t*>(inner_ptr) + 2),
+                &inner_primary_count);
+        }
+
+        // Snapshot the inner buffer up to the configured cap.
+        // We don't have a reliable size function here without
+        // resolving DS2's allocator metadata, so we just dump a
+        // generous bounded chunk; SafeSpawnEntry_ReadBytes will stop
+        // on the first faulting page even if it's mid-struct.
+        std::vector<uint8_t> inner_bytes;
+        size_t inner_copied = 0;
+        if (inner_magic_ok && inner_magic == 0x39 && will_dump)
+        {
+            inner_bytes.resize(kSpawnInnerCaptureMax);
+            inner_copied = SafeSpawnEntry_ReadBytes(
+                inner_ptr, kSpawnInnerCaptureMax, inner_bytes.data());
+            inner_bytes.resize(inner_copied);
+        }
+
+        // Build the JSON metadata describing this hit.
+        RuntimeWorkerConfig config =
+            GetActiveRuntimeConfig("spawn_entry.events.jsonl");
+
+        nlohmann::json payload;
+        payload["hit_number"] = hit_n;
+        payload["request_ptr"] =
+            HexPointer(reinterpret_cast<uintptr_t>(request));
+        payload["original_target"] = HexPointer(
+            reinterpret_cast<uintptr_t>(s_original_spawn_entry));
+        payload["outer_bytes_copied"] = outer_copied;
+
+        if (outer_copied >= 0x10)
+        {
+            uint32_t state = 0;
+            uint64_t spawned_pre = 0;
+            std::memcpy(&state, outer_block + 0x08, sizeof(state));
+            if (outer_copied >= 0x18)
+            {
+                std::memcpy(
+                    &spawned_pre, outer_block + 0x10, sizeof(spawned_pre));
+            }
+            payload["outer_state_pre"] = state;
+            payload["outer_spawned_pre"] = HexPointer(spawned_pre);
+        }
+        if (outer_copied >= 0x29)
+        {
+            payload["outer_inner_ptr"] = HexPointer(
+                reinterpret_cast<uintptr_t>(inner_ptr));
+            payload["outer_phantom_type"] =
+                static_cast<unsigned>(outer_block[0x29]);
+        }
+        if (inner_magic_ok)
+        {
+            payload["inner_magic"] = HexPointer(inner_magic);
+            payload["inner_magic_ok"] = (inner_magic == 0x39);
+        }
+        if (inner_count_ok)
+        {
+            payload["inner_primary_count"] = inner_primary_count;
+        }
+        if (will_dump)
+        {
+            payload["dump_attempted"] = true;
+            payload["dump_inner_bytes"] = inner_copied;
+        }
+        else
+        {
+            payload["dump_attempted"] = false;
+        }
+
+        // Persist binary captures if we still have budget AND the
+        // inner buffer looked valid (magic 0x39 confirmed).
+        if (will_dump && inner_copied > 0)
+        {
+            std::filesystem::path captures_dir =
+                RuntimeSiblingPath(config, ".spawn-captures");
+            std::error_code ec;
+            std::filesystem::create_directories(captures_dir, ec);
+
+            std::ostringstream stem_oss;
+            stem_oss << UtcNowIso8601();
+            std::string stem = stem_oss.str();
+            // Strip characters that are illegal in Windows filenames.
+            for (auto& c : stem)
+            {
+                if (c == ':' || c == '.' || c == '-' || c == 'T' ||
+                    c == 'Z')
+                {
+                    c = '_';
+                }
+            }
+            stem += "_hit";
+            stem += std::to_string(hit_n);
+
+            std::filesystem::path outer_path =
+                captures_dir / (stem + "_outer.bin");
+            std::filesystem::path inner_path =
+                captures_dir / (stem + "_inner.bin");
+            std::filesystem::path meta_path =
+                captures_dir / (stem + "_meta.json");
+
+            {
+                std::ofstream s(outer_path, std::ios::binary);
+                if (s)
+                {
+                    s.write(
+                        reinterpret_cast<const char*>(outer_block),
+                        static_cast<std::streamsize>(outer_copied));
+                }
+            }
+            {
+                std::ofstream s(inner_path, std::ios::binary);
+                if (s)
+                {
+                    s.write(
+                        reinterpret_cast<const char*>(inner_bytes.data()),
+                        static_cast<std::streamsize>(inner_bytes.size()));
+                }
+            }
+            {
+                nlohmann::json meta;
+                meta["hit_number"] = hit_n;
+                meta["time_utc"] = UtcNowIso8601();
+                meta["request_ptr"] = HexPointer(
+                    reinterpret_cast<uintptr_t>(request));
+                meta["inner_ptr"] = HexPointer(
+                    reinterpret_cast<uintptr_t>(inner_ptr));
+                meta["outer_bytes"] = outer_copied;
+                meta["inner_bytes"] = inner_bytes.size();
+                meta["inner_magic"] = HexPointer(inner_magic);
+                meta["inner_primary_count"] = inner_primary_count;
+                if (outer_copied >= 0x29)
+                {
+                    meta["outer_phantom_type"] =
+                        static_cast<unsigned>(outer_block[0x29]);
+                }
+                std::ofstream s(meta_path);
+                if (s)
+                {
+                    s << meta.dump(2);
+                }
+            }
+            payload["dump_outer_path"] = outer_path.string();
+            payload["dump_inner_path"] = inner_path.string();
+            payload["dump_meta_path"] = meta_path.string();
+        }
+
+        AppendRuntimeEvent(config, "spawn_entry.observed", payload);
+
+        // Forward to the original unchanged. Critical: skipping this
+        // call would leave the request struct uninitialised on the
+        // outbound side, the engine would treat the slot as alive
+        // with garbage, and the next render tick would crash. Always
+        // pass through.
+        SpawnEntryFn original = s_original_spawn_entry;
+        if (original != nullptr)
+        {
+            original(request, arg2, arg3, arg4);
+        }
+
+        // Post-call: log the spawned PlayerCtrl pointer that landed
+        // at outer+0x10. This is the smoking-gun proof the spawn
+        // succeeded — null means engine rejected (FUN_1401A0DC0 or
+        // an inner-validator returned false).
+        if (request != nullptr && outer_copied >= 0x18)
+        {
+            uint8_t post_block[0x20] = {};
+            size_t post_copied = SafeSpawnEntry_ReadBytes(
+                request, 0x20, post_block);
+            if (post_copied >= 0x18)
+            {
+                uint32_t post_state = 0;
+                uint64_t post_spawned = 0;
+                std::memcpy(
+                    &post_state, post_block + 0x08, sizeof(post_state));
+                std::memcpy(
+                    &post_spawned, post_block + 0x10,
+                    sizeof(post_spawned));
+                nlohmann::json post;
+                post["hit_number"] = hit_n;
+                post["outer_state_post"] = post_state;
+                post["outer_spawned_post"] = HexPointer(post_spawned);
+                AppendRuntimeEvent(
+                    config, "spawn_entry.post_call", post);
+            }
+        }
+    }
+
+    bool TryArmSpawnEntryObserver(const RuntimeWorkerConfig& config)
+    {
+        if (!config.ExeMatchesKnownBaseline) return false;
+        if (config.GameBaseAddress == 0) return false;
+        if (InterlockedCompareExchange(
+                &s_spawn_entry_observer_state, 1, 0) != 0)
+        {
+            return s_spawn_entry_observer_state == 2;
+        }
+
+        s_original_spawn_entry =
+            reinterpret_cast<SpawnEntryFn>(
+                config.GameBaseAddress + kSpawnEntryRva);
+
+        DetourTransactionBegin();
+        DetourUpdateThread(GetCurrentThread());
+        DetourAttach(
+            &(PVOID&)s_original_spawn_entry, SpawnEntryHook);
+        const LONG result = DetourTransactionCommit();
+
+        nlohmann::json payload;
+        payload["spawn_entry_target"] =
+            HexPointer(config.GameBaseAddress + kSpawnEntryRva);
+        payload["hook_target"] =
+            HexPointer(reinterpret_cast<uintptr_t>(&SpawnEntryHook));
+        payload["detour_result"] = result;
+        payload["capture_budget"] = kSpawnCaptureMaxPerSession;
+
+        if (result != NO_ERROR)
+        {
+            AppendRuntimeEvent(
+                config, "spawn_entry.observer_arm_failed", payload);
+            s_original_spawn_entry = nullptr;
+            InterlockedExchange(&s_spawn_entry_observer_state, 0);
+            return false;
+        }
+
+        payload["original_trampoline"] = HexPointer(
+            reinterpret_cast<uintptr_t>(s_original_spawn_entry));
+        AppendRuntimeEvent(
+            config, "spawn_entry.observer_armed", payload);
+        InterlockedExchange(&s_spawn_entry_observer_state, 2);
+        return true;
+    }
+
     bool TryArmItemUseValidationObserver(const RuntimeWorkerConfig& config)
     {
         if (!config.ExeMatchesKnownBaseline)
@@ -4202,6 +4594,24 @@ namespace
         {
             TryArmPlayerCtrlSpawnObserver(*config);
             TryArmPlayerCtrlCtorObserver(*config);
+        }
+        // Track C Phase 2B.2C-v1 — spawn-entry capture observer.
+        // Independent env var so the user can enable JUST this hook
+        // (which is at a different RVA than the v2.9.7 observers
+        // that triggered the ItemUse Detours regression) without
+        // re-enabling the older ones. Run a quick capture session
+        // by setting BONFIRE_DS2_SPAWN_CAPTURE=1, getting one
+        // vanilla summon or one Bonfire-coop peer join, then turn
+        // it back off. Outputs land in
+        // Runtime/DS2Native/<session>.spawn-captures/.
+        char capture_flag[8] = {};
+        DWORD capture_len = GetEnvironmentVariableA(
+            "BONFIRE_DS2_SPAWN_CAPTURE",
+            capture_flag,
+            sizeof(capture_flag));
+        if (capture_len > 0 && capture_flag[0] == '1')
+        {
+            TryArmSpawnEntryObserver(*config);
         }
         EmitInventoryProbeAndMaybeArm(*config);
 

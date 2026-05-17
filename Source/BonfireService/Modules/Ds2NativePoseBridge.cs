@@ -443,6 +443,19 @@ public static class Ds2NativePoseBridge
             ["spawn_wrapper_rva"] = "0x3572A0", // FUN_1403572A0 — 2-arg wrapper
             ["spawn_core_rva"] = "0x3572E0",    // FUN_1403572E0 — actual phantom spawner
             ["player_ctrl_ctor_rva"] = "0x37EBE0", // FUN_14037EBE0 — PlayerCtrl ctor
+            // Phase 2B.2B+ additions — the inner-snapshot encoder /
+            // decoder / size function we identified in Ghidra. The
+            // Injector uses these RVAs when capture mode or Path D
+            // (engine self-serialization) is active.
+            ["snapshot_builder_rva"] = "0x1A29C0",  // FUN_1401A29C0
+            ["snapshot_size_rva"] = "0x1A2B00",     // FUN_1401A2B00
+            ["snapshot_validator_rva"] = "0x1A2F60",// FUN_1401A2F60
+            ["snapshot_magic"] = "0x39",
+            // Phase 2B.2C-v1 — capture-hook env-var contract surfaced
+            // here so the UI / docs can describe how to trigger it
+            // without grepping the C++ source.
+            ["spawn_capture_env"] = "BONFIRE_DS2_SPAWN_CAPTURE",
+            ["spawn_capture_max_per_session"] = 5,
         };
     }
 

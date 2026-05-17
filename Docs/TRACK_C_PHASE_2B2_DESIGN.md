@@ -84,147 +84,155 @@ feared — only 7 fields touched by the spawn entry.
 | `+0x08` | qword | IN | Pointer to peer identity / character data. Read by 3 sibling validators (`FUN_1401A2680/2740/2800`) that fill local stack buffers later passed into `FUN_1401A0E40`. **The qword points at a Frpg2-style protobuf-deserialized struct** (see below). |
 | `+0x14` | u32 | IN | **player_id** — the integer that ends up formatted into `NetworkPlayer_%06u` (= our `000100` etc). |
 
-**`inner+0x08` deep dive** (`FUN_1401A2680` body):
+**`inner+0x08` deep dive — FULLY MAPPED (Phase 2B.2B-continued)**
 
+After more aggressive Ghidra reading we now have the complete inner
+struct format. **It is NOT a protoc-generated MessageLite**. It is
+DS2's own compact in-engine snapshot format, and it doubles as the
+wire format (no separate serialization step).
+
+```
+inner_data layout (call it Ds2PlayerSnapshot):
+  +0x00 (u16)   magic = 0x39                ← FUN_1401A2F60 verifies
+  +0x02 (u16)   primary_count               ← FUN_1401A2680 multiplier
+  +0x04 (u32)   sequence_id (DAT_14160E274++)
+  +0x08 (u16)   secondary_count (or zero)
+  +0x0A (u16)   padding/flags
+  +0x0C..+0x1EF fixed sub-record area (0x1E4 bytes)  ← FUN_1401A2800 copies
+  +0x1F0 (u16)  packed[0]: hi-4 = entries, lo-12 = length
+  +0x1F2 (u16)  packed[0]: offset to data start
+  +0x1F4 ...    more u32 entries (primary_count × 4 bytes total)
+  +(0x1F0 + offset + count×4) ...  variable-length entries:
+      each entry: (u16 hdr where (hdr & 0x3F) = tag, (hdr >> 6) = length)
+                  followed by payload bytes
+```
+
+**The builder** is `FUN_1401A29C0(longlong* sources_triple, u16* dst,
+u32 dst_size)` — writes magic 0x39 + the rest from THREE source
+pointers (`sources_triple[0..2]`, each a sub-manager pointing at
+in-engine player data).
+
+**Size computation**: `FUN_1401A2B00(sources_triple)` returns
+`0x1F0 + sources[1][2]*4 + sources[2][2]`.
+
+**Encoder usage in DS2** (line ~346155 of `decompiled.c`):
 ```c
-void FUN_1401A2680(u32* out_16bytes, void* protobuf_data) {
-  if (protobuf_data == 0) return;
-  uVar8 = *(u16*)(protobuf_data + 0x1F0) >> 0xC;   // upper 4 bits = entry count
-  puVar6 = protobuf_data + 0x1F0 + *(u16*)(protobuf_data + 0x1F2)
-                              + *(u16*)(protobuf_data + 0x02) * 4;
-  // Iterates packed entries; on tag (uVar1 & 0x3F) == 0, extracts 16 bytes
-}
+size = FUN_1401A2B00(triple_ptr);
+buf  = alloc(size, 0x10);
+zero(buf, size);
+FUN_1401A29C0(triple_ptr, buf, size);   // build
+sink->vtbl[0x18](sink, buf, size);      // send
+free(buf);
 ```
 
-This is **classic Frpg2 protobuf in-memory encoding**:
-- `+0x02`: a u16 length/offset
-- `+0x1F0`: u16 with a packed (count, flags) header
-- `+0x1F2`: u16 offset
-- Packed entries follow with (tag,length,payload) shape
+**Decoder** (the receive side): incoming bytes go through
+`FUN_1401A2F60` which validates magic 0x39 and traverses the entries
+to compute expected size. The bytes are then assigned to
+`inner+0x08` directly — **no deserialization step**. The wire format
+IS the in-memory format.
 
-**The struct is ~0x200+ bytes** and corresponds to the in-memory
-form of `Frpg2RequestMessage::PlayerCharacterData` (the same
-message ID we saw advertised at line 2723817 of decompiled.c).
-Synthesizing from scratch requires understanding the Frpg2
-encoding. There are three more pragmatic paths:
+### Critical implication — Path C-easiest is INVALIDATED
 
-## Three paths for Phase 2B.2C inner-data synthesis
+The protoc-generated `AllStatus` (`DS2_Frpg2PlayerData::AllStatus`)
+does NOT have the +0x1F0/+0x1F2/+0x02 layout. Its fields are at
+totally different offsets (vtable, _unknown_fields_ string,
+_has_bits_, then pointers). **The repo's protobuf source is
+server-side scaffolding from the Saponita-server era — it does
+not reflect what DS2.exe holds in memory.**
 
-### Path A — full synthesis from scratch (hardest)
+We cannot just feed an `AllStatus*` to `inner+0x08`. The DS2 engine
+does NOT translate from `AllStatus` to its compact format anywhere
+on the receive path; the compact format is what's transmitted.
 
-Build the ~0x200-byte protobuf-encoded struct in C from our SHM
-peer data. Requires reverse-engineering every field tag + offset
-that the 3 validators consume. Estimated 4-8 h of additional RE.
+### Revised path landscape
 
-### Path B — capture & replay (recommended next step) ⭐
+## Revised path landscape (post-finding)
 
-1. Add a one-shot **capture hook** at the entry to
-   `FUN_1401A1650`. When the engine spawns a real phantom
-   (vanilla saponita), we **snapshot the entire
-   Ds2PhantomRequest + its inner struct + the protobuf blob**
-   into a file. ~10 KB total per capture.
-2. Replay the captured snapshot for our peer: copy the byte-
-   pattern into Injector-allocated memory, **patch just the
-   delta fields** (player_id at inner+0x14, equipment IDs
-   inside the protobuf at known offsets we already mapped in
-   RE Session 01).
-3. Call `FUN_1401A1650(replayed_request)`.
+### Path A — synthesize the snapshot from scratch (medium)
 
-This trades one constraint (need one vanilla summon ever, to
-capture a template) for a massive reduction in RE complexity.
+Hand-build the compact snapshot in C. We now know the layout
+(+0x00 magic, +0x02 primary_count, +0x0C..+0x1EF fixed area,
++0x1F0 packed entries). The 0x1E4-byte fixed area is the hard
+part — we need to know which tag goes at which offset and how
+DS2 indexes them. Estimated 4-6 h to fully reverse the field
+mapping, then ~1 h to ship synthesis code.
 
-### Path C — hook the upstream deserializer (original variant)
+### Path B — capture & replay (still viable)
 
-Find the function that **takes a `PlayerCharacterData`
-protobuf bytestream and builds the internal struct**. That
-function exists (the network handler uses it to build inner
-from the wire format). Call it with our SHM peer's serialized
-data. Cleanest architecturally but requires finding +
-understanding that deserializer — likely 2-4h of RE.
+1. Hook `FUN_1401A1650` entry (read-only); on every invocation
+   snapshot the whole outer wrapper + inner buffer (size = walk
+   from magic until the variable-length region ends).
+2. Save as a template. **Patch the player_id at +0x14** plus
+   any deltas we want changed.
+3. Allocate fresh request + inner, copy template, mutate, drive
+   `FUN_1401A1650`.
 
-### 🎯 Path C-easiest — REUSE DS2'S OWN PROTOBUF SOURCE ⭐⭐⭐
+Requires one real summon (vanilla saponita OR brother joining
+via the existing seamless-coop server, both fine). Lowest RE
+cost. Concrete deliverable: a binary template file in
+`Runtime/DS2Native/spawn-captures/`.
 
-**Massive shortcut discovered while investigating Path C: the DS2
-protobuf source is already in our repo.** Path
-`Source/Server.DarkSouls2/Protobuf/Generated/DS2_Frpg2PlayerData.pb.{h,cc}`
-contains every class DS2's binary uses internally:
+### 🎯 Path D — engine self-serialization (recommended) ⭐⭐⭐
 
-```
-AllStatus       (composite — contains all sub-records)
-ArmorStatus     EquipmentInfo    ItemUsingInfo    LevelStatus
-PhantomTypeCount PhysicalStatus  PlayerLocation   PlayerStatus
-ServerSideStatus StatsInfo       Vector           WeaponStatus
-DateTime        PlayerStatus_Phantom_leave_at      StatsInfo_Bonfire_levels
-```
+**The DS2 engine has a function that builds the snapshot from a
+live source: `FUN_1401A29C0(triple_ptr*, buf, size)`.** Our local
+PlayerCtrl is alive in memory. The source-triple for the local
+player exists too (somewhere reachable from GameManagerImp). We
+can:
 
-These are the exact protoc-generated C++ classes DS2.exe links
-against. The names match what we found embedded as strings in
-the binary — same .proto, same protoc version, identical
-in-memory layout.
+1. Resolve the **local player's source triple** (`longlong[3]`).
+   This is the same triple passed into FUN_1401A29C0 every time
+   the local game wants to advertise its character to peers.
+2. Call `FUN_1401A2B00(triple)` → size.
+3. Allocate `size` bytes (via DS2's own allocator,
+   `FUN_140833320`).
+4. Call `FUN_1401A29C0(triple, buf, size)` → buf now holds a
+   valid serialized local-player snapshot.
+5. Patch `+0x14` of buf (the player_id field would be inside the
+   variable region — TBD which tag).
+6. Allocate `Ds2PhantomRequest` outer wrapper + inner struct;
+   set `inner+0x08 = buf`, set the other fields per the wrapper
+   map.
+7. Call `FUN_1401A1650(wrapper)`.
 
-Plus we also have the matching protobuf runtime in the repo at
-`Source/ThirdParty/protobuf-2.6.1rc1/` — the SAME version DS2
-was built with.
+This **uses DS2's own serializer** so we're guaranteed-correct
+format — no synthesis errors possible. First spawn would be a
+"clone" of the local player; once that works, Path D-extended
+becomes synthesizing different sources from SHM (4-6 h after
+the clone-spawn proof of concept).
 
-This eliminates the need to reverse-engineer the deserializer
-or hand-encode the wire bytes: we can compile this code directly
-into the Injector and build `AllStatus` instances natively.
+**Pre-condition for Path D**: find the local player's source
+triple. It's reachable from the FUN_14019F520 call chain we
+just mapped (`*(param_1 + 0x28) + 0x28` for some `param_1`
+that's reachable from a known global). ~1-2 h of RE.
 
-**Path C-easiest implementation**:
+## Recommendation (revised)
 
-1. **Compile `DS2_Frpg2PlayerData.pb.cc` + `protobuf-2.6.1rc1` into
-   the Injector DLL** (mirror the existing build wiring for those
-   files — they're already in the `Server.DarkSouls2` project; add
-   them to `Injector` via CMake `<Compile Include>`).
-2. **Build an `AllStatus` instance** in C++ from our SHM peer data:
-   - `physical_status` ← HP triple from SHM
-   - `equipment_info` ← 22-slot equipment array from SHM
-   - `level_status` ← (when we map it)
-   - `player_location` ← position from pose UDP
-3. **Allocate Ds2PhantomRequest wrapper + inner sub-struct** on the
-   heap.
-4. **Set inner+0x08 = &our_AllStatus**, inner+0x14 = synthetic
-   player_id derived from SHM sender_id.
-5. **Set wrapper+0x29 = 0** (NetworkPlayer white phantom).
-6. **Set wrapper+0x20 = &inner**, wrapper+0x08 = 0 (state=spawn),
-   wrapper+0x18 = 0, wrapper+0x1C = 0xFFFFFFFF, wrapper+0x28 = 0.
-7. **Resolve `world_mgr`** via `Ds2MemoryReader.TryReadWorldMgr()`
-   (already shipped in v2.9.10).
-8. **Call** `((SpawnEntry)(ds2_base + 0x1A1650))(&wrapper)` from
-   the Injector.
-9. **Read wrapper+0x10** — the spawned `PlayerCtrl*`. Null = engine
-   rejected (preconditions in `FUN_1401A0DC0` failed).
+**Phase 2B.2C-v1 = Path B capture** — ship a read-only capture
+hook on `FUN_1401A1650` entry to harvest one real template AND
+to validate the inner-struct layout map empirically. This is a
+small (~150 LOC) safe addition. No new build deps. Even if we
+never replay, the capture proves out the layout and produces a
+concrete artifact to drive next steps.
 
-**Risks** (none are blockers, all have known mitigations):
+**Phase 2B.2C-v2 = Path D clone-spawn** — once we have a real
+captured template AND we've resolved the local source triple,
+we have two independent ways to produce a valid inner buffer.
+Cross-check them, then drive `FUN_1401A1650` with a Path D-built
+buffer (engine-validated) and the wrapper from the captured
+template (also engine-validated for the wrapper fields). First
+spawn = local-player clone, lowest possible risk.
 
-- **C++ ABI / vtable mismatch**: our compiled
-  `MessageLite::~MessageLite` is at a different vtable index than
-  DS2's if compilers differ. Mitigation: `FUN_1401A2680` reads raw
-  memory offsets (+0x1F0, +0x1F2, +0x02), NOT virtual dispatch, so
-  the vtable mismatch doesn't matter for the spawn-time reads we
-  care about. Destructors run when the engine cleans up the
-  phantom; if those crash we add a passthrough deleter.
-- **Heap-allocator mismatch**: DS2's spawn pipeline might free the
-  inner data later via its own allocator. If our heap pointer
-  isn't from `FUN_140833320`, the free would corrupt. Mitigation:
-  allocate inner via `FUN_140833320` directly. We already know its
-  signature.
-- **Protobuf runtime version drift**: confirmed mitigated — we
-  have `Source/ThirdParty/protobuf-2.6.1rc1/`.
+**Phase 2B.2C-v3 = SHM-driven Path D** — replace the local
+source triple with synthesized sources reflecting the peer's
+SHM char_data. Highest payoff, depends on v2 working first.
 
-## Recommendation (final)
-
-**Go with Path C-easiest**. We have every piece needed in the
-repo: the exact protobuf source DS2 was built from, the exact
-runtime library, and the spawn-chain entry point + wrapper-
-struct map already documented. Estimated effort to first
-working spawn: ~2-3 h focused implementation (mostly build
-wiring + struct field population + the synthetic-spawn test).
-
-This skips the template-capture dependency Path B would have
-introduced and is genuinely architecturally clean — same code
-DS2 uses internally, just driven from us instead of from the
-network.
+Old Path C-easiest's premise (in-repo `AllStatus` source =
+in-memory format DS2 reads) is **disproven**. The protobuf
+source in `Source/Server.DarkSouls2/Protobuf/Generated/` is
+**server-side** scaffolding from the original DS3OS lineage,
+not what DS2.exe consumes. The DS2.exe format is more compact
+and engine-specific (magic 0x39 header, packed entries).
 
 ## State machine — `FUN_1401A0D20` dispatcher
 
@@ -258,40 +266,76 @@ directly). Engine handles all 4 lifecycle phases.
 - `bridge.status` exposes `spawn_chain.world_mgr_ptr` + the
   spawn-chain RVAs.
 
-### ✅ Phase 2B.2B (this update) — outer wrapper fully mapped
+### ✅ Phase 2B.2B (this update) — outer wrapper + inner format mapped
 
 - 7 outer-struct fields + state machine documented above.
-- Inner struct partially mapped: `+0x08` data ptr, `+0x14` player_id.
-- Inner `+0x08` shape still pending — needs reading
-  `FUN_1401A2680/2740/2800` validator bodies.
+- Inner struct (`Ds2PlayerSnapshot`) FULLY mapped: magic 0x39 at
+  +0x00, primary_count at +0x02, sequence at +0x04, fixed area
+  +0x0C..+0x1EF (0x1E4 bytes), packed entries from +0x1F0.
+- **Encoder identified**: `FUN_1401A29C0(triple_ptr, dst, size)`.
+- **Size function identified**: `FUN_1401A2B00(triple_ptr)`.
+- **Decoder/validator identified**: `FUN_1401A2F60(buf, size)`.
+- Path C-easiest invalidated (in-repo protoc source ≠ DS2's
+  in-memory format).
 
-### 🚧 Phase 2B.2C — synthetic spawn
+### 🚧 Phase 2B.2C-v1 — capture hook (next implementation step)
 
-Pre-conditions before 2B.2C can attempt a live spawn:
+Implementation target for v2.9.11:
 
-1. **Finish inner `+0x08` mapping** (RE the 3 validators).
-2. **Decide on player_id allocation policy** — engine seems to
-   want unique u32 IDs per peer; we can derive deterministically
-   from our SHM `sender_id` (low 24 bits + offset).
-3. **Decide on call mechanism** — option (a) call FUN_1401A1650
-   directly (skip pre-validate; faster but skips a safety net),
-   option (b) call FUN_1401A0D20 with state=0 (lets the engine's
-   own validator run). **Recommend (b) first** — if engine
-   refuses, we learn safely.
+1. Add a read-only Detours hook on `FUN_1401A1650` entry, gated
+   by `BONFIRE_DS2_SPAWN_CAPTURE=1` (in addition to existing
+   `BONFIRE_DS2_RE_HOOKS=1`).
+2. On each invocation, with SEH guard:
+   - Capture outer wrapper (0x40 bytes from param_1).
+   - Read `*(param_1 + 0x20)` to get inner pointer.
+   - Validate magic `*(u16*)inner == 0x39`. If not, skip.
+   - Use `FUN_1401A2B00` if reachable, else walk entries to
+     compute total size. Cap at 64 KB.
+   - Dump raw bytes to
+     `Runtime/DS2Native/spawn-captures/<utc>_<seq>_outer.bin`
+     and `_inner.bin`.
+   - Write structured `_meta.json` with the parsed header
+     fields (magic, counts, sequence, sizes) for quick diff.
+3. Pass the original call through (`pTrampoline(param_1)`).
+4. Auto-rotate: keep most-recent 5 captures, delete older.
 
-Then 2B.2C itself:
+This is purely observational. No spawn-triggering. Lowest
+risk. Run by the user during one summon (vanilla or via
+existing Bonfire server). Output validates everything we
+RE'd statically.
 
-1. Build a Ds2PhantomRequest + Ds2InnerRequest on the heap from
-   the Injector side.
-2. Resolve world_mgr (already done via 2B.2A).
-3. Call the dispatcher. If state flips to 1, read `+0x10` for
-   the PlayerCtrl ptr.
-4. Verify in CE: RTTI on the new pointer = "PlayerCtrl", and
-   crucially, **the character appears in-game**.
+### 🚧 Phase 2B.2C-v2 — Path D source-triple resolver
 
-### 🚧 Phase 2B.2D — wire SHM
+After capture proves the layout, find the local player's
+source triple. We know the calling pattern (from line 346155):
+`triple_ptr` lives at `*(some_manager + 0x28)`. Need to walk
+back from `FUN_14019F520` callers to find which global gives
+us `some_manager`.
 
-Same as before — replace hardcoded values with peer SHM lookups.
+### 🚧 Phase 2B.2C-v3 — clone-spawn test
+
+With triple_ptr resolved + size+encode functions known:
+1. Compute size = `FUN_1401A2B00(triple)`.
+2. Allocate buf = `FUN_140833320(size)` (engine's allocator).
+3. Build = `FUN_1401A29C0(triple, buf, size)`.
+4. Build Ds2PhantomRequest wrapper with inner+0x08 = buf.
+5. Drive `FUN_1401A1650(wrapper)`.
+6. Read wrapper+0x10. If non-null → real PlayerCtrl spawned.
+
+Expected outcome: a phantom that is a visual clone of the
+local player. First confirmed engine-cooperative spawn.
+
+### 🚧 Phase 2B.2D — SHM-driven Path D
+
+After clone-spawn works:
+1. Capture multiple snapshots from real summons (Path B's
+   capture hook still active) to learn the field tag mapping
+   (which entry encodes equipment, HP, level, etc.).
+2. Build a synthesizer in the Injector that constructs a
+   custom buf from SHM peer data, skipping the engine's
+   triple-based encoder.
+3. Per-peer phantom lifecycle (spawn on SHM entry add, despawn
+   on entry expire).
 
 ### 🚧 Phase 2B.2E — bypass slot cap (only if we hit it)
 
