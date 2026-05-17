@@ -227,6 +227,108 @@ spawn = local-player clone, lowest possible risk.
 source triple with synthesized sources reflecting the peer's
 SHM char_data. Highest payoff, depends on v2 working first.
 
+## 2026-05-17 update — Frpg2PlayerImpl discovery (Path E)
+
+After committing Phase 2B.2C-v1 we dug one more layer and found
+the **engine's live AllStatus instances**. They DO exist in
+memory. This unlocks a fifth path:
+
+### Class hierarchy reverse-engineered
+
+```
+Frpg2ClientImpl  (RVA 0x68f890 — ctor; allocated 0x788 bytes)
+  +0x00   Frpg2ClientLib::Frpg2ClientImpl::vftable
+  +0x08   <shared base/heap>
+  +0x10   <NetSvrMessageManager-like>           (FUN_140692410)
+  +0x80   <subsystem>                            (FUN_140695E40)
+  +0x90   Frpg2PlayerImpl                        (FUN_140698550) ⭐
+    +0x00   Frpg2ClientLib::Frpg2PlayerImpl::vftable
+    +0x08   <heap base>
+    +0x10   AllStatus #1 (current)               (vftable = Frpg2PlayerData::AllStatus)
+    +0x90   AllStatus #2 (cached/previous)
+    +0x110  RequestUpdatePlayerCharacter         (vftable = Frpg2RequestMessage::Req...)
+    +0x140  <param_2 reference>
+    +0x158  DLPlainLightMutex
+    +0x190  FUN_1406BCEF0-built sub-struct
+    +0x198  FUN_1406BCEF0-built sub-struct
+    +0x1A0  u32 counter = 5
+    +0x1A4  u32 interval = 0x3C (60)
+    +0x1B8..+0x1B8+0x60   FUN_140833320(0xE0) allocated buffer
+  +0x258  (subsystem) FUN_14069CD30
+  ... more sub-managers
+```
+
+### Why this matters
+
+DS2 maintains the local player's character data as a live
+`Frpg2PlayerData::AllStatus` C++ object at
+`Frpg2PlayerImpl + 0x10`. This means:
+
+1. **Path C-easiest is RESURRECTED, with adjustments.** We do
+   NOT feed an `AllStatus*` to `inner+0x08` directly (still
+   invalid — that's the compact 0x39 format). But we CAN:
+   - **Read** the live AllStatus's fields by walking its
+     protoc-generated layout (since we have matching `.pb.h`).
+   - **Write** new field values into a cloned AllStatus.
+   - **Serialize** via the engine's encoder (which converts
+     AllStatus → triple → compact 0x39 format) OR via the
+     protoc `Serialize()` (which produces wire bytes, NOT the
+     compact format — different).
+2. **The triple-ptr that FUN_1401A29C0 consumes is built from
+   the AllStatus instances**. The 3 ring buffers at the triple
+   likely live INSIDE Frpg2PlayerImpl or one of its sub-
+   managers. Each ring entry is 0x1E4 bytes — the same size as
+   the fixed area of the compact format.
+
+### Path E — Frpg2PlayerImpl-driven (most powerful)
+
+If we can locate the live `Frpg2ClientImpl` instance:
+
+1. RTTI-scan in CE for vtable `Frpg2ClientLib::Frpg2PlayerImpl`
+   OR walk down from `Frpg2ClientImpl` (which is held in
+   a global we still need to find — search for stores of
+   `Frpg2ClientImpl::vftable`).
+2. Read `Frpg2PlayerImpl + 0x10` → current AllStatus.
+3. Use the in-repo `DS2_Frpg2PlayerData::AllStatus` class to
+   parse the field values (verify by cross-checking known
+   values like HP from our existing PlayerCtrl read).
+4. Spawn variants:
+   - **(a) Direct AllStatus clone**: copy the entire
+     0x80 bytes from +0x10 to +0x90 of a new
+     Frpg2PlayerImpl-shaped buffer, mutate the player_id,
+     call the engine's existing "send" pipeline with that
+     buffer. The engine produces the compact format
+     internally and routes it. (Hardest — touches the network
+     stack.)
+   - **(b) Trigger engine-side serialization**: invoke
+     whatever function in Frpg2PlayerImpl produces the
+     compact format from the AllStatus (likely a vtable
+     slot). Capture the buffer post-call. Use it as our
+     phantom's inner+0x08.
+   - **(c) Plain read for capture-replay**: just observe the
+     AllStatus to learn the canonical field values, then use
+     Path B's captured wire-format template and patch deltas.
+
+### Searches required (next RE session)
+
+1. **Frpg2ClientImpl storage**: find where the result of
+   FUN_14068D910 is stored. Probable singleton getter is
+   FUN_14068D840 or similar (returns
+   `DAT_141618BC0` based on the partial match at line
+   1370921). Confirm `DAT_141618BC0` holds the
+   Frpg2ClientImpl pointer in CE.
+2. **AllStatus → triple → compact path**: trace from the
+   AllStatus instance to the ring-buffer triple that
+   FUN_1401A29C0 consumes. The 3 ring buffers must be filled
+   from the AllStatus somewhere; find that conversion code.
+3. **RequestUpdatePlayerCharacter usage**: this is what
+   actually goes over the wire to the server. Map it to the
+   compact format (or confirm they're independent paths).
+
+These can be done either statically (Ghidra) or live (CE
+RTTI scan). The live approach is faster — DS2 is currently
+running per Phase 1 work, and RTTI gives us instant access.
+
 Old Path C-easiest's premise (in-repo `AllStatus` source =
 in-memory format DS2 reads) is **disproven**. The protobuf
 source in `Source/Server.DarkSouls2/Protobuf/Generated/` is
