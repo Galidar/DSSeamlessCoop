@@ -82,6 +82,12 @@ public static class Ds2NativeSessionCoordinator
             try
             {
                 ProcessActionLogs(ct);
+                // Phase 4d follow-up (v2.8.3): keep the pose bridge
+                // running whenever DS2 is alive and the injector is
+                // emitting resolved poses, even if the user never
+                // used the in-game host/guest orb. Role is decided
+                // from whether a JoinTarget is armed.
+                TryAutoStartPoseBridgeFromHeartbeat();
             }
             catch (OperationCanceledException)
             {
@@ -746,6 +752,126 @@ public static class Ds2NativeSessionCoordinator
             result["error"] = ex.Message;
         }
         return result;
+    }
+
+    // v2.8.3: called every worker tick (~1 Hz). Watches the latest
+    // events.jsonl; if a resolved player.live_transform has been
+    // written in the last few seconds AND the pose bridge isn't
+    // already running, start it. Role is chosen from whether the
+    // brother has armed a JoinTarget (guest) or not (host) — same
+    // logic the orb-driven session.create / session.join handlers
+    // use, just without the in-game item requirement.
+    //
+    // Removes the trap where vanilla DS2 + Bonfire UI alone weren't
+    // enough to spin up the overlay: the user previously had to
+    // know about the Blessed/Crystal Eye Orb items, find them in
+    // their inventory, and use them in the right order. This
+    // restores the "click host / click join, launch DS2, see cubes"
+    // flow.
+    private static DateTime _lastPoseAutoStartCheck = DateTime.MinValue;
+    private static long _lastPoseAutoStartEventOffset = -1;
+
+    private static void TryAutoStartPoseBridgeFromHeartbeat()
+    {
+        if (Ds2NativePoseBridge.IsRunning) return;
+
+        // Throttle: at most one auto-start attempt per 2 s.
+        var now = DateTime.UtcNow;
+        if (now - _lastPoseAutoStartCheck < TimeSpan.FromSeconds(2)) return;
+        _lastPoseAutoStartCheck = now;
+
+        var eventLog = FindLatestEventLog();
+        if (eventLog is null) return;
+
+        // Recent activity gate: the events.jsonl must have been
+        // written to within the last 15 s, otherwise we're looking
+        // at a stale session.
+        try
+        {
+            var info = new FileInfo(eventLog);
+            if (!info.Exists || (now - info.LastWriteTimeUtc) > TimeSpan.FromSeconds(15))
+                return;
+        }
+        catch { return; }
+
+        if (!HasRecentResolvedPose(eventLog, now)) return;
+
+        // Decide role from JoinTarget. Wrap each call in try/catch
+        // so a malformed disk file can't break the heartbeat loop.
+        try
+        {
+            var target = Ds2NativeJoinTarget.Get();
+            if (target != null && !string.IsNullOrWhiteSpace(target.Hostname))
+            {
+                var peer = $"{target.Hostname}:{kDefaultPoseBridgePort}";
+                Ds2NativePoseBridge.EnsureStarted(
+                    kDefaultPoseBridgePort, new[] { peer });
+            }
+            else
+            {
+                Ds2NativePoseBridge.EnsureStarted(
+                    kDefaultPoseBridgePort, Array.Empty<string>());
+            }
+        }
+        catch { /* best-effort */ }
+    }
+
+    private static string? FindLatestEventLog()
+    {
+        try
+        {
+            if (!Directory.Exists(Root)) return null;
+            return Directory.EnumerateFiles(Root, "*.events.jsonl")
+                .OrderByDescending(File.GetLastWriteTimeUtc)
+                .FirstOrDefault();
+        }
+        catch { return null; }
+    }
+
+    // Tail the events file and look for a recent
+    // player.live_transform with resolved=true. Cheap — we read
+    // only the last ~16 KB so this scales fine even if the file is
+    // many MB.
+    private static bool HasRecentResolvedPose(string path, DateTime now)
+    {
+        try
+        {
+            using var stream = new FileStream(
+                path, FileMode.Open, FileAccess.Read,
+                FileShare.ReadWrite | FileShare.Delete);
+            const int kTailBytes = 16384;
+            long start = Math.Max(0, stream.Length - kTailBytes);
+            stream.Seek(start, SeekOrigin.Begin);
+            using var reader = new StreamReader(stream, System.Text.Encoding.UTF8);
+            string? line;
+            string? newest = null;
+            while ((line = reader.ReadLine()) != null)
+            {
+                if (line.IndexOf("\"player.live_transform\"", StringComparison.Ordinal) < 0)
+                    continue;
+                if (line.IndexOf("\"resolved\":true", StringComparison.Ordinal) < 0)
+                    continue;
+                newest = line; // keep last one
+            }
+            if (newest is null) return false;
+            // Crude time extraction — avoid full JSON parse cost.
+            // Format: "time_utc":"2026-05-17T00:06:18Z"
+            const string key = "\"time_utc\":\"";
+            var idx = newest.IndexOf(key, StringComparison.Ordinal);
+            if (idx < 0) return false;
+            var end = newest.IndexOf('"', idx + key.Length);
+            if (end < 0) return false;
+            var ts = newest.Substring(idx + key.Length, end - (idx + key.Length));
+            if (!DateTime.TryParse(ts, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeUniversal |
+                    System.Globalization.DateTimeStyles.AdjustToUniversal,
+                    out var poseUtc))
+            {
+                return false;
+            }
+            return (now - poseUtc) < TimeSpan.FromSeconds(15);
+        }
+        catch { return false; }
     }
 
     private static JsonObject TryStartPoseBridgeAsGuest()

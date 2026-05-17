@@ -207,6 +207,19 @@ public static class Ds2NativePoseBridge
         return Status();
     }
 
+    // Lightweight check used by Ds2NativeSessionCoordinator to gate
+    // auto-start without needing a full Status() snapshot.
+    public static bool IsRunning
+    {
+        get
+        {
+            lock (Lock)
+            {
+                return _watcherTask is not null;
+            }
+        }
+    }
+
     public static JsonObject Status()
     {
         var running = _watcherTask is not null;
