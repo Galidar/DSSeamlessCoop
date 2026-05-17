@@ -56,6 +56,15 @@ namespace
     // into an active producer that calls the original with our
     // peer's char_data when a phantom slot is free.
     constexpr uintptr_t kPlayerCtrlSpawnRva = 0x355930;
+    // v2.9.7 Phase 2B.1b — coverage expansion. The spawn function
+    // above hooked clean but never fired in the captured window,
+    // suggesting it's a once-per-world-load entry, not the
+    // per-phantom hot path. The PlayerCtrl constructor itself
+    // (Ghidra: FUN_14037EBE0) DOES fire for every PlayerCtrl
+    // creation regardless of which caller triggers it, so hook
+    // that one in parallel as a wider net. We log + forward, no
+    // game-logic change.
+    constexpr uintptr_t kPlayerCtrlCtorRva = 0x37EBE0;
     constexpr uintptr_t kEyeOrbUseValidationRva = 0x2D3B20;
     constexpr uintptr_t kItemGiveRva = 0x1AC3D0;
     constexpr uintptr_t kItemStructConvertRva = 0x05D950;
@@ -178,6 +187,12 @@ namespace
     // performs and capture the exact argument shapes — that's the
     // data we need to invoke it ourselves in Phase 2B.2.
     using PlayerCtrlSpawnFn = void(__fastcall*)(void* ctx, uint32_t* slot_id_ptr, void* char_data_ptr);
+    // v2.9.7: PlayerCtrl constructor signature. Ghidra decompiled it
+    // as `undefined8* FUN_14037EBE0(undefined8* param_1)` (single arg
+    // in RCX), but caller sites pass 4 args via RCX/RDX/R8/R9. We
+    // declare 4-arg to preserve those registers when forwarding —
+    // even though the constructor body itself only reads param_1.
+    using PlayerCtrlCtorFn = void*(__fastcall*)(void* this_ptr, void* arg2, void* arg3, void* arg4);
     using ItemGiveFn = void(__fastcall*)(void* inventory_bag_list, void* item_spawn_list, int32_t item_count);
     using ItemStructConvertFn = void(__fastcall*)(void* display_stack, void* item_spawn_list, int32_t item_count, int32_t show_popup);
     using ItemPopupDisplayFn = void(__fastcall*)(void* item_display_manager, void* display_stack);
@@ -190,6 +205,12 @@ namespace
     PlayerCtrlSpawnFn s_original_player_ctrl_spawn = nullptr;
     LONG s_player_ctrl_spawn_observer_state = 0;   // 0=idle, 1=arming, 2=armed
     std::atomic<uint64_t> s_player_ctrl_spawn_hit_count{0};
+    // v2.9.7: parallel observer on PlayerCtrl ctor itself — broader
+    // coverage in case the v2.9.6 spawn-function hook is a once-per-
+    // world-load entry, not the per-phantom hot path.
+    PlayerCtrlCtorFn s_original_player_ctrl_ctor = nullptr;
+    LONG s_player_ctrl_ctor_observer_state = 0;
+    std::atomic<uint64_t> s_player_ctrl_ctor_hit_count{0};
     ItemUseValidationFn s_original_item_use_validation = nullptr;
     InventoryAdjustQuantityFn s_original_inventory_adjust_quantity = nullptr;
     InventoryUseItemFn s_original_inventory_use_item = nullptr;
@@ -2803,6 +2824,111 @@ namespace
         return true;
     }
 
+    // v2.9.7 Phase 2B.1b — PlayerCtrl constructor observer.
+    //
+    // Hooks FUN_14037EBE0 itself so we get a hit for EVERY PlayerCtrl
+    // creation (not just whatever code path FUN_140355930 was on).
+    // Logs only the first qword at +0x00 (which the ctor immediately
+    // overwrites with PlayerCtrl::vftable) and the value of param_1
+    // itself. The hook forwards unchanged — zero game-logic impact.
+    void* __fastcall PlayerCtrlCtorHook(
+        void* this_ptr, void* arg2, void* arg3, void* arg4)
+    {
+        const uint64_t hit_n = s_player_ctrl_ctor_hit_count.fetch_add(
+            1, std::memory_order_relaxed) + 1;
+
+        RuntimeWorkerConfig config =
+            GetActiveRuntimeConfig("player_ctrl_ctor.events.jsonl");
+
+        nlohmann::json payload;
+        payload["hit_number"] = hit_n;
+        payload["this_ptr"] =
+            HexPointer(reinterpret_cast<uintptr_t>(this_ptr));
+        payload["arg2"] =
+            HexPointer(reinterpret_cast<uintptr_t>(arg2));
+        payload["arg3"] =
+            HexPointer(reinterpret_cast<uintptr_t>(arg3));
+        payload["arg4"] =
+            HexPointer(reinterpret_cast<uintptr_t>(arg4));
+        payload["original_target"] =
+            HexPointer(reinterpret_cast<uintptr_t>(s_original_player_ctrl_ctor));
+
+        // Before forwarding, snapshot the FIRST 64 bytes of this_ptr
+        // — captures whatever garbage / uninitialised pattern was
+        // there before the ctor overwrites byte 0..7 with the
+        // vtable. Useful to confirm we're catching the very first
+        // entry to the ctor on an uninitialised allocation.
+        uint8_t pre_block[64] = {};
+        bool pre_ok = (this_ptr != nullptr) &&
+            SafePlayerCtrlSpawn_ReadBlock64(this_ptr, pre_block);
+        if (pre_ok)
+        {
+            std::ostringstream oss;
+            oss << std::hex << std::setfill('0');
+            for (int i = 0; i < 64; ++i)
+            {
+                if (i != 0) oss << ' ';
+                oss << std::setw(2) << static_cast<unsigned>(pre_block[i]);
+            }
+            payload["this_pre_64_hex"] = oss.str();
+        }
+
+        AppendRuntimeEvent(config, "player_ctrl.ctor_observed", payload);
+
+        // Forward to the original ctor unchanged.
+        PlayerCtrlCtorFn original = s_original_player_ctrl_ctor;
+        void* ret = nullptr;
+        if (original != nullptr)
+        {
+            ret = original(this_ptr, arg2, arg3, arg4);
+        }
+        return ret;
+    }
+
+    bool TryArmPlayerCtrlCtorObserver(const RuntimeWorkerConfig& config)
+    {
+        if (!config.ExeMatchesKnownBaseline) return false;
+        if (config.GameBaseAddress == 0) return false;
+        if (InterlockedCompareExchange(
+                &s_player_ctrl_ctor_observer_state, 1, 0) != 0)
+        {
+            return s_player_ctrl_ctor_observer_state == 2;
+        }
+
+        s_original_player_ctrl_ctor =
+            reinterpret_cast<PlayerCtrlCtorFn>(
+                config.GameBaseAddress + kPlayerCtrlCtorRva);
+
+        DetourTransactionBegin();
+        DetourUpdateThread(GetCurrentThread());
+        DetourAttach(
+            &(PVOID&)s_original_player_ctrl_ctor, PlayerCtrlCtorHook);
+        const LONG result = DetourTransactionCommit();
+
+        nlohmann::json payload;
+        payload["player_ctrl_ctor_target"] =
+            HexPointer(config.GameBaseAddress + kPlayerCtrlCtorRva);
+        payload["hook_target"] =
+            HexPointer(reinterpret_cast<uintptr_t>(&PlayerCtrlCtorHook));
+        payload["detour_result"] = result;
+
+        if (result != NO_ERROR)
+        {
+            AppendRuntimeEvent(
+                config, "player_ctrl.ctor_observer_arm_failed", payload);
+            s_original_player_ctrl_ctor = nullptr;
+            InterlockedExchange(&s_player_ctrl_ctor_observer_state, 0);
+            return false;
+        }
+
+        payload["original_trampoline"] =
+            HexPointer(reinterpret_cast<uintptr_t>(s_original_player_ctrl_ctor));
+        AppendRuntimeEvent(
+            config, "player_ctrl.ctor_observer_armed", payload);
+        InterlockedExchange(&s_player_ctrl_ctor_observer_state, 2);
+        return true;
+    }
+
     bool TryArmItemUseValidationObserver(const RuntimeWorkerConfig& config)
     {
         if (!config.ExeMatchesKnownBaseline)
@@ -4037,6 +4163,13 @@ namespace
         // shape the engine passes its three args. No game-logic
         // change; the hook forwards unconditionally.
         TryArmPlayerCtrlSpawnObserver(*config);
+        // v2.9.7: parallel observer on the PlayerCtrl ctor itself —
+        // wider net. The spawn-function hook (0x355930) armed clean
+        // in v2.9.6 but didn't fire during regular gameplay
+        // (probably called once at world load, not per-phantom).
+        // The ctor (0x37EBE0) fires for every PlayerCtrl creation
+        // regardless of which caller drove it.
+        TryArmPlayerCtrlCtorObserver(*config);
         EmitInventoryProbeAndMaybeArm(*config);
 
         uintmax_t command_offset = 0;
@@ -4318,6 +4451,18 @@ void DS2_NativeRuntimeHook::Uninstall()
         DetourTransactionCommit();
         s_original_player_ctrl_spawn = nullptr;
         InterlockedExchange(&s_player_ctrl_spawn_observer_state, 0);
+    }
+
+    // v2.9.7 — detach the PlayerCtrl ctor observer.
+    if (s_original_player_ctrl_ctor != nullptr)
+    {
+        DetourTransactionBegin();
+        DetourUpdateThread(GetCurrentThread());
+        DetourDetach(
+            &(PVOID&)s_original_player_ctrl_ctor, PlayerCtrlCtorHook);
+        DetourTransactionCommit();
+        s_original_player_ctrl_ctor = nullptr;
+        InterlockedExchange(&s_player_ctrl_ctor_observer_state, 0);
     }
 
     if (s_inventory_adjust_quantity_slot != nullptr &&
