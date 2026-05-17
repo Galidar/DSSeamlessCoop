@@ -28,6 +28,17 @@
     <PackageReference Include="System.Text.Json" Version="8.0.5" />
   </ItemGroup>
 
+  <!-- Track C Phase 2A: embed the Paramdex-derived DS2 item-id ↔ name
+       table so the bridge.status RPC can resolve weapon/armor IDs
+       server-side. ~60 KB JSON, ~1850 entries. Built from
+       Paramdex/DS2S/Names/{ItemParam,WeaponParam,ArmorParam}.txt — see
+       Tools/build_ds2_item_names.py (one-shot generator). -->
+  <ItemGroup>
+    <EmbeddedResource Include="Resources\ds2_item_names.json">
+      <LogicalName>Bonfire.Service.Resources.ds2_item_names.json</LogicalName>
+    </EmbeddedResource>
+  </ItemGroup>
+
   <!-- Reuse the proven Win32 / Steam / patching code from the original Loader.
        Each file ships under namespace `Loader` and is pure logic (no WinForms
        refs). We link it with <Link> so Visual Studio shows them grouped under

@@ -72,6 +72,72 @@ class ServerLiveStatus {
       );
 }
 
+/// v2.9.5 Track C Phase 2A — typed snapshot of one peer's char_data
+/// (the local player AND any received network peers). Built from the
+/// `char_data.local_snapshot` / `char_data.peer_snapshots[]` blobs
+/// returned by `ds2_runtime.pose_bridge.status`. The Flutter UI binds
+/// directly to these fields to render the Connected Peers panel.
+class Ds2PeerCharData {
+  final int senderId;
+  final bool isPhantom;
+  final String name;
+  final int hpCurrent;
+  final int hpMaxBuff;
+  final int hpMaxBase;
+  final double equipLoadMax;
+  final double equipWeight;
+  final int zonePrimary;
+  final int zoneSecondary;
+  final double? ageMs; // null for the local snapshot
+  /// Decoded non-empty equipment rows: `{slot, index, id, name}`.
+  /// "Fists" / -1 / 0 slots are filtered out server-side already.
+  final List<Map<String, dynamic>> equipment;
+
+  Ds2PeerCharData({
+    required this.senderId,
+    required this.isPhantom,
+    required this.name,
+    required this.hpCurrent,
+    required this.hpMaxBuff,
+    required this.hpMaxBase,
+    required this.equipLoadMax,
+    required this.equipWeight,
+    required this.zonePrimary,
+    required this.zoneSecondary,
+    this.ageMs,
+    required this.equipment,
+  });
+
+  factory Ds2PeerCharData.fromJson(Map<String, dynamic> j, {int? localSenderIdOverride}) {
+    final eq = <Map<String, dynamic>>[];
+    final raw = j['equipment'];
+    if (raw is List) {
+      for (final e in raw) {
+        if (e is Map) {
+          eq.add(Map<String, dynamic>.from(e));
+        }
+      }
+    }
+    return Ds2PeerCharData(
+      senderId: (j['sender_id'] as num?)?.toInt() ?? (localSenderIdOverride ?? 0),
+      isPhantom: j['is_phantom'] as bool? ?? false,
+      name: j['name'] as String? ?? '',
+      hpCurrent: (j['hp_current'] as num?)?.toInt() ?? 0,
+      hpMaxBuff: (j['hp_max_buff'] as num?)?.toInt() ?? 0,
+      hpMaxBase: (j['hp_max_base'] as num?)?.toInt() ?? 0,
+      equipLoadMax: (j['equip_load_max'] as num?)?.toDouble() ?? 0.0,
+      equipWeight: (j['equip_weight'] as num?)?.toDouble() ?? 0.0,
+      zonePrimary: (j['zone_primary'] as num?)?.toInt() ?? 0,
+      zoneSecondary: (j['zone_secondary'] as num?)?.toInt() ?? 0,
+      ageMs: (j['age_ms'] as num?)?.toDouble(),
+      equipment: eq,
+    );
+  }
+
+  double get hpFraction => hpMaxBuff > 0 ? hpCurrent / hpMaxBuff : 0.0;
+  double get loadFraction => equipLoadMax > 0 ? equipWeight / equipLoadMax : 0.0;
+}
+
 class ServerConfig {
   String name;
   String description;
@@ -584,6 +650,15 @@ class AppState extends ChangeNotifier {
       const Duration(minutes: 30),
       (_) => refreshUpdateStatus(silent: true),
     );
+    // v2.9.5 Track C Phase 2A: poll the pose bridge every 2 s so the
+    // Connected Peers panel shows live HP / equipment for the local
+    // player and any received network peers. Polling is cheap (the
+    // RPC reads in-memory state — no DS2 process attach).
+    _charDataTimer = Timer.periodic(
+      const Duration(seconds: 2),
+      (_) => refreshPoseBridgeStatus(),
+    );
+    scheduleMicrotask(refreshPoseBridgeStatus);
   }
 
   // Local service version, populated from `ping`. Stays null only if
@@ -613,6 +688,50 @@ class AppState extends ChangeNotifier {
   final RpcClient _rpc;
   late final StreamSubscription<RpcNotification> _notificationSub;
   Timer? _updateTimer;
+  Timer? _charDataTimer;
+
+  // v2.9.5 Track C Phase 2A — live char_data snapshot from the pose
+  // bridge. Refreshed every 2 s by `_charDataTimer`. Null until the
+  // first poll completes successfully (DS2 not running, bridge not
+  // started, etc).
+  Ds2PeerCharData? localCharData;
+  List<Ds2PeerCharData> peerCharData = const [];
+  bool charDataShmOpen = false;
+  int charDataBroadcastCount = 0;
+  int charDataReceivedCount = 0;
+
+  Future<void> refreshPoseBridgeStatus() async {
+    try {
+      final raw = await _rpc.call('ds2_runtime.pose_bridge.status');
+      if (raw is! Map<String, dynamic>) return;
+      final cd = raw['char_data'];
+      if (cd is! Map<String, dynamic>) return;
+
+      charDataShmOpen = cd['shm_open'] as bool? ?? false;
+      charDataBroadcastCount = (cd['broadcast_count'] as num?)?.toInt() ?? 0;
+      charDataReceivedCount = (cd['received_count'] as num?)?.toInt() ?? 0;
+
+      final localMap = cd['local_snapshot'];
+      localCharData = (localMap is Map<String, dynamic>)
+          ? Ds2PeerCharData.fromJson(localMap)
+          : null;
+
+      final peers = <Ds2PeerCharData>[];
+      final peerList = cd['peer_snapshots'];
+      if (peerList is List) {
+        for (final p in peerList) {
+          if (p is Map<String, dynamic>) {
+            peers.add(Ds2PeerCharData.fromJson(p));
+          }
+        }
+      }
+      peerCharData = peers;
+      notifyListeners();
+    } catch (_) {
+      // Silent — the bridge may not be started yet or DS2 may be
+      // mid-transition. Next tick will retry.
+    }
+  }
 
   // Convenience accessors for screens.
   RpcClient get rpc => _rpc;
@@ -1178,6 +1297,7 @@ class AppState extends ChangeNotifier {
   @override
   void dispose() {
     _updateTimer?.cancel();
+    _charDataTimer?.cancel();
     _notificationSub.cancel();
     super.dispose();
   }

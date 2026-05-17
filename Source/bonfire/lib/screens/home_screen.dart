@@ -590,6 +590,7 @@ class _ServerListView extends StatelessWidget {
       padding: const EdgeInsets.fromLTRB(Sp.xl, Sp.lg, Sp.xl, Sp.lg),
       children: [
         const _UpdateBanner(),
+        const _ConnectedPeersPanel(),
         const _Ds2RuntimeBanner(),
         const _Ds2JoinTargetBanner(),
 
@@ -1183,6 +1184,260 @@ class _ChannelChip extends StatelessWidget {
             ],
           ),
         ),
+      ),
+    );
+  }
+}
+
+/// v2.9.5 Track C Phase 2A — Connected Peers panel.
+///
+/// Renders the live char_data round-trip — for each peer Bonfire has
+/// heard from over the BNCD UDP path, show name, HP bar, equip load,
+/// and equipped gear with names resolved server-side from Paramdex.
+///
+/// Polls via `AppState.refreshPoseBridgeStatus()` (every 2 s). Hides
+/// itself entirely when no local snapshot AND no peers — i.e. when
+/// the pose bridge isn't running, DS2 is at the main menu, or the
+/// user is solo. So the panel never adds noise; it only shows up
+/// when there's something real to show.
+class _ConnectedPeersPanel extends StatelessWidget {
+  const _ConnectedPeersPanel();
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    final local = app.localCharData;
+    final peers = app.peerCharData;
+    if (local == null && peers.isEmpty) return const SizedBox.shrink();
+
+    final p = Palette.of(context);
+    return Padding(
+      padding: const EdgeInsets.only(bottom: Sp.lg),
+      child: BonfireCard(
+        background: p.surfaceHi,
+        borderColor: p.accent.withOpacity(0.4),
+        padding: const EdgeInsets.all(Sp.lg),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            Row(
+              children: [
+                Icon(Icons.people_alt, color: p.accent, size: IS.md),
+                const SizedBox(width: Sp.sm),
+                Text(
+                  peers.isEmpty
+                      ? 'Connected players'
+                      : 'Connected players (${peers.length + (local != null ? 1 : 0)})',
+                  style: BT.heading.copyWith(color: p.textPrimary),
+                ),
+                const Spacer(),
+                if (app.charDataShmOpen)
+                  Tooltip(
+                    message: 'Shared memory pipe live — '
+                        'broadcast ${app.charDataBroadcastCount} / '
+                        'received ${app.charDataReceivedCount}',
+                    child: Icon(Icons.bolt, size: IS.sm, color: p.ok),
+                  ),
+              ],
+            ),
+            if (local != null) ...[
+              const SizedBox(height: Sp.md),
+              _PeerCharCard(data: local, isLocal: true),
+            ],
+            for (final peer in peers) ...[
+              const SizedBox(height: Sp.md),
+              _PeerCharCard(data: peer, isLocal: false),
+            ],
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _PeerCharCard extends StatelessWidget {
+  final Ds2PeerCharData data;
+  final bool isLocal;
+  const _PeerCharCard({required this.data, required this.isLocal});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    final hpFrac = data.hpFraction.clamp(0.0, 1.0);
+    final loadFrac = data.loadFraction.clamp(0.0, 2.0);
+    final overloaded = loadFrac > 1.0;
+
+    return Container(
+      padding: const EdgeInsets.all(Sp.md),
+      decoration: BoxDecoration(
+        color: BonfireColors.surface,
+        borderRadius: BorderRadius.circular(R.sm),
+        border: Border.all(
+          color: isLocal
+              ? p.accent.withOpacity(0.5)
+              : p.textMuted.withOpacity(0.3),
+          width: 1,
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Row(
+            children: [
+              Icon(
+                isLocal ? Icons.person : Icons.person_outline,
+                size: IS.sm,
+                color: isLocal ? p.accent : p.textSecondary,
+              ),
+              const SizedBox(width: Sp.xs),
+              Text(
+                data.name.isEmpty ? '(unnamed)' : data.name,
+                style: BT.body.copyWith(
+                  color: p.textPrimary,
+                  fontWeight: FontWeight.w600,
+                ),
+              ),
+              const SizedBox(width: Sp.sm),
+              if (isLocal)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: Sp.xs, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: p.accent.withOpacity(0.18),
+                    borderRadius: BorderRadius.circular(R.sm),
+                  ),
+                  child: Text('you',
+                      style: BT.caption.copyWith(color: p.accent)),
+                )
+              else if (data.isPhantom)
+                Container(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: Sp.xs, vertical: 2),
+                  decoration: BoxDecoration(
+                    color: p.textMuted.withOpacity(0.18),
+                    borderRadius: BorderRadius.circular(R.sm),
+                  ),
+                  child: Text('phantom',
+                      style: BT.caption.copyWith(color: p.textSecondary)),
+                ),
+              const Spacer(),
+              if (!isLocal && data.ageMs != null)
+                Text(
+                  '${(data.ageMs! / 1000).toStringAsFixed(1)}s ago',
+                  style: BT.monoMuted.copyWith(color: p.textMuted),
+                ),
+            ],
+          ),
+          const SizedBox(height: Sp.sm),
+          // HP bar
+          Row(
+            children: [
+              Icon(Icons.favorite, size: IS.sm, color: p.err),
+              const SizedBox(width: Sp.xs),
+              SizedBox(
+                width: 60,
+                child: Text(
+                  '${data.hpCurrent}/${data.hpMaxBuff}',
+                  style: BT.monoMuted.copyWith(color: p.textPrimary),
+                ),
+              ),
+              const SizedBox(width: Sp.sm),
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(R.sm),
+                  child: LinearProgressIndicator(
+                    value: hpFrac,
+                    minHeight: 6,
+                    backgroundColor: p.surfaceHi,
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      hpFrac < 0.3 ? p.err : p.ok,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: Sp.xs),
+          // Equip load
+          Row(
+            children: [
+              Icon(Icons.fitness_center, size: IS.sm, color: p.textMuted),
+              const SizedBox(width: Sp.xs),
+              SizedBox(
+                width: 60,
+                child: Text(
+                  '${data.equipWeight.toStringAsFixed(1)}/${data.equipLoadMax.toStringAsFixed(0)}',
+                  style: BT.monoMuted.copyWith(
+                    color: overloaded ? p.err : p.textMuted,
+                  ),
+                ),
+              ),
+              const SizedBox(width: Sp.sm),
+              Expanded(
+                child: ClipRRect(
+                  borderRadius: BorderRadius.circular(R.sm),
+                  child: LinearProgressIndicator(
+                    value: loadFrac.clamp(0.0, 1.0),
+                    minHeight: 4,
+                    backgroundColor: p.surfaceHi,
+                    valueColor: AlwaysStoppedAnimation<Color>(
+                      overloaded ? p.err : p.textSecondary,
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+          if (data.equipment.isNotEmpty) ...[
+            const SizedBox(height: Sp.md),
+            Wrap(
+              spacing: Sp.xs,
+              runSpacing: Sp.xs,
+              children: data.equipment.map((e) {
+                final slot = e['slot']?.toString() ?? '?';
+                final name = e['name']?.toString() ?? '?';
+                return _EquipmentChip(slot: slot, name: name);
+              }).toList(),
+            ),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _EquipmentChip extends StatelessWidget {
+  final String slot;
+  final String name;
+  const _EquipmentChip({required this.slot, required this.name});
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    return Container(
+      padding: const EdgeInsets.symmetric(
+          horizontal: Sp.sm, vertical: 2),
+      decoration: BoxDecoration(
+        color: p.surfaceHi,
+        borderRadius: BorderRadius.circular(R.sm),
+        border: Border.all(color: p.textMuted.withOpacity(0.3), width: 1),
+      ),
+      child: Row(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          Text(
+            slot,
+            style: BT.caption.copyWith(
+              color: p.textMuted,
+              fontWeight: FontWeight.w500,
+            ),
+          ),
+          const SizedBox(width: Sp.xs),
+          Text(
+            name,
+            style: BT.caption.copyWith(color: p.textPrimary),
+          ),
+        ],
       ),
     );
   }

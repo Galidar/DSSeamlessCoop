@@ -380,14 +380,46 @@ public static class Ds2NativePoseBridge
         };
     }
 
+    // v2.9.5 Track C Phase 2A — semantic labels for the 22-slot equipment
+    // array so the Flutter UI can render rows like "R1: Longsword" without
+    // having to hardcode the slot names client-side.
+    private static readonly string[] _equipmentSlotNames = new[]
+    {
+        "R1", "R2", "R3", "L1", "L2", "L3",       // 0..5  weapons
+        "Head", "Chest", "Arms", "Feet",          // 6..9  armor
+        "Ammo1", "Ammo2", "Ammo3", "Ammo4", "Ammo5", "Ammo6",  // 10..15 ammo
+        "Ring1", "Ring2", "Ring3", "Ring4",       // 16..19 rings
+        "Quickbar1", "Quickbar2",                 // 20..21 quick-items
+    };
+
+    // 3,400,000 = "Fists" in DS2 = the empty-hand sentinel. We don't want
+    // to clutter the UI with six "Fists" rows for unused weapon slots.
+    private const uint FistsSentinel = 3_400_000u;
+
+    private static JsonArray BuildEquipmentArray(uint[] slots)
+    {
+        var arr = new JsonArray();
+        for (int i = 0; i < slots.Length && i < _equipmentSlotNames.Length; i++)
+        {
+            var raw = slots[i];
+            if (raw == 0 || raw == 0xFFFFFFFF) continue;        // empty slot
+            if (raw == FistsSentinel) continue;                  // empty hand
+            arr.Add(new JsonObject
+            {
+                ["slot"]  = _equipmentSlotNames[i],
+                ["index"] = i,
+                ["id"]    = raw,
+                ["name"]  = Ds2ItemNames.ResolveOrFallback(raw, $"unknown({raw})"),
+            });
+        }
+        return arr;
+    }
+
     private static JsonObject BuildCharDataStatus()
     {
         var peers = new JsonArray();
         foreach (var (_, e) in _peerCharData)
         {
-            var slots = new JsonArray();
-            foreach (var v in e.EquipmentSlots)
-                slots.Add(v);
             peers.Add(new JsonObject
             {
                 ["sender_id"]    = e.SenderId,
@@ -401,16 +433,13 @@ public static class Ds2NativePoseBridge
                 ["zone_primary"]   = e.ZonePrimary,
                 ["zone_secondary"] = e.ZoneSecondary,
                 ["age_ms"]         = (DateTime.UtcNow - e.LastSeenUtc).TotalMilliseconds,
-                ["equipment_slots"] = slots,
+                ["equipment"]      = BuildEquipmentArray(e.EquipmentSlots),
             });
         }
 
         JsonObject? localObj = null;
         if (_latestLocalCharSnapshot is { } local)
         {
-            var slots = new JsonArray();
-            foreach (var v in local.EquipmentSlots)
-                slots.Add(v);
             localObj = new JsonObject
             {
                 ["is_phantom"]   = local.IsPhantom,
@@ -422,7 +451,7 @@ public static class Ds2NativePoseBridge
                 ["equip_weight"]   = local.EquipWeightCurrent,
                 ["zone_primary"]   = local.ZonePrimary,
                 ["zone_secondary"] = local.ZoneSecondary,
-                ["equipment_slots"] = slots,
+                ["equipment"]      = BuildEquipmentArray(local.EquipmentSlots),
             };
         }
 

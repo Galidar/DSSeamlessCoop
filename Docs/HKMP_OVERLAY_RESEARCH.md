@@ -1189,6 +1189,18 @@ self-sufficient without UI help.
    bumped 32 B → 40 B (binary-compatible because no external
    consumer assumed a size).*
 
+5b1. **Track C Phase 2A.2 — UI Connected Peers panel** —
+   *Shipped: tag `v2.9.5-experimental`.* The Flutter UI now polls
+   `ds2_runtime.pose_bridge.status` every 2 s and renders a
+   "Connected players" card showing each peer's name, HP bar,
+   equip-load bar, and equipped gear with names resolved from
+   the embedded Paramdex name table (1853 IDs, ~60 KB JSON
+   shipped as a BonfireService resource). The card hides itself
+   when nobody is online so it never adds noise. This makes the
+   char_data round-trip from v2.9.4 finally **visible** to the
+   user — proof that the IPC/UDP/SHM plumbing is working
+   end-to-end before we tackle the in-game phantom render.
+
 5b. **Track C Phase 2A — character-data sync over UDP + SHM** —
    *Shipped: tag `v2.9.4-experimental`.* New `Ds2CharDataReader`
    (built on the existing `Ds2MemoryReader` chain) extracts the
