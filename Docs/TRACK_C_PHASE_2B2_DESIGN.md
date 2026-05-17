@@ -329,6 +329,100 @@ These can be done either statically (Ghidra) or live (CE
 RTTI scan). The live approach is faster — DS2 is currently
 running per Phase 1 work, and RTTI gives us instant access.
 
+## 2026-05-17 update — Path E confirmed live in CE
+
+Session ran with DS2 PID 20116, base `0x7FF76F4F0000`. We disassembled
+`FUN_140698550` (the Frpg2PlayerImpl ctor) and extracted the
+vftable directly from its first instructions:
+
+```
+0x7FF76FB88566: 48 8D 05 4B 97 A7 00   lea rax,[0x7FF770601CB8]   ; vftable
+0x7FF76FB8856D: 48 89 01               mov [rcx],rax
+0x7FF76FB88570: 48 89 51 08            mov [rcx+0x08],rdx         ; heap base
+0x7FF76FB88574: 48 83 C1 10            add rcx,0x10
+0x7FF76FB88578: E8 ...                 call FUN_1406AF5F0          ; init AllStatus + RequestUpdate
+```
+
+**Frpg2PlayerImpl::vftable = `0x7FF770601CB8`**  (RVA `0x1111CB8`).
+
+Scanning all writable memory for qword pointers to that vftable
+returned **exactly ONE hit**: `0x7FF4B456F610`. That is the
+single Frpg2PlayerImpl instance (singleton inside Frpg2ClientImpl).
+
+### Live address map (this session)
+
+| Field | Address |
+|---|---|
+| Frpg2PlayerImpl | `0x7FF4B456F610` |
+| AllStatus #1 (current) | `0x7FF4B456F620` |
+| AllStatus #2 (snapshot/cached) | `0x7FF4B456F6A0` |
+| RequestUpdatePlayerCharacter | `0x7FF4B456F720` |
+| DLPlainLightMutex | `0x7FF4B456F778` |
+| counter=5 / interval=60 ✓ | `0x7FF4B456F7B0` |
+
+### AllStatus #1 sub-message map (this session)
+
+| Field | Proto # | Address | vftable |
+|---|---|---|---|
+| player_location | 1 | `0x7FF4B456FDA0` | `0x7FF770607528` |
+| player_status | 2 | `0x7FF4B456FE20` | |
+| item_using_info | 3 | `0x7FF4B45700A0` | |
+| stats_info | 4 | `0x7FF4B456FF20` | |
+| level_status (attributes) | 5 | `0x7FF4B45701C0` | |
+| physical_status | 6 | `0x7FF4B4570100` | `0x7FF770607838` |
+| weapon_status | 7 | `0x7FF4B4570240` | |
+| armor_status | 8 | `0x7FF4B45702C0` | |
+| server_side_status | 9 | NULL (server-set, expected) | |
+| equipment_info | 10 | `0x7FF4B4570320` | `0x7FF770607988` |
+
+### Layout finding — multi-inheritance
+
+DS2's MessageLite subclasses inherit from a SECOND base
+(`FSProtobufExtension::ToStringSettings`) whose vftable sits at
+**offset +0x10** in the derived class. Standard protoc layout is
+`vtbl + _unknown_fields_ + _has_bits_ + fields`. DS2's is
+`vtbl + heap_ptr + ToStringSettings_vtbl + ... + fields`. Field
+offsets shift accordingly (e.g. AllStatus's first sub-message
+`player_location_` is at **+0x28**, not +0x30 like vanilla protoc).
+
+This is the SAME layout the protoc-generated `.pb.cc` in our repo
+produces (the .proto has FSProtobufExtension declared as an option
+modifier in the same Generated/ tree), so binary compatibility is
+preserved. Reading AllStatus #1 sub-pointers in CE matched .pb.h
+field ordering exactly (verified live).
+
+### EquipmentInfo cross-check
+
+EquipmentInfo's repeated fields landed at:
+`+0x28: 0 (alignment)`
+`+0x30: ptr, size=6, total=6` (consumable slots)
+`+0x48: ptr, size=4, total=4` (left-hand weapons)
+`+0x60: ptr, size=4, total=4` (right-hand weapons)
+`+0x78: ptr, size=4, total=4` (rings)
+
+This matches RE Session 01's mapping of DS2's equipment slot
+groupings exactly.
+
+### Implication
+
+**Path E is unblocked.** Frpg2PlayerImpl is reachable via a single
+AOB scan (qword equal to Frpg2PlayerImpl::vftable). From there we
+walk +0x10 to AllStatus #1 and use the matching protoc-generated
+classes in `Source/Server.DarkSouls2/Protobuf/Generated/` to
+parse / mutate / serialize the player's character data.
+
+The remaining open question: how does AllStatus → compact-format
+(magic 0x39) conversion happen inside the engine? Either:
+- It's in a vtable slot of AllStatus (so we call it via the live
+  instance pointer), OR
+- It's a separate engine function that takes AllStatus + a triple
+  of ring buffers built elsewhere.
+
+Saponita-time observation (next step) should expose this — when
+DS2 fires the encoder, AllStatus #2 ought to update (snapshot of
+#1), the sequence_id at `Frpg2PlayerImpl + 0x1A0` should
+increment, and the wire bytes should briefly appear in heap.
+
 Old Path C-easiest's premise (in-repo `AllStatus` source =
 in-memory format DS2 reads) is **disproven**. The protobuf
 source in `Source/Server.DarkSouls2/Protobuf/Generated/` is
