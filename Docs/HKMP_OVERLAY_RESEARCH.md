@@ -1154,13 +1154,18 @@ self-sufficient without UI help.
 ### Implementation order (next sessions)
 
 1. **Doc update** — this section (just landed). Source of truth
-   for the plan-v3.
+   for the plan-v3. *Shipped: commit `f8cba44`.*
 2. **UI refactor — channels + remove Join** — Flutter changes
    only, ship as v2.9.0. No protocol change. Brother updates
-   normally, no breaking change.
+   normally, no breaking change. *Shipped: tag
+   `v2.9.0-experimental` (commit `cd3f1a2`).*
 3. **Track B — shared memory IPC** — BonfireService + Injector
    changes, ship as v2.9.1. Sub-10 ms latency. The "feel" jump
-   the user was after.
+   the user was after. *Shipped: tag `v2.9.1-experimental`
+   (commit `669afde`). Section `Local\BonfireDS2PoseV1`
+   (1088 bytes, seqlock); writer 30 Hz, reader 200 Hz.
+   Worst-case lag dropped from ~2 s file-poll → ≈26 ms
+   (network RTT + 5 ms poll + 16 ms render frame).*
 4. **Track A — item-driven discovery** — BonfireService LAN
    beacon + item handler wiring, ship as v2.9.2. UI's role
    shrinks to status display.
@@ -1168,6 +1173,39 @@ self-sufficient without UI help.
    (brother as saponita-summoned phantom), Ds2MemoryReader
    extensions, render hook FLVER submit. Multi-session research
    work, ships as v3.0.0 when ready.
+
+### Track B notes (v2.9.1 implementation)
+
+- **Shared section name**: `Local\BonfireDS2PoseV1`. The `Local\`
+  prefix scopes it to the Windows logon session so two RDP users
+  don't collide; within one session only one pose bridge runs at
+  a time (enforced by `Ds2NativePoseBridge.Lock`).
+- **Layout** (header 64 B + 16 peers × 64 B = 1088 B total):
+  - `header.magic` = `0x31535042` (`'BPS1'`)
+  - `header.version` = 1
+  - `header.generation` = seqlock counter (odd = writing,
+    even = stable). Writer bumps `n → n+1 → n+2`.
+  - `header.peer_count`, `header.writer_pid`,
+    `header.timestamp_ticks` for diagnostics.
+  - `peers[i]`: `sender_id (i64)`, `position[3]`,
+    `yaw_radians`, `color[3]`, `valid`, 24 bytes pad.
+- **Producer cadence**: `Ds2NativePoseBridge.InboxWriteInterval`
+  dropped 100 ms → 33 ms (30 Hz). `commands.jsonl` writes drop
+  to every 3rd tick (~10 Hz) as a debug/fallback channel.
+- **Consumer cadence**: `DS2_PoseShm::PollThreadProc` sleeps 5 ms
+  when the section is mapped (200 Hz), 250 ms when it isn't
+  (the section appears once `Ds2NativePoseBridge.Start` runs;
+  retrying every 5 ms before that would burn CPU at the menu).
+- **Falls back**: if `OpenFileMappingW` fails (e.g. service not
+  running, ACL mismatch), the existing 2 s commands.jsonl
+  poller still ferries `render.set_peer_poses` so the renderer
+  is never starved — just slower.
+- **Diagnostics** surfaced via `bridge.status()`:
+  `shm_open`, `shm_generation`, `shm_map_name`. On the Injector
+  side `DS2_PoseShm::SnapshotCount` / `TornReadCount` /
+  `LastGeneration` are queryable but not yet exported through
+  the runtime heartbeat (TODO if we need it during two-PC
+  debug).
 
 ## 14. Next concrete milestones
 
