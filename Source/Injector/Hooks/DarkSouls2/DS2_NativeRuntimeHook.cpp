@@ -4718,6 +4718,15 @@ namespace
                     DS2_RenderHook_GetMultiDrawFrames();
                 heartbeat["render_multi_draw_cubes_total"] =
                     DS2_RenderHook_GetMultiDrawCubesTotal();
+                // v2.9.12 Phase 4c — cube suppression diagnostics.
+                // _total = number of cubes skipped because an engine
+                // phantom slot already covered that peer. Should grow
+                // each frame the brother is summoned next to you via
+                // saponita.
+                heartbeat["render_cube_suppress_total"] =
+                    DS2_RenderHook_GetCubeSuppressTotal();
+                heartbeat["render_cube_suppress_checks"] =
+                    DS2_RenderHook_GetCubeSuppressChecks();
                 heartbeat["render_peer_table_count"] =
                     DS2_RenderHook_GetPeerCount();
                 float live[16] = {};

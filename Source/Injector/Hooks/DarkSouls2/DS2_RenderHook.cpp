@@ -943,6 +943,115 @@ float4 main(PSIn input) : SV_Target
         }
     }
 
+    // v2.9.12 Phase 4c — cube suppression when an engine-rendered
+    // phantom already covers a peer.
+    //
+    // Live RE session (2026-05-17) confirmed: when DS2 vanilla matchmaking
+    // summons a peer (e.g. brother via saponita white sign), the peer is
+    // allocated into slot 1..5 of the GameManagerImp slot pool and the
+    // engine renders him as a real character mesh. Phase 4a always also
+    // drew a cube for that same peer because the SHM peer table doesn't
+    // know about the engine slot — resulting in a redundant cube on top
+    // of the real body.
+    //
+    // Slot pool layout (live-verified):
+    //   gm = *(gm_imp_global)
+    //   slot_mgr = *(gm + 0x650)
+    //   for slot N in 0..5:
+    //     slot_record = slot_mgr + 0x5D0 + N * 0xA90
+    //     PlayerCtrl* = *(slot_record + 0xC8)
+    //     PlayerCtrl + 0x90..+0x9F = position vec4 (X, Y, Z, 1.0)
+    //
+    // We consider a slot "active" when its PlayerCtrl pointer is non-null
+    // AND the PlayerCtrl's vptr is inside the DS2 module range (rules out
+    // the empty pre-allocated 1 MB slot pools that have garbage vtable
+    // values pointing back into slot mgr scratch memory).
+    constexpr uintptr_t kSlotMgrPtrOffset    = 0x650;
+    constexpr uintptr_t kSlotRecordBaseOff   = 0x5D0;
+    constexpr uintptr_t kSlotRecordStride    = 0xA90;
+    constexpr uintptr_t kSlotPlayerCtrlField = 0xC8;
+    constexpr uintptr_t kPlayerCtrlPosOff    = 0x90;
+    constexpr int       kMaxPhantomSlots     = 6;
+    // 2.5 m squared = ~1.6 m radius. Empirically the SHM peer pose can
+    // lag the engine phantom by up to ~1 m during high-speed movement,
+    // so 1.6 m is the smallest radius that still catches the brother
+    // standing next to you while sprinting alongside.
+    constexpr float     kCoverRadiusSq       = 2.5f;
+
+    std::atomic<uint64_t> s_cube_suppress_total{0};
+    std::atomic<uint64_t> s_cube_suppress_checks{0};
+
+    bool PeerIsCoveredByActivePhantomSlot(
+        const float peer_pos[3])
+    {
+        s_cube_suppress_checks.fetch_add(1, std::memory_order_relaxed);
+
+        const uintptr_t gm_imp_global =
+            DS2_NativeRuntimeHook_GetGameManagerImpAddress();
+        if (gm_imp_global == 0) return false;
+
+        __try
+        {
+            uintptr_t gm = *reinterpret_cast<const uintptr_t*>(gm_imp_global);
+            if (gm == 0) return false;
+
+            uintptr_t slot_mgr = *reinterpret_cast<const uintptr_t*>(
+                gm + kSlotMgrPtrOffset);
+            if (slot_mgr == 0) return false;
+
+            const uintptr_t slot_base = slot_mgr + kSlotRecordBaseOff;
+            // Slot 0 is the LOCAL player — skip it; the local player is
+            // never represented in the SHM peer table (peer table holds
+            // OTHER Bonfire-coop participants only).
+            for (int i = 1; i < kMaxPhantomSlots; ++i)
+            {
+                const uintptr_t rec = slot_base + i * kSlotRecordStride;
+                uintptr_t pctrl = *reinterpret_cast<const uintptr_t*>(
+                    rec + kSlotPlayerCtrlField);
+                if (pctrl == 0) continue;
+
+                uintptr_t vptr = *reinterpret_cast<const uintptr_t*>(pctrl);
+                // Active PlayerCtrl vptr lives in the DS2 module .rdata
+                // region (~0x7FF7_xxxx_xxxx on Win10 ASLR). Empty
+                // pre-allocated slots have a vptr that points back into
+                // slot mgr scratch memory (~0x7FF4_xxxx_xxxx heap range),
+                // which is how we distinguish active from empty without
+                // hardcoding the exact PlayerCtrl::vftable address.
+                if (vptr < 0x7FF7'0000'0000ull ||
+                    vptr > 0x7FF8'0000'0000ull)
+                {
+                    continue;
+                }
+
+                const float px =
+                    *reinterpret_cast<const float*>(pctrl + kPlayerCtrlPosOff + 0);
+                const float py =
+                    *reinterpret_cast<const float*>(pctrl + kPlayerCtrlPosOff + 4);
+                const float pz =
+                    *reinterpret_cast<const float*>(pctrl + kPlayerCtrlPosOff + 8);
+
+                const float dx = peer_pos[0] - px;
+                const float dy = peer_pos[1] - py;
+                const float dz = peer_pos[2] - pz;
+                const float d2 = dx*dx + dy*dy + dz*dz;
+                if (d2 <= kCoverRadiusSq)
+                {
+                    s_cube_suppress_total.fetch_add(
+                        1, std::memory_order_relaxed);
+                    return true;
+                }
+            }
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            // Pointer chain hit a freed page during area transition or
+            // similar. Don't suppress — fall through to drawing the cube
+            // so the user still sees SOMETHING at the peer position.
+            return false;
+        }
+        return false;
+    }
+
     // Draw the screen-space overlay quad. Called from HookedPresent
     // BEFORE the chained Present. CRITICAL: save & restore every piece
     // of D3D11 immediate-context state we touch so the lighting engine
@@ -1102,6 +1211,19 @@ float4 main(PSIn input) : SV_Target
                         {
                             const PeerPoseEntry& src = s_peer_table[i];
                             if (!src.valid) continue;
+                            // v2.9.12 Phase 4c — cube suppression. If
+                            // DS2's vanilla matchmaking has already
+                            // summoned this peer into a phantom slot
+                            // (e.g. brother via saponita), the engine is
+                            // rendering his real character mesh at the
+                            // same world position. Drawing a cube on top
+                            // is redundant and visually noisy — skip it.
+                            //
+                            // The check is a pure-read of the slot pool
+                            // walked from the gm AOB anchor; no hooks,
+                            // no writes, no anti-cheat surface.
+                            if (PeerIsCoveredByActivePhantomSlot(src.position))
+                                continue;
                             CubeDraw& d = draws[draw_count++];
                             d.pos[0] = src.position[0];
                             d.pos[1] = src.position[1];
@@ -1759,4 +1881,14 @@ uint64_t DS2_RenderHook_GetMultiDrawFrames()
 uint64_t DS2_RenderHook_GetMultiDrawCubesTotal()
 {
     return s_multi_draw_cubes_total.load(std::memory_order_relaxed);
+}
+
+uint64_t DS2_RenderHook_GetCubeSuppressTotal()
+{
+    return s_cube_suppress_total.load(std::memory_order_relaxed);
+}
+
+uint64_t DS2_RenderHook_GetCubeSuppressChecks()
+{
+    return s_cube_suppress_checks.load(std::memory_order_relaxed);
 }

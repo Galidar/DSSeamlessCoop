@@ -141,3 +141,9 @@ void DS2_RenderHook_SetPeerPoses(const DS2_PeerPose* poses, int count);
 int      DS2_RenderHook_GetPeerCount();
 uint64_t DS2_RenderHook_GetMultiDrawFrames();
 uint64_t DS2_RenderHook_GetMultiDrawCubesTotal();
+
+// v2.9.12 Phase 4c cube-suppression diagnostics. _Total = number of
+// cube draws skipped because an active phantom slot covered the peer.
+// _Checks = number of peer entries processed (denominator for ratio).
+uint64_t DS2_RenderHook_GetCubeSuppressTotal();
+uint64_t DS2_RenderHook_GetCubeSuppressChecks();
