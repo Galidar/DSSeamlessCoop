@@ -423,6 +423,79 @@ DS2 fires the encoder, AllStatus #2 ought to update (snapshot of
 #1), the sequence_id at `Frpg2PlayerImpl + 0x1A0` should
 increment, and the wire bytes should briefly appear in heap.
 
+## 2026-05-17 update (later) — saponita-time observation results
+
+Live session with user actually placing a saponita sign. Snapshotted
+Frpg2PlayerImpl pre- and post-placement. Result:
+
+### AllStatus #1 vs AllStatus #2 are NOT the same thing
+
+`AllStatus #2` is **not a snapshot of AllStatus #1**. It contains
+a **different set of fields** with different content:
+
+| Field | AllStatus #1 (current/live) | AllStatus #2 (advertised) |
+|---|---|---|
+| `_has_bits_` | `0x1F` (all 5 fields set) | `0x18` (only `position` + `unknown_5`) |
+| `online_area_id` | 10310000 (real zone) | 0 |
+| `cell_id` | 29359104 | 0 |
+| `position*` | live Vector (X=3.84, Y=-18.52, Z=207.07) | different Vector (X=1.81, Y=-18.52, Z=208.15) |
+| `unknown_5` | -3.06738 | 0.4781 |
+
+The X/Z difference of ~2 units with identical Y (same ground level)
+is consistent with the **saponita sign drop offset** — the sign
+materializes where the player was standing when they used the
+soapstone, while the player continues moving.
+
+### Interpretation
+
+- **AllStatus #1** = the engine's **internal authoritative snapshot
+  of the local player** — full data, kept updated each tick.
+- **AllStatus #2** = the **sign-placement advertisement message**.
+  Minimal: only position and unknown_5. This is what travels to the
+  matchmaking server when the player drops a white sign.
+
+That contradicts the Ghidra-time assumption that #2 was a "previous
+snapshot of #1." The two serve different network roles.
+
+### Implications for phantom spawn
+
+The PHANTOM SUMMON receive path consumes the **compact 0x39 format**
+buffer (FUN_1401A1650's inner). Neither AllStatus #1 nor AllStatus
+#2 is that format — both are full protoc MessageLite objects.
+
+So for engine-cooperative phantom spawn we still need either:
+- Path B: a captured inbound compact-format template (what v2.9.11's
+  spawn-entry capture hook is built to do).
+- Path D: find the AllStatus → compact converter (FUN_1401A29C0 reads
+  a "ring-buffer triple"; that triple is built from the local
+  player's live data somewhere upstream — likely the ChrIns/PlayerCtrl
+  rather than the AllStatus).
+
+AllStatus is server-side scaffolding for the local→server message
+flow. The phantom spawn pipeline uses a different in-memory
+representation that gets transmitted unchanged (compact 0x39).
+
+**Revised strategy**:
+- Path E (Frpg2PlayerImpl access) is useful for **monitoring**
+  what the local player advertises and for understanding the
+  outbound message flow, but it's NOT the bridge to phantom spawn.
+- The phantom spawn pipeline still requires Path B (capture &
+  replay) — v2.9.11's hook will capture a real compact-format
+  template when one fires.
+
+### What this DOES prove
+
+1. **DS2's in-memory protoc layout matches the in-repo `.pb.h`** —
+   subdivision pointers at predicted offsets, scalar fields decode
+   correctly (online_area_id, position Vector with valid XYZ
+   floats, has_bits mask).
+2. **Frpg2PlayerImpl is a singleton** — exactly one instance in
+   memory, locatable via vftable AOB scan.
+3. **AllStatus #2 update is observable** — we can detect saponita
+   sign drop / network advertisement events by polling AllStatus
+   #2's position Vector. Could be a useful trigger for Bonfire to
+   correlate against signage activity.
+
 Old Path C-easiest's premise (in-repo `AllStatus` source =
 in-memory format DS2 reads) is **disproven**. The protobuf
 source in `Source/Server.DarkSouls2/Protobuf/Generated/` is
