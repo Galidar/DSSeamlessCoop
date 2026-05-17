@@ -133,7 +133,7 @@ that the 3 validators consume. Estimated 4-8 h of additional RE.
 This trades one constraint (need one vanilla summon ever, to
 capture a template) for a massive reduction in RE complexity.
 
-### Path C — hook the upstream deserializer
+### Path C — hook the upstream deserializer (original variant)
 
 Find the function that **takes a `PlayerCharacterData`
 protobuf bytestream and builds the internal struct**. That
@@ -142,13 +142,89 @@ from the wire format). Call it with our SHM peer's serialized
 data. Cleanest architecturally but requires finding +
 understanding that deserializer — likely 2-4h of RE.
 
-## Recommendation
+### 🎯 Path C-easiest — REUSE DS2'S OWN PROTOBUF SOURCE ⭐⭐⭐
 
-**Path B for the first working prototype**. Once we have a
-template captured, we can spawn brother any time without
-saponita matching. After it's working visually, do Path C as
-the production-grade path so we're not dependent on a captured
-template (the protobuf layout could change between game patches).
+**Massive shortcut discovered while investigating Path C: the DS2
+protobuf source is already in our repo.** Path
+`Source/Server.DarkSouls2/Protobuf/Generated/DS2_Frpg2PlayerData.pb.{h,cc}`
+contains every class DS2's binary uses internally:
+
+```
+AllStatus       (composite — contains all sub-records)
+ArmorStatus     EquipmentInfo    ItemUsingInfo    LevelStatus
+PhantomTypeCount PhysicalStatus  PlayerLocation   PlayerStatus
+ServerSideStatus StatsInfo       Vector           WeaponStatus
+DateTime        PlayerStatus_Phantom_leave_at      StatsInfo_Bonfire_levels
+```
+
+These are the exact protoc-generated C++ classes DS2.exe links
+against. The names match what we found embedded as strings in
+the binary — same .proto, same protoc version, identical
+in-memory layout.
+
+Plus we also have the matching protobuf runtime in the repo at
+`Source/ThirdParty/protobuf-2.6.1rc1/` — the SAME version DS2
+was built with.
+
+This eliminates the need to reverse-engineer the deserializer
+or hand-encode the wire bytes: we can compile this code directly
+into the Injector and build `AllStatus` instances natively.
+
+**Path C-easiest implementation**:
+
+1. **Compile `DS2_Frpg2PlayerData.pb.cc` + `protobuf-2.6.1rc1` into
+   the Injector DLL** (mirror the existing build wiring for those
+   files — they're already in the `Server.DarkSouls2` project; add
+   them to `Injector` via CMake `<Compile Include>`).
+2. **Build an `AllStatus` instance** in C++ from our SHM peer data:
+   - `physical_status` ← HP triple from SHM
+   - `equipment_info` ← 22-slot equipment array from SHM
+   - `level_status` ← (when we map it)
+   - `player_location` ← position from pose UDP
+3. **Allocate Ds2PhantomRequest wrapper + inner sub-struct** on the
+   heap.
+4. **Set inner+0x08 = &our_AllStatus**, inner+0x14 = synthetic
+   player_id derived from SHM sender_id.
+5. **Set wrapper+0x29 = 0** (NetworkPlayer white phantom).
+6. **Set wrapper+0x20 = &inner**, wrapper+0x08 = 0 (state=spawn),
+   wrapper+0x18 = 0, wrapper+0x1C = 0xFFFFFFFF, wrapper+0x28 = 0.
+7. **Resolve `world_mgr`** via `Ds2MemoryReader.TryReadWorldMgr()`
+   (already shipped in v2.9.10).
+8. **Call** `((SpawnEntry)(ds2_base + 0x1A1650))(&wrapper)` from
+   the Injector.
+9. **Read wrapper+0x10** — the spawned `PlayerCtrl*`. Null = engine
+   rejected (preconditions in `FUN_1401A0DC0` failed).
+
+**Risks** (none are blockers, all have known mitigations):
+
+- **C++ ABI / vtable mismatch**: our compiled
+  `MessageLite::~MessageLite` is at a different vtable index than
+  DS2's if compilers differ. Mitigation: `FUN_1401A2680` reads raw
+  memory offsets (+0x1F0, +0x1F2, +0x02), NOT virtual dispatch, so
+  the vtable mismatch doesn't matter for the spawn-time reads we
+  care about. Destructors run when the engine cleans up the
+  phantom; if those crash we add a passthrough deleter.
+- **Heap-allocator mismatch**: DS2's spawn pipeline might free the
+  inner data later via its own allocator. If our heap pointer
+  isn't from `FUN_140833320`, the free would corrupt. Mitigation:
+  allocate inner via `FUN_140833320` directly. We already know its
+  signature.
+- **Protobuf runtime version drift**: confirmed mitigated — we
+  have `Source/ThirdParty/protobuf-2.6.1rc1/`.
+
+## Recommendation (final)
+
+**Go with Path C-easiest**. We have every piece needed in the
+repo: the exact protobuf source DS2 was built from, the exact
+runtime library, and the spawn-chain entry point + wrapper-
+struct map already documented. Estimated effort to first
+working spawn: ~2-3 h focused implementation (mostly build
+wiring + struct field population + the synthetic-spawn test).
+
+This skips the template-capture dependency Path B would have
+introduced and is genuinely architecturally clean — same code
+DS2 uses internally, just driven from us instead of from the
+network.
 
 ## State machine — `FUN_1401A0D20` dispatcher
 
