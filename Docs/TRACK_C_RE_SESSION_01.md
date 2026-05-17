@@ -211,6 +211,62 @@ Likely buff timers / active-effect IDs.
 10 packed `(u16 high, u16 low)` values that **change frame-to-frame**.
 Not equipment. Likely buff timers / active-effect IDs.
 
+## Additional fields discovered (session-01 extended)
+
+### HP triple — `PlayerCtrl + 0x168 / 0x170 / 0x174`
+
+| Offset | Field | Local | Phantom |
+|---|---|---|---|
+| +0x168 | current HP (u32) | 811 | 1224 |
+| +0x170 | max HP w/ buffs (u32) | 821 | 1304 |
+| +0x174 | base max HP (u32) | 822 | 1305 |
+
+The (max − current) gap is the hollow penalty / recent damage taken.
+Base max HP is what the character would have at full unhollow with
+no ring/buff bonuses; max HP w/ buffs is the effective ceiling.
+
+### Equip load — `PlayerCtrl + 0x1AC..+0x1C0` (4 floats)
+
+| Offset | Field | Local | Phantom |
+|---|---|---|---|
+| +0x1AC | max equip load (f32) | 920.0 | 1000.0 |
+| +0x1B4 | max equip load duplicate | 920.0 | 1000.0 |
+| +0x1B8 | current equipped weight | 501.8 | 578.5 |
+| +0x1C0 | current equipped weight duplicate | 501.8 | 578.5 |
+
+Useful as a sanity check that the character data we mirrored is the
+right character (weight should match summed equipment weights).
+
+### Animation phase — `PlayerCtrl + 0xC0 sub-module + 0x2B8` (and mirrors)
+
+A normalized `0..1` float that resets when a new animation starts.
+Confirmed during a roll test: was at `0.973` mid-idle, jumped to
+`0.330` mid-roll. Mirrored at:
+
+  - `+0xC0 sub + 0x2B8`
+  - `+0xC0 sub + 0x3F8`
+  - `+0xF0 sub + 0x028`
+  - `+0xF0 sub + 0x168`
+
+The actual `animation_id` u32 (TAE ID) is **NOT yet identified** —
+needs a follow-up session using CE's "find what writes to this
+address" data-breakpoint on the phase float, which leads to the
+animation update function from where we trace back the anim_id
+register/source.
+
+### Game time counter — multiple mirrors
+
+A `f32` counter that advances at game-realtime rate (1.0 / second
+real-time, when game is unpaused). Mirrors at:
+
+  - `+0xC0 sub + 0x2E0`, `+0x3F8`
+  - `+0xF0 sub + 0x050`, `+0x190`, `+0x3D0`
+  - `+0x100 sub + 0x080`, `+0x0A0`, `+0x1C0`, `+0x1D0`, `+0x2C0`
+
+All show the same value (e.g. `71.531s` then `73.400s` after 1.9s
+real time). NOT animation-specific. Useful as "how long has this
+character been alive in the current run".
+
 ## Static addresses (for the BonfireService Ds2CharDataReader)
 
 Once we confirm offsets, these are the AOB anchors / pointer-chain
@@ -224,16 +280,49 @@ intermediate:    *(gm-instance + 0x18)
 PlayerCtrl_local:    *(intermediate + 0x50)
 PlayerCtrl_phantom1: *(intermediate + 0x58)   // and +0x60..? for more slots
 
-// Locale-able fields confirmed:
-chr_name_utf16:  *(PlayerCtrl + 0x118)            // first u16 == 'P' (local) / 'N' (network)
-position_xyz:    PlayerCtrl + 0x90                // float[3]
-position_w:      PlayerCtrl + 0x9C                // f32 == 1.0 (homogeneous marker)
-zone_primary:    *(PlayerCtrl + 0xC0) + 0x13C     // u32 PlayAreaParam ID
-zone_secondary:  *(PlayerCtrl + 0xC0) + 0x140     // u32 PlayAreaParam ID
+// Confirmed fields (Session 01):
 
-// Candidate arrays (semantics TBD — needs equip/unequip test):
-per_char_array1: *(PlayerCtrl + 0xE0) + 0x3E0     // stride 20: (u32,u32,f32,_,_)
-state_array:     *(PlayerCtrl + 0x268) + 0x1C8    // packed (u16,u16) — frame-changing
+// === Identity ===
+chr_name_utf16:    *(PlayerCtrl + 0x118)            // UTF-16 LE; first u16 == 'P'(0x50)=local, 'N'(0x4E)=network phantom
+
+// === Spatial ===
+position_xyz:      PlayerCtrl + 0x90                // float[3]
+position_w:        PlayerCtrl + 0x9C                // f32 == 1.0 (homogeneous marker — sanity check)
+
+// === Stats ===
+hp_current:        PlayerCtrl + 0x168               // u32
+hp_max_w_buffs:    PlayerCtrl + 0x170               // u32 (effective max incl. ring bonuses)
+hp_max_base:       PlayerCtrl + 0x174               // u32 (base max without buffs)
+
+equip_load_max:    PlayerCtrl + 0x1AC               // f32 (also mirrored at +0x1B4)
+equip_weight_cur:  PlayerCtrl + 0x1B8               // f32 (also mirrored at +0x1C0)
+
+// === World context ===
+zone_primary:      *(PlayerCtrl + 0xC0) + 0x13C     // u32 PlayAreaParam ID (e.g. 101000 = Forest of Fallen Giants)
+zone_secondary:    *(PlayerCtrl + 0xC0) + 0x140     // u32 PlayAreaParam ID (sub-zone)
+
+// === Equipment loadout (22 slots × 20 bytes each, stride 0x14) ===
+//   Per-slot layout: u32 item_id, u32 flag/count, u32, u32, f32 weight
+//   item_id is the direct Paramdex ID — no decoding needed.
+//   Empty hand slot = 3400000 (= "Fists"), not -1.
+equip_array_base:  *(PlayerCtrl + 0xE0) + 0x37C
+//   slot 0:  +0x37C  right-hand weapon 1 (R1)
+//   slot 1:  +0x390  right-hand weapon 2 (R2)
+//   slot 2:  +0x3A4  right-hand weapon 3 (R3)
+//   slot 3:  +0x3B8  left-hand weapon 1 (L1)
+//   slot 4:  +0x3CC  left-hand weapon 2 (L2)
+//   slot 5:  +0x3E0  left-hand weapon 3 (L3)
+//   slot 6:  +0x3F4  head armor
+//   slot 7:  +0x408  chest armor
+//   slot 8:  +0x41C  arms armor
+//   slot 9:  +0x430  feet armor
+//   slots 10–15: +0x444..+0x4A8  ammo (arrow×2 + bolt×2 + reserved×2)
+//   slots 16–19: +0x4BC..+0x4F8  rings 1–4
+//   slots 20–22: +0x50C..+0x534  quickbar consumables 1–3
+
+// === Animation (partial — full anim_id field deferred to Session 02) ===
+anim_phase:        *(PlayerCtrl + 0xC0) + 0x2B8     // f32 normalized 0..1 (mirrored at +0x3F8 and +0xF0 sub +0x028 / +0x168)
+game_time:         *(PlayerCtrl + 0xC0) + 0x2E0     // f32 real-time seconds (many mirrors)
 ```
 
 ## What's next
