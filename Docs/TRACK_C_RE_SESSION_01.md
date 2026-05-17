@@ -325,6 +325,30 @@ anim_phase:        *(PlayerCtrl + 0xC0) + 0x2B8     // f32 normalized 0..1 (mirr
 game_time:         *(PlayerCtrl + 0xC0) + 0x2E0     // f32 real-time seconds (many mirrors)
 ```
 
+## ⚠️ Anti-cheat detection on hardware breakpoints — DO NOT RETRY
+
+End-of-session-01 finding: setting a CE hardware **write breakpoint**
+on `*(PlayerCtrl + 0xC0) + 0x2B8` (the animation phase float)
+triggered DS2's FROM anti-cheat — the game booted the player back
+to the main menu within seconds. The HW debug registers (DR0..DR3)
+are checked by FROM's anti-cheat layer when online services are
+active. Plain `read_memory` calls remain undetected (we've made
+hundreds in this session); only the BP triggered the kick.
+
+For animation hunt and any future writer-tracing work on DS2:
+
+- **AVOID** `set_data_breakpoint` while DS2 is online with the
+  brother summoned.
+- **PREFER** DBVM watches (`start_dbvm_watch`) — they run in
+  hypervisor ring -1, invisible to user-mode anti-cheat. The
+  trade-off is the user must have the DBVM driver loaded (a
+  separate one-time install).
+- **OR** do it via static analysis: open DarkSoulsII.exe in Ghidra,
+  find the function that writes to the phase offset
+  (`*PlayerCtrl + 0xC0_sub + 0x2B8`), and read off the anim_id
+  source register from the disassembly. Doesn't need the game
+  running and can't possibly trigger AC.
+
 ## What's next
 
 1. **In-game equip/unequip test** (needs user) — remove helmet,
