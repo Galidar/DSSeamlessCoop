@@ -30,6 +30,7 @@
 
 using System.Diagnostics;
 using System.Runtime.InteropServices;
+using System.Text;
 
 namespace Bonfire.Service.Modules;
 
@@ -124,6 +125,202 @@ public static class Ds2MemoryReader
     public static void Release()
     {
         lock (Lock) { ReleaseLocked(); }
+    }
+
+    // ── Track C Phase 2A: char_data snapshot ─────────────────────────
+    //
+    // All offsets validated live on DS2 SOTFS Steam build 2026-05-17
+    // (see Docs/TRACK_C_RE_SESSION_01.md). Reads in this section walk
+    // off the same gm chain as TryReadHostPose:
+    //
+    //   gm_imp_global -> gm -> +0x18 -> +0x50 = local PlayerCtrl
+    //                                  +0x58 = first phantom slot
+    //
+    // PlayerCtrl + 0x90       : position (already read by TryReadHostPose)
+    // PlayerCtrl + 0x118      : ptr to per-character sub-module whose
+    //                           first 0x40 bytes are the UTF-16 name
+    //                           string ("Player_*" or "NetworkPlayer_*")
+    // PlayerCtrl + 0x168/+0x170/+0x174 : current/max-w-buffs/base-max HP
+    // PlayerCtrl + 0x1AC      : max equip load (f32)
+    // PlayerCtrl + 0x1B8      : current equipped weight (f32)
+    // *(PlayerCtrl + 0xC0) + 0x13C / + 0x140 : two PlayArea zone IDs
+    // *(PlayerCtrl + 0xE0) + 0x37C : 22-slot equipment array, stride
+    //                           20 bytes (slot 0 = R1, ..., slot 9 =
+    //                           feet armor, ..., slot 21 = quickbar)
+
+    public sealed record Ds2CharSnapshot(
+        bool IsPhantom,           // true if Name starts with 'N' (NetworkPlayer)
+        string Name,              // UTF-16 decoded, "Player_0001" / "NetworkPlayer_0010"
+        float Px,
+        float Py,
+        float Pz,
+        uint HpCurrent,
+        uint HpMaxWithBuffs,
+        uint HpBaseMax,
+        float EquipLoadMax,
+        float EquipWeightCurrent,
+        uint ZonePrimary,         // PlayAreaParam ID
+        uint ZoneSecondary,
+        uint[] EquipmentSlots);   // length 22; item_id per slot
+
+    public const int EquipmentSlotCount = 22;
+    public const int EquipmentSlotStride = 0x14; // 20 bytes per slot
+    public const int EquipmentArrayBaseOff = 0x37C;
+
+    /// <summary>
+    /// Read the local host's full char_data snapshot in one call. Returns
+    /// null when DS2 isn't running or any chain pointer is null (e.g.
+    /// during area transitions). Heavy reads (the equipment array is
+    /// ~440 bytes + sub-module dereferences) — call at ~1 Hz, not on
+    /// the pose hot path.
+    /// </summary>
+    public static Ds2CharSnapshot? TryReadHostCharData()
+    {
+        return TryReadCharDataFromSlot(0x50);
+    }
+
+    /// <summary>
+    /// Read char_data for the phantom in <paramref name="slotOffset"/>
+    /// (e.g. 0x58 for the first summoned phantom, 0x60 for the second).
+    /// Returns null when that slot is empty.
+    /// </summary>
+    public static Ds2CharSnapshot? TryReadPhantomCharData(int slotOffset)
+    {
+        if (slotOffset < 0x50) return null;
+        return TryReadCharDataFromSlot(slotOffset);
+    }
+
+    private static Ds2CharSnapshot? TryReadCharDataFromSlot(int slotOffset)
+    {
+        var ds2 = Process.GetProcessesByName("DarkSoulsII").FirstOrDefault();
+        if (ds2 == null) return null;
+
+        lock (Lock)
+        {
+            if (_ds2Pid != ds2.Id)
+            {
+                ReleaseLocked();
+                if (!AttachLocked(ds2)) return null;
+            }
+            if (_gmImpGlobalAddr == IntPtr.Zero)
+            {
+                if (!ResolveGmImpGlobalLocked(ds2)) return null;
+            }
+
+            if (!TryReadUInt64(_gmImpGlobalAddr, out var gm) || gm == 0) return null;
+            if (!TryReadUInt64((IntPtr)((long)gm + 0x18), out var inter) || inter == 0) return null;
+            if (!TryReadUInt64((IntPtr)((long)inter + slotOffset), out var chr) || chr == 0) return null;
+
+            // Position (sanity-checked).
+            if (!TryReadFloat3((IntPtr)((long)chr + 0x90), out var px, out var py, out var pz)) return null;
+            if (!IsSane(px) || !IsSane(py) || !IsSane(pz)) return null;
+
+            // HP triple.
+            if (!TryReadUInt32((IntPtr)((long)chr + 0x168), out var hpCur)) return null;
+            if (!TryReadUInt32((IntPtr)((long)chr + 0x170), out var hpMaxBuff)) return null;
+            if (!TryReadUInt32((IntPtr)((long)chr + 0x174), out var hpMaxBase)) return null;
+
+            // Equip load floats.
+            if (!TryReadFloat((IntPtr)((long)chr + 0x1AC), out var elMax)) return null;
+            if (!TryReadFloat((IntPtr)((long)chr + 0x1B8), out var elCur)) return null;
+
+            // Name string — sub-module pointer at +0x118; first 0x40 bytes
+            // of the sub-module are the UTF-16 LE name (NUL-terminated).
+            string name = "";
+            bool isPhantom = false;
+            if (TryReadUInt64((IntPtr)((long)chr + 0x118), out var namePtr) && namePtr != 0)
+            {
+                var nameBuf = new byte[0x40];
+                if (ReadProcessMemory(_processHandle, (IntPtr)namePtr,
+                        nameBuf, (IntPtr)0x40, out var nameRead) &&
+                    (int)nameRead == 0x40)
+                {
+                    // First u16 tells us local vs phantom — 'P' (0x50) or 'N' (0x4E).
+                    isPhantom = nameBuf[0] == 0x4E;
+                    name = DecodeUtf16NulTerminated(nameBuf);
+                }
+            }
+
+            // Zone IDs (via *(PlayerCtrl + 0xC0) + 0x13C/+0x140).
+            uint zonePrimary = 0;
+            uint zoneSecondary = 0;
+            if (TryReadUInt64((IntPtr)((long)chr + 0xC0), out var zonePtr) && zonePtr != 0)
+            {
+                _ = TryReadUInt32((IntPtr)((long)zonePtr + 0x13C), out zonePrimary);
+                _ = TryReadUInt32((IntPtr)((long)zonePtr + 0x140), out zoneSecondary);
+            }
+
+            // Equipment array — *(PlayerCtrl + 0xE0) + 0x37C, 22 slots × 20 bytes.
+            var slots = new uint[EquipmentSlotCount];
+            if (TryReadUInt64((IntPtr)((long)chr + 0xE0), out var equipSubPtr) && equipSubPtr != 0)
+            {
+                var equipBuf = new byte[EquipmentSlotCount * EquipmentSlotStride];
+                if (ReadProcessMemory(_processHandle,
+                        (IntPtr)((long)equipSubPtr + EquipmentArrayBaseOff),
+                        equipBuf, (IntPtr)equipBuf.Length, out var er) &&
+                    (int)er == equipBuf.Length)
+                {
+                    for (int i = 0; i < EquipmentSlotCount; i++)
+                    {
+                        slots[i] = BitConverter.ToUInt32(equipBuf, i * EquipmentSlotStride);
+                    }
+                }
+            }
+
+            return new Ds2CharSnapshot(
+                isPhantom, name,
+                px, py, pz,
+                hpCur, hpMaxBuff, hpMaxBase,
+                elMax, elCur,
+                zonePrimary, zoneSecondary,
+                slots);
+        }
+    }
+
+    private static bool TryReadUInt32(IntPtr addr, out uint value)
+    {
+        value = 0;
+        var buf = new byte[4];
+        if (!ReadProcessMemory(_processHandle, addr, buf, (IntPtr)4, out var read) ||
+            (int)read != 4)
+        {
+            return false;
+        }
+        value = BitConverter.ToUInt32(buf, 0);
+        return true;
+    }
+
+    private static bool TryReadFloat(IntPtr addr, out float value)
+    {
+        value = 0f;
+        var buf = new byte[4];
+        if (!ReadProcessMemory(_processHandle, addr, buf, (IntPtr)4, out var read) ||
+            (int)read != 4)
+        {
+            return false;
+        }
+        value = BitConverter.ToSingle(buf, 0);
+        return true;
+    }
+
+    private static string DecodeUtf16NulTerminated(byte[] buf)
+    {
+        // Walk u16 pairs until we hit a NUL or the buffer end.
+        int len = 0;
+        while (len + 1 < buf.Length)
+        {
+            if (buf[len] == 0 && buf[len + 1] == 0) break;
+            len += 2;
+        }
+        if (len == 0) return "";
+        try
+        {
+            return Encoding.Unicode.GetString(buf, 0, len);
+        }
+        catch
+        {
+            return "";
+        }
     }
 
     // ── Internals ────────────────────────────────────────────────────

@@ -56,9 +56,37 @@ namespace Bonfire.Service.Modules;
 public static class Ds2NativePoseBridge
 {
     // ── Wire constants ───────────────────────────────────────────────
-    private const uint Magic = 0x42_4E_43_42u; // 'BNCB'
+    private const uint Magic = 0x42_4E_43_42u; // 'BNCB' — pose packet
     private const byte WireVersion = 1;
     private const int PacketSize = 32;
+
+    // Track C Phase 2A: char_data packet. Same envelope (magic + version
+    // + sequence + sender_id) as the pose packet, then the heavier
+    // fields. Sent at ~1 Hz from the new char-data publisher task; the
+    // listener dispatches by magic.
+    //
+    // Wire format (little-endian, fixed 200 bytes):
+    //
+    //   offset  size  field
+    //     0       4   magic = 0x42_4E_43_44 ('BNCD')
+    //     4       1   version = 1
+    //     5       1   reserved
+    //     6       2   sequence
+    //     8       8   sender_id
+    //    16       4   hp_current
+    //    20       4   hp_max_with_buffs
+    //    24       4   hp_max_base
+    //    28       4   equip_load_max          (f32)
+    //    32       4   equip_weight_current    (f32)
+    //    36       4   zone_primary
+    //    40       4   zone_secondary
+    //    44       4   is_phantom              (uint 0/1)
+    //    48      64   name UTF-16 LE          (32 wchar, NUL-pad)
+    //   112      88   equipment[22] × u32 item_id
+    private const uint CharDataMagic = 0x42_4E_43_44u; // 'BNCD'
+    private const int CharDataPacketSize = 200;
+    private const int CharDataNameBytes = 64;
+    private const int CharDataSlotCount = Ds2MemoryReader.EquipmentSlotCount; // 22
 
     // ── Timing knobs ─────────────────────────────────────────────────
     // Local pose poll: how often we re-read events.jsonl to look for a
@@ -84,6 +112,12 @@ public static class Ds2NativePoseBridge
     // (so ~3 s between SHM heartbeats at 30 Hz).
     private const int ShmHeartbeatEveryIter = 90;
 
+    // Track C Phase 2A: char_data poll/publish cadence. char_data
+    // doesn't change frame-to-frame (HP only changes on damage, gear
+    // changes on equip) so 1 Hz is plenty. Listener accepts updates
+    // at any rate.
+    private static readonly TimeSpan CharDataPublishInterval = TimeSpan.FromSeconds(1);
+
     // Peer TTL: drop a peer from the table if we haven't seen any
     // pose update from them in this window. Bigger = smoother on
     // jittery LAN; smaller = ghosts disappear faster when the peer
@@ -96,6 +130,19 @@ public static class Ds2NativePoseBridge
     private static Task? _watcherTask;
     private static Task? _listenerTask;
     private static Task? _inboxWriterTask;
+    // Track C Phase 2A — separate slow-cadence publisher for char_data.
+    private static Task? _charDataPublisherTask;
+    // Latest snapshot we read from local DS2 memory. Refreshed every
+    // CharDataPublishInterval. Null when DS2 isn't running or we're
+    // mid-area-transition.
+    private static Ds2MemoryReader.Ds2CharSnapshot? _latestLocalCharSnapshot;
+    private static ushort _charDataSequence;
+    private static long _charDataBroadcastCount;
+    private static long _charDataReceivedCount;
+    private static long _charDataDroppedCount;
+    // sender_id → last received PeerCharData. Pruned alongside the pose
+    // peer table on the same TTL.
+    private static readonly ConcurrentDictionary<long, PeerCharData> _peerCharData = new();
     // v1: separate UdpClient instances for send and receive. The single
     // shared client used in v0 deadlocked or got into an inconsistent
     // state under concurrent Send + ReceiveAsync because UdpClient is
@@ -136,6 +183,24 @@ public static class Ds2NativePoseBridge
         float Py,
         float Pz,
         float YawRadians,
+        DateTime LastSeenUtc);
+
+    // Track C Phase 2A peer char_data snapshot. Same shape as
+    // Ds2MemoryReader.Ds2CharSnapshot but without position (pose
+    // travels separately at 30 Hz) and with a LastSeen timestamp for
+    // TTL pruning.
+    private sealed record PeerCharData(
+        long SenderId,
+        bool IsPhantom,
+        string Name,
+        uint HpCurrent,
+        uint HpMaxWithBuffs,
+        uint HpMaxBase,
+        float EquipLoadMax,
+        float EquipWeightCurrent,
+        uint ZonePrimary,
+        uint ZoneSecondary,
+        uint[] EquipmentSlots,
         DateTime LastSeenUtc);
 
     private sealed record PoseSample(
@@ -197,10 +262,27 @@ public static class Ds2NativePoseBridge
                 ? $"Start: shared-memory pose pipe open at {Ds2PoseShm.MapName}"
                 : "Start: shared-memory pose pipe FAILED to open — falling back to commands.jsonl only");
 
+            // Track C Phase 2A: open the char_data SHM. Failure here is
+            // non-fatal — the UDP path keeps working, the Injector just
+            // won't see char_data fields until the section comes back.
+            var charShmReady = Ds2CharDataShm.TryOpen();
+            DebugLog(charShmReady
+                ? $"Start: char_data pipe open at {Ds2CharDataShm.MapName}"
+                : "Start: char_data pipe FAILED to open — char_data still rides UDP though");
+
+            // Reset char_data state (matches the existing pose-state reset above).
+            _latestLocalCharSnapshot = null;
+            _charDataSequence = 0;
+            _charDataBroadcastCount = 0;
+            _charDataReceivedCount = 0;
+            _charDataDroppedCount = 0;
+            _peerCharData.Clear();
+
             _cts = new CancellationTokenSource();
             _watcherTask     = Task.Run(() => WatcherLoopAsync(_cts.Token));
             _listenerTask    = Task.Run(() => ListenerLoopAsync(_cts.Token));
             _inboxWriterTask = Task.Run(() => InboxWriterLoopAsync(_cts.Token));
+            _charDataPublisherTask = Task.Run(() => CharDataPublisherLoopAsync(_cts.Token));
         }
         return Status();
     }
@@ -217,12 +299,17 @@ public static class Ds2NativePoseBridge
             _watcherTask = null;
             _listenerTask = null;
             _inboxWriterTask = null;
+            _charDataPublisherTask = null;
             _cts = null;
             _peerTable.Clear();
+            _peerCharData.Clear();
+            _latestLocalCharSnapshot = null;
             // Plan v3 Track B: release the shared section so a clean
             // restart re-seeds the header (avoids stale generation
             // confusing a consumer that re-attaches mid-restart).
             Ds2PoseShm.Close();
+            // Track C Phase 2A: same for char_data section.
+            Ds2CharDataShm.Close();
             DebugLog("Stop: all sockets and tasks released");
         }
         return Status();
@@ -287,6 +374,68 @@ public static class Ds2NativePoseBridge
             ["shm_open"] = Ds2PoseShm.IsOpen,
             ["shm_generation"] = Ds2PoseShm.LastGeneration,
             ["shm_map_name"] = Ds2PoseShm.MapName,
+
+            // Track C Phase 2A — char_data round-trip diagnostics.
+            ["char_data"] = BuildCharDataStatus(),
+        };
+    }
+
+    private static JsonObject BuildCharDataStatus()
+    {
+        var peers = new JsonArray();
+        foreach (var (_, e) in _peerCharData)
+        {
+            var slots = new JsonArray();
+            foreach (var v in e.EquipmentSlots)
+                slots.Add(v);
+            peers.Add(new JsonObject
+            {
+                ["sender_id"]    = e.SenderId,
+                ["is_phantom"]   = e.IsPhantom,
+                ["name"]         = e.Name,
+                ["hp_current"]   = e.HpCurrent,
+                ["hp_max_buff"]  = e.HpMaxWithBuffs,
+                ["hp_max_base"]  = e.HpMaxBase,
+                ["equip_load_max"] = e.EquipLoadMax,
+                ["equip_weight"]   = e.EquipWeightCurrent,
+                ["zone_primary"]   = e.ZonePrimary,
+                ["zone_secondary"] = e.ZoneSecondary,
+                ["age_ms"]         = (DateTime.UtcNow - e.LastSeenUtc).TotalMilliseconds,
+                ["equipment_slots"] = slots,
+            });
+        }
+
+        JsonObject? localObj = null;
+        if (_latestLocalCharSnapshot is { } local)
+        {
+            var slots = new JsonArray();
+            foreach (var v in local.EquipmentSlots)
+                slots.Add(v);
+            localObj = new JsonObject
+            {
+                ["is_phantom"]   = local.IsPhantom,
+                ["name"]         = local.Name,
+                ["hp_current"]   = local.HpCurrent,
+                ["hp_max_buff"]  = local.HpMaxWithBuffs,
+                ["hp_max_base"]  = local.HpBaseMax,
+                ["equip_load_max"] = local.EquipLoadMax,
+                ["equip_weight"]   = local.EquipWeightCurrent,
+                ["zone_primary"]   = local.ZonePrimary,
+                ["zone_secondary"] = local.ZoneSecondary,
+                ["equipment_slots"] = slots,
+            };
+        }
+
+        return new JsonObject
+        {
+            ["shm_open"]         = Ds2CharDataShm.IsOpen,
+            ["shm_generation"]   = Ds2CharDataShm.LastGeneration,
+            ["shm_map_name"]     = Ds2CharDataShm.MapName,
+            ["broadcast_count"]  = _charDataBroadcastCount,
+            ["received_count"]   = _charDataReceivedCount,
+            ["dropped_count"]    = _charDataDroppedCount,
+            ["local_snapshot"]   = localObj,
+            ["peer_snapshots"]   = peers,
         };
     }
 
@@ -495,18 +644,32 @@ public static class Ds2NativePoseBridge
                 continue;
             }
 
-            if (result.Buffer.Length != PacketSize)
+            // Track C Phase 2A: dispatch by magic so the same socket
+            // handles both pose (32-byte) and char_data (200-byte)
+            // packets. Anything that doesn't match a known magic +
+            // version + length is dropped.
+            if (result.Buffer.Length < 8)
             {
                 Interlocked.Increment(ref _droppedCount);
                 continue;
             }
-            var pkt = result.Buffer.AsSpan();
-            var magic = BinaryPrimitives.ReadUInt32LittleEndian(pkt[0..4]);
-            if (magic != Magic || pkt[4] != WireVersion)
+            var pktAll = result.Buffer.AsSpan();
+            var magic = BinaryPrimitives.ReadUInt32LittleEndian(pktAll[0..4]);
+
+            if (magic == CharDataMagic)
+            {
+                HandleCharDataPacket(result.Buffer, result.RemoteEndPoint);
+                continue;
+            }
+
+            if (magic != Magic ||
+                result.Buffer.Length != PacketSize ||
+                pktAll[4] != WireVersion)
             {
                 Interlocked.Increment(ref _droppedCount);
                 continue;
             }
+            var pkt = pktAll;
             var senderId = BinaryPrimitives.ReadInt64LittleEndian(pkt[8..16]);
 
             var px  = BinaryPrimitives.ReadSingleLittleEndian(pkt[16..20]);
@@ -688,6 +851,212 @@ public static class Ds2NativePoseBridge
             Path.GetDirectoryName(eventLog) ?? RuntimeRoot,
             stem + ".commands.jsonl");
         return _cachedCommandsInboxPath;
+    }
+
+    // ── Track C Phase 2A: char_data publisher / handler ──────────────
+
+    /// <summary>
+    /// Periodic loop that reads the local player's char_data via
+    /// Ds2MemoryReader, broadcasts it to peer endpoints over UDP, and
+    /// republishes the merged local+peer table to the Ds2CharDataShm
+    /// section. Runs at CharDataPublishInterval (1 Hz).
+    /// </summary>
+    private static async Task CharDataPublisherLoopAsync(CancellationToken ct)
+    {
+        DebugLog("CharDataPublisherLoop: started");
+        long iter = 0;
+        while (!ct.IsCancellationRequested)
+        {
+            try
+            {
+                // 1. Read local snapshot (best-effort — DS2 may be loading).
+                var local = Ds2MemoryReader.TryReadHostCharData();
+                if (local is not null)
+                {
+                    _latestLocalCharSnapshot = local;
+                    // 2. Broadcast to peers so they can build their own SHM.
+                    BroadcastLocalCharData(local);
+                }
+
+                // 3. Prune stale peer entries (same TTL as the pose
+                //    peer table — char_data updates piggyback on the
+                //    same liveness signal).
+                var now = DateTime.UtcNow;
+                foreach (var (id, e) in _peerCharData)
+                {
+                    if (now - e.LastSeenUtc > PeerTtl)
+                    {
+                        _peerCharData.TryRemove(id, out _);
+                    }
+                }
+
+                // 4. Publish the merged local + peer table to the SHM
+                //    so the Injector can read every char_data snapshot
+                //    in one place. Local first, peers after.
+                if (Ds2CharDataShm.IsOpen)
+                {
+                    var combined = new List<Ds2CharDataShm.PeerSnapshot>();
+                    if (local is not null)
+                    {
+                        combined.Add(new Ds2CharDataShm.PeerSnapshot(
+                            _localSenderId,
+                            local.HpCurrent, local.HpMaxWithBuffs, local.HpBaseMax,
+                            local.EquipLoadMax, local.EquipWeightCurrent,
+                            local.ZonePrimary, local.ZoneSecondary,
+                            local.IsPhantom, local.Name ?? "",
+                            local.EquipmentSlots));
+                    }
+                    foreach (var (_, e) in _peerCharData)
+                    {
+                        combined.Add(new Ds2CharDataShm.PeerSnapshot(
+                            e.SenderId,
+                            e.HpCurrent, e.HpMaxWithBuffs, e.HpMaxBase,
+                            e.EquipLoadMax, e.EquipWeightCurrent,
+                            e.ZonePrimary, e.ZoneSecondary,
+                            e.IsPhantom, e.Name ?? "",
+                            e.EquipmentSlots));
+                    }
+                    Ds2CharDataShm.Publish(combined);
+                }
+            }
+            catch (Exception ex)
+            {
+                DebugLog($"CharDataPublisherLoop iter={iter} threw {ex.GetType().Name}: {ex.Message}");
+            }
+            iter++;
+            if (iter % 30 == 0)
+            {
+                DebugLog($"CharDataPublisherLoop alive: iter={iter} localSnap={(_latestLocalCharSnapshot != null)} peers={_peerCharData.Count} broadcast={_charDataBroadcastCount} received={_charDataReceivedCount}");
+            }
+            try { await Task.Delay(CharDataPublishInterval, ct); }
+            catch (OperationCanceledException) { break; }
+        }
+        DebugLog($"CharDataPublisherLoop: exiting (iter={iter})");
+    }
+
+    private static void BroadcastLocalCharData(Ds2MemoryReader.Ds2CharSnapshot s)
+    {
+        if (_udpSend is null || _peerEndpoints.Count == 0) return;
+
+        // Pack into the BNCD wire envelope (200 bytes exactly).
+        Span<byte> packet = stackalloc byte[CharDataPacketSize];
+        packet.Clear();
+        BinaryPrimitives.WriteUInt32LittleEndian(packet[0..4], CharDataMagic);
+        packet[4] = WireVersion;
+        packet[5] = 0;
+        BinaryPrimitives.WriteUInt16LittleEndian(packet[6..8], _charDataSequence++);
+        BinaryPrimitives.WriteInt64LittleEndian(packet[8..16], _localSenderId);
+        BinaryPrimitives.WriteUInt32LittleEndian(packet[16..20], s.HpCurrent);
+        BinaryPrimitives.WriteUInt32LittleEndian(packet[20..24], s.HpMaxWithBuffs);
+        BinaryPrimitives.WriteUInt32LittleEndian(packet[24..28], s.HpBaseMax);
+        BinaryPrimitives.WriteSingleLittleEndian(packet[28..32], s.EquipLoadMax);
+        BinaryPrimitives.WriteSingleLittleEndian(packet[32..36], s.EquipWeightCurrent);
+        BinaryPrimitives.WriteUInt32LittleEndian(packet[36..40], s.ZonePrimary);
+        BinaryPrimitives.WriteUInt32LittleEndian(packet[40..44], s.ZoneSecondary);
+        BinaryPrimitives.WriteUInt32LittleEndian(packet[44..48], s.IsPhantom ? 1u : 0u);
+
+        // Name: encode + clamp to the 64-byte fixed window so we never
+        // truncate mid-surrogate (DS2 names are ASCII-derived in
+        // practice — "Player_0001" or "NetworkPlayer_*" — but stay
+        // defensive).
+        var nameBytes = Encoding.Unicode.GetBytes(s.Name ?? "");
+        var nameCopyLen = Math.Min(nameBytes.Length, CharDataNameBytes - 2);
+        nameBytes.AsSpan(0, nameCopyLen).CopyTo(packet[48..(48 + nameCopyLen)]);
+
+        // Equipment array: 22 × u32.
+        var slots = s.EquipmentSlots ?? Array.Empty<uint>();
+        int slotBase = 48 + CharDataNameBytes; // = 112
+        for (int i = 0; i < CharDataSlotCount; i++)
+        {
+            uint v = i < slots.Length ? slots[i] : 0u;
+            BinaryPrimitives.WriteUInt32LittleEndian(
+                packet[(slotBase + i * 4)..(slotBase + (i + 1) * 4)], v);
+        }
+
+        var bytes = packet.ToArray();
+        foreach (var ep in _peerEndpoints)
+        {
+            try
+            {
+                _udpSend.Send(bytes, bytes.Length, ep);
+                Interlocked.Increment(ref _charDataBroadcastCount);
+            }
+            catch (Exception ex)
+            {
+                DebugLog($"BroadcastLocalCharData to {ep} failed: {ex.GetType().Name} {ex.Message}");
+            }
+        }
+    }
+
+    private static void HandleCharDataPacket(byte[] buffer, IPEndPoint remoteEp)
+    {
+        try
+        {
+            if (buffer.Length != CharDataPacketSize)
+            {
+                Interlocked.Increment(ref _charDataDroppedCount);
+                return;
+            }
+            var pkt = buffer.AsSpan();
+            if (pkt[4] != WireVersion)
+            {
+                Interlocked.Increment(ref _charDataDroppedCount);
+                return;
+            }
+            var senderId         = BinaryPrimitives.ReadInt64LittleEndian(pkt[8..16]);
+            var hpCurrent        = BinaryPrimitives.ReadUInt32LittleEndian(pkt[16..20]);
+            var hpMaxWithBuffs   = BinaryPrimitives.ReadUInt32LittleEndian(pkt[20..24]);
+            var hpMaxBase        = BinaryPrimitives.ReadUInt32LittleEndian(pkt[24..28]);
+            var equipLoadMax     = BinaryPrimitives.ReadSingleLittleEndian(pkt[28..32]);
+            var equipWeightCur   = BinaryPrimitives.ReadSingleLittleEndian(pkt[32..36]);
+            var zonePrimary      = BinaryPrimitives.ReadUInt32LittleEndian(pkt[36..40]);
+            var zoneSecondary    = BinaryPrimitives.ReadUInt32LittleEndian(pkt[40..44]);
+            var isPhantomFlag    = BinaryPrimitives.ReadUInt32LittleEndian(pkt[44..48]);
+
+            // Decode UTF-16 name, walk to first NUL pair or buffer end.
+            var nameSlice = pkt.Slice(48, CharDataNameBytes);
+            int nameLen = 0;
+            while (nameLen + 1 < nameSlice.Length)
+            {
+                if (nameSlice[nameLen] == 0 && nameSlice[nameLen + 1] == 0) break;
+                nameLen += 2;
+            }
+            var name = nameLen > 0
+                ? Encoding.Unicode.GetString(nameSlice[..nameLen])
+                : "";
+
+            int slotBase = 48 + CharDataNameBytes;
+            var slots = new uint[CharDataSlotCount];
+            for (int i = 0; i < CharDataSlotCount; i++)
+            {
+                slots[i] = BinaryPrimitives.ReadUInt32LittleEndian(
+                    pkt[(slotBase + i * 4)..(slotBase + (i + 1) * 4)]);
+            }
+
+            // Don't store our own loopback packets — the publisher
+            // already publishes _latestLocalCharSnapshot directly.
+            if (senderId == _localSenderId)
+            {
+                Interlocked.Increment(ref _charDataReceivedCount);
+                return;
+            }
+
+            _peerCharData[senderId] = new PeerCharData(
+                senderId, isPhantomFlag != 0, name,
+                hpCurrent, hpMaxWithBuffs, hpMaxBase,
+                equipLoadMax, equipWeightCur,
+                zonePrimary, zoneSecondary,
+                slots, DateTime.UtcNow);
+            Interlocked.Increment(ref _charDataReceivedCount);
+
+            // Same auto-discovery hook as the pose listener.
+            MaybeRegisterDiscoveredPeer(remoteEp);
+        }
+        catch (Exception ex)
+        {
+            Interlocked.Increment(ref _charDataDroppedCount);
+            DebugLog($"HandleCharDataPacket from {remoteEp} threw {ex.GetType().Name}: {ex.Message}");
+        }
     }
 
     // ── Helpers ──────────────────────────────────────────────────────

@@ -1189,7 +1189,21 @@ self-sufficient without UI help.
    bumped 32 B → 40 B (binary-compatible because no external
    consumer assumed a size).*
 
-5b. **Track C Phase 2 — character-data sync + engine-cooperative render**
+5b. **Track C Phase 2A — character-data sync over UDP + SHM** —
+   *Shipped: tag `v2.9.4-experimental`.* New `Ds2CharDataReader`
+   (built on the existing `Ds2MemoryReader` chain) extracts the
+   complete char_data snapshot every 1 s: HP triple (current,
+   max-w-buffs, base), equip-load floats, zone IDs, name string
+   (local-vs-NetworkPlayer discriminator), and the full 22-slot
+   equipment array. New BNCD UDP packet (200 bytes, magic
+   `0x42_4E_43_44`) ferries it P2P alongside the existing 32-byte
+   BNCB pose packets — same socket, dispatch by magic. New SHM
+   section `Local\BonfireDS2CharDataV1` (4416 B, seqlock) makes
+   the merged local+peer table available to the Injector for the
+   eventual engine-cooperative render. `bridge.status` RPC now
+   exposes `char_data` with every field decoded for UI binding.
+
+5c. **Track C Phase 2B — character-data sync + engine-cooperative render**
    — re-scoped after external research
    (see `Docs/TRACK_C_SAPONITA_RESEARCH.md`). The phantom mesh
    is NOT transmitted by the network: both PCs have all assets
