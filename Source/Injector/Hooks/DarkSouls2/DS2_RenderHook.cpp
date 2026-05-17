@@ -451,16 +451,19 @@ struct VSOut
     float3 color  : COLOR;
 };
 
-// v15 (Phase 3) → v16 (Phase 4a): same 36-vert unit cube, now with
-//   - per-instance yaw rotation around Y (cbuffer.yaw_radians) so a
-//     peer placeholder can face the direction the peer is actually
-//     facing in world.
-//   - per-instance color (cbuffer.color), so each peer is tinted
-//     differently (host=magenta, peer-1=cyan, etc.).
+// v15 (Phase 3) cube → v16 (Phase 4a) per-instance color + yaw →
+// v19 (Phase 5a) humanoid placeholder.
 //
-// The cube is still anchored at `anchor` (= peer's feet world pos)
-// and lifted by +scale Y so the cube sits on the feet rather than
-// straddling them.
+// Peer placeholder is now TWO boxes — a torso (~0.5 × 1.2 × 0.3 world
+// units) and a head (~0.3 cube on top). That's the first step toward
+// "peers look like players". Total 72 vertices, indexed by SV_VertexID:
+//   id 0..35  → torso box (cube_verts as before)
+//   id 36..71 → head box (same cube_verts, different position+size)
+//
+// Both boxes share the cbuffer's anchor / scale / yaw / color and use
+// the same lambert shader. The 'scale' uniform now controls the
+// overall size of the silhouette — at scale=1 the figure is roughly
+// player-sized (~1.7 m tall in DS2 world units).
 VSOut main(uint id : SV_VertexID)
 {
     const float3 cube_verts[36] = {
@@ -489,26 +492,49 @@ VSOut main(uint id : SV_VertexID)
         float3( 0, 0,-1), float3( 0, 0, 1)
     };
 
-    // 1) scale to player-sized box
-    float3 v = cube_verts[id] * scale;
-    // 2) lift so cube sits on the feet, not buried halfway
-    v.y += scale;
-    // 3) rotate around world Y by yaw — for peer placeholders this
-    //    matches the peer's facing in their own world.
+    // Each box is a (half_size, center) pair. Both quantities are in
+    // local body space — Y up, +Z = facing direction, feet at y=0.
+    // half_size is half of the box's full extent on each axis so a
+    // [-1,+1] unit cube vert maps to [-half, +half] when multiplied.
+    const float3 box_half_size[2] = {
+        float3(0.25, 0.6, 0.15),  // torso: 0.5 w × 1.2 h × 0.3 d
+        float3(0.15, 0.15, 0.15)  // head: 0.3 cube
+    };
+    const float3 box_center[2] = {
+        float3(0, 0.6, 0),    // torso center: y = 0.6 (so feet at 0, top at 1.2)
+        float3(0, 1.35, 0)    // head center: y = 1.35 (sits on top of torso)
+    };
+
+    uint box_idx = id / 36;
+    uint vert_idx = id % 36;
+
+    // Local-body position: unit cube vert → box-sized → translated
+    // into the body's coordinate frame.
+    float3 local = cube_verts[vert_idx] * box_half_size[box_idx]
+                 + box_center[box_idx];
+
+    // Uniform scale applied to the whole figure — at scale=1.0 the
+    // silhouette is ~1.65 m tall (head top at y=1.5 then × scale).
+    float3 v = local * scale;
+
+    // Yaw rotation around world Y so peers face the direction they're
+    // actually facing in-world.
     float cy = cos(yaw_radians);
     float sy = sin(yaw_radians);
     float3 rotated = float3(
         cy * v.x + sy * v.z,
         v.y,
        -sy * v.x + cy * v.z);
-    // 4) translate to peer's world position
+
+    // Translate to peer's world position (feet anchor).
     float3 world_pos = anchor + rotated;
 
     VSOut o;
     o.pos    = mul(VP, float4(world_pos, 1.0));
     // Rotate normal too so lambert shading stays consistent after
-    // yaw rotation.
-    float3 n = face_normals[id / 6];
+    // yaw rotation. Face normal is the same per-face regardless of
+    // which box we're in — it's a property of the cube primitive.
+    float3 n = face_normals[vert_idx / 6];
     o.normal = float3(cy * n.x + sy * n.z, n.y, -sy * n.x + cy * n.z);
     o.color  = color;
     return o;
@@ -1028,7 +1054,10 @@ float4 main(PSIn input) : SV_Target
                             data->yaw_radians = cd.yaw_radians;
                             s_d3d_context->Unmap(s_overlay_cbuffer, 0);
 
-                            s_d3d_context->Draw(36, 0);
+                            // v19 (Phase 5a): 72 verts = torso (36)
+                            // + head (36) = humanoid placeholder.
+                            // v15..v18 used 36 verts (single cube).
+                            s_d3d_context->Draw(72, 0);
                         }
 
                         s_multi_draw_frames.fetch_add(1,
