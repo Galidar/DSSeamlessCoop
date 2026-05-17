@@ -904,3 +904,113 @@ urgent — the user's near-term use case is one peer (the brother).
 **Total ~7-10 h** of focused work for the full Phase 2B.2 across
 2-3 sessions. The 2B.2C step is where most risk lives; we'll
 checkpoint hard there.
+
+## 2026-05-17 (final session block) — slot pool walked live, brother fully decoded
+
+Session continued with user online + summoned-as-phantom in same
+world as their brother. Walked the live slot pool via gm chain.
+
+### Slot pool location (CORRECTED from earlier doc)
+
+| Field | Live value |
+|---|---|
+| `gm` global slot in .data | RVA 0x16148F0 → `0x7FF770B048F0` |
+| `*(gm)` = game manager struct | `0x7FF4C1550260` |
+| `*(*(gm) + 0x18)` = world_mgr | `0x7FF4C99591D0` |
+| `*(*(gm) + 0x650)` = slot manager array base | `0x7FF4C40D5160` |
+| Slot record stride | 0xA90 bytes |
+| Slot record base | `slot_mgr + 0x5D0` |
+| **`PlayerCtrl*` field offset** | **+0xC8 (was +0x58 in old doc)** |
+
+### Live slot scan (6 slots)
+
+| Slot | PlayerCtrl | Active? | HP | Identity |
+|---|---|---|---|---|
+| 0 | `0x7FF4C4BE9A40` | YES (vtable matches) | 822/823 | local player (user) |
+| 1 | `0x7FF4C4D69E60` | YES (vtable matches) | 1304/1305 | **brother (vanilla phantom)** |
+| 2 | `0x7FF4C4EEA280` | NO | 0 | empty 1MB |
+| 3 | `0x7FF4C506A6A0` | NO | 0 | empty 1MB |
+| 4 | `0x7FF4C51EAAC0` | NO | 0 | empty 1MB |
+| 5 | `0x7FF4C536AEE0` | NO | 0 | empty 1MB |
+
+### Brother PlayerCtrl key fields (diff vs local — 79 qword diffs)
+
+| Offset | Field | Local | Brother |
+|---|---|---|---|
+| +0x18 | intermediate | `0x7FF4C4CC5BB0` | `0x7FF4C4E45F10` |
+| +0x20 | back-ref to slot mgr | slot0 rec | slot1 rec |
+| +0x90..+0x9F | position vec4 (X,Y,Z,1) | (3.23, -18.52, 208.83, 1) | (4.64, -18.52, 207.64, 1) |
+| **+0x128** | **character level (NEW)** | 13 | 20 |
+| +0x158 | self-ref | local_pc | phantom_pc |
+| +0x168..+0x174 | HP triple | 822 / mark / 823 | 1304 / mark / 1305 |
+| +0x16C | shared "marker" (same on both) | 0xFFFE7961 | 0xFFFE7961 |
+| +0x218 | float stat | 1.8f | 78.5f |
+
+### Brother's equipment array (live, via +0x18 -> +0xE0 -> +0x37C, stride 0x14)
+
+| Index | Item ID | Slot |
+|---|---|---|
+| 0 | 11420000 | RH1 weapon |
+| 1 | 2400000 | RH2 |
+| 6 | 17440100 | bolt/arrow |
+| 7 | 13300101 | bolt/arrow |
+| 8 | 13300102 | bolt/arrow |
+| 9 | 17440103 | bolt/arrow |
+| 12-15 | -1 | armor (unarmored) |
+| 16 | 40420000 | Ring 1 |
+| 17 | 40370001 | Ring 2 |
+| 18 | 40020000 | Ring 3 |
+| 19 | 40530000 | Ring 4 |
+| 20 | 60155000 | Custom item |
+| 21 | **62061000** | **Blessed Eye Orb** (Bonfire custom) |
+
+### Root cause of "fake humanoid cubes" + concrete fix
+
+`DS2_RenderHook.cpp` Phase 4a draws one cube per peer in
+`s_peer_table[16]` every frame. When brother is BOTH a Bonfire SHM
+peer AND a vanilla engine phantom in slot 1, the cube is drawn
+ON TOP OF the real body.
+
+**Fix: suppress the cube when an active phantom slot covers that peer position.**
+
+Pseudocode for the `DrawOverlay` loop in `DS2_RenderHook.cpp`:
+```cpp
+for (int p = 0; p < peer_count; ++p) {
+    if (PeerIsCoveredByActiveSlot(peer_table[p].pos))
+        continue;  // engine already renders the real body
+    emit_cube(peer_table[p]);
+}
+```
+
+`PeerIsCoveredByActiveSlot(pos)`:
+- Resolve gm via existing AOB.
+- Walk to slot_mgr at `*(gm + 0x650)`.
+- For i in 1..5:
+    - `pctrl = *(slot_mgr + 0x5D0 + i*0xA90 + 0xC8)`
+    - if pctrl non-null AND `*(pctrl) == PlayerCtrl::vftable`
+    - AND `distance(pos, *(pctrl+0x90 as vec3)) < 3.0`
+    - return true.
+- Return false.
+
+This is the immediate UX win the user is asking for. ~30 LOC.
+
+### Beyond cube-suppression: engine phantoms for Bonfire-coop peers
+
+For peers NOT in a vanilla phantom slot (pure Bonfire-coop, no
+matchmaking), suppression won't help — those don't have a real
+body to fall back to. To make them visible as real bodies, we
+need to drive `FUN_1401A1650` with a valid Ds2PhantomRequest →
+slot 2-5 gets populated → engine renders them.
+
+We now have all the pieces:
+- Full PlayerCtrl layout map.
+- Slot pool structure with correct offsets.
+- A live phantom (slot 1) usable as TEMPLATE.
+- v2.9.11 capture hook armed via `BONFIRE_DS2_SPAWN_CAPTURE=1`
+  → harvests the compact 0x39 buffer the host sent when summoning
+  the brother. That buffer IS the template.
+
+Next session: relaunch with capture env var → trigger one inbound
+summon → harvest template → implement Ds2PhantomRequest synthesis →
+spawn into slot 2 → see THE brother as a real body even when not
+vanilla-matchmade.
