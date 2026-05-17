@@ -26,6 +26,7 @@
 #include <filesystem>
 #include <fstream>
 #include <intrin.h>
+#include <iomanip>
 #include <iterator>
 #include <memory>
 #include <mutex>
@@ -38,6 +39,23 @@ namespace
 {
     constexpr uintmax_t kKnownSotfsSteamExeSize = 28200992;
     constexpr uintptr_t kRestAtBonfireRva = 0x17DC40;
+    // Track C Phase 2B (Ghidra Session 01 finding) — RVA of the
+    // PlayerCtrl spawn function inside DarkSoulsII.exe. This is the
+    // engine entry point that allocates 0x4A0 bytes for a new
+    // PlayerCtrl, calls the constructor at 0x14037EBE0, wires it up
+    // to the slot manager at *(DAT_1416148F0 + 0x650), and
+    // populates the slot from network-supplied PlayerCharacterData.
+    //
+    // The vanilla engine gates this with a `slot_index < 6` check
+    // (the famous "4-phantom cap" plus 2 spares).
+    //
+    // We hook it in Phase 2B.1 (this commit) purely as an observer:
+    // log every entry, capture the three argument pointers, dump
+    // the first few bytes of each so we can correlate with what
+    // arrives over the network. Phase 2B.2 then turns the hook
+    // into an active producer that calls the original with our
+    // peer's char_data when a phantom slot is free.
+    constexpr uintptr_t kPlayerCtrlSpawnRva = 0x355930;
     constexpr uintptr_t kEyeOrbUseValidationRva = 0x2D3B20;
     constexpr uintptr_t kItemGiveRva = 0x1AC3D0;
     constexpr uintptr_t kItemStructConvertRva = 0x05D950;
@@ -150,11 +168,28 @@ namespace
         void(__fastcall*)(void* action_manager, int32_t selected_category, int32_t action_flag);
     using ItemUseValidationFn = bool(__fastcall*)(int32_t item_id);
     using RestAtBonfireFn = void(__fastcall*)(void* bonfire_context, int32_t bonfire_id);
+    // Track C Phase 2B (Ghidra Session 01): PlayerCtrl spawner at
+    // DS2.exe RVA 0x355930. Ghidra-decompiled signature is
+    // `void FUN_140355930(longlong, undefined4*, undefined8*)`.
+    // x64 fastcall: RCX = ctx (probably WorldChrMan / session
+    // pointer), RDX = u32* (slot/player id ref), R8 = qword*
+    // (PlayerCharacterData ref or NetSummonSlotCtrl ref).
+    // Hooking it lets us OBSERVE every phantom spawn the engine
+    // performs and capture the exact argument shapes — that's the
+    // data we need to invoke it ourselves in Phase 2B.2.
+    using PlayerCtrlSpawnFn = void(__fastcall*)(void* ctx, uint32_t* slot_id_ptr, void* char_data_ptr);
     using ItemGiveFn = void(__fastcall*)(void* inventory_bag_list, void* item_spawn_list, int32_t item_count);
     using ItemStructConvertFn = void(__fastcall*)(void* display_stack, void* item_spawn_list, int32_t item_count, int32_t show_popup);
     using ItemPopupDisplayFn = void(__fastcall*)(void* item_display_manager, void* display_stack);
 
     RestAtBonfireFn s_original_rest_at_bonfire = nullptr;
+    // Track C Phase 2B observer — trampolined-to original after
+    // Detours attaches. Null until TryArmPlayerCtrlSpawnObserver
+    // succeeds; checked from the hook before forwarding so a
+    // half-installed state can't deref a stale pointer.
+    PlayerCtrlSpawnFn s_original_player_ctrl_spawn = nullptr;
+    LONG s_player_ctrl_spawn_observer_state = 0;   // 0=idle, 1=arming, 2=armed
+    std::atomic<uint64_t> s_player_ctrl_spawn_hit_count{0};
     ItemUseValidationFn s_original_item_use_validation = nullptr;
     InventoryAdjustQuantityFn s_original_inventory_adjust_quantity = nullptr;
     InventoryUseItemFn s_original_inventory_use_item = nullptr;
@@ -2540,6 +2575,133 @@ namespace
             "rest_at_bonfire");
     }
 
+    // ─── Track C Phase 2B.1 — PlayerCtrl spawn observer ────────────────
+    //
+    // Hooks the engine's PlayerCtrl spawn function so we can OBSERVE
+    // every phantom spawn the vanilla matchmaking pipeline performs.
+    // Logs the three argument pointers + first 64 bytes of the
+    // char_data pointer to events.jsonl on each fire. The hook
+    // FORWARDS to the original — it doesn't change game logic.
+    //
+    // Goal: capture enough of the live arg shapes (especially what
+    // arg #3, the qword* probably-PlayerCharacterData, actually
+    // points at) that Phase 2B.2 can construct equivalent args from
+    // the SHM-received peer data and call the engine ourselves to
+    // bypass vanilla matchmaking.
+
+    // SEH-safe helpers — POD-only bodies (no destructors) so MSVC
+    // accepts __try/__except (C2712 prevents mixing with C++ unwind).
+    bool SafePlayerCtrlSpawn_ReadU32(const uint32_t* p, uint32_t* out_val)
+    {
+        __try
+        {
+            *out_val = *p;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            *out_val = 0;
+            return false;
+        }
+    }
+    bool SafePlayerCtrlSpawn_ReadBlock64(const void* p, uint8_t out[64])
+    {
+        __try
+        {
+            const uint8_t* src = static_cast<const uint8_t*>(p);
+            for (int i = 0; i < 64; ++i)
+            {
+                out[i] = src[i];
+            }
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
+    void __fastcall PlayerCtrlSpawnHook(
+        void* ctx, uint32_t* slot_id_ptr, void* char_data_ptr)
+    {
+        const uint64_t hit_n = s_player_ctrl_spawn_hit_count.fetch_add(
+            1, std::memory_order_relaxed) + 1;
+
+        // Capture all the data we want BEFORE building any C++ JSON
+        // objects, so the SEH-guarded reads never share scope with
+        // anything that owns a destructor (C2712 fix).
+        uint32_t slot_id_value = 0;
+        bool slot_id_ok = (slot_id_ptr != nullptr) &&
+            SafePlayerCtrlSpawn_ReadU32(slot_id_ptr, &slot_id_value);
+        uint8_t cd_block[64] = {};
+        bool cd_ok = (char_data_ptr != nullptr) &&
+            SafePlayerCtrlSpawn_ReadBlock64(char_data_ptr, cd_block);
+
+        RuntimeWorkerConfig config =
+            GetActiveRuntimeConfig("player_ctrl_spawn.events.jsonl");
+
+        nlohmann::json payload;
+        payload["hit_number"] = hit_n;
+        payload["ctx"] = HexPointer(reinterpret_cast<uintptr_t>(ctx));
+        payload["slot_id_ptr"] =
+            HexPointer(reinterpret_cast<uintptr_t>(slot_id_ptr));
+        payload["char_data_ptr"] =
+            HexPointer(reinterpret_cast<uintptr_t>(char_data_ptr));
+        payload["original_target"] =
+            HexPointer(reinterpret_cast<uintptr_t>(s_original_player_ctrl_spawn));
+
+        if (slot_id_ok)
+        {
+            payload["slot_id_value"] = slot_id_value;
+        }
+        else if (slot_id_ptr != nullptr)
+        {
+            payload["slot_id_value"] = "<read_failed>";
+        }
+
+        if (cd_ok)
+        {
+            // Dump the first 64 bytes of the alleged
+            // PlayerCharacterData blob as hex so we can compare its
+            // shape against the Frpg2RequestMessage protobuf
+            // descriptor we know from the strings dump.
+            std::ostringstream oss;
+            oss << std::hex << std::setfill('0');
+            for (int i = 0; i < 64; ++i)
+            {
+                if (i != 0) oss << ' ';
+                oss << std::setw(2) << static_cast<unsigned>(cd_block[i]);
+            }
+            payload["char_data_first_64_hex"] = oss.str();
+            // The first qword is almost certainly the vtable
+            // pointer — useful for matching against known vtable
+            // addresses (PlayerCharacterData / NetSummonSlotCtrl /
+            // etc) at runtime.
+            uintptr_t first_qword = 0;
+            for (int i = 0; i < 8; ++i)
+            {
+                first_qword |=
+                    static_cast<uintptr_t>(cd_block[i]) << (i * 8);
+            }
+            payload["char_data_first_qword"] = HexPointer(first_qword);
+        }
+        else if (char_data_ptr != nullptr)
+        {
+            payload["char_data_first_64_hex"] = "<read_failed>";
+        }
+
+        AppendRuntimeEvent(config, "player_ctrl.spawn_observed", payload);
+
+        // Forward to the original spawner unchanged. Bypassing this
+        // would leave the engine with an uninitialised slot and a
+        // guaranteed crash on the next render tick.
+        PlayerCtrlSpawnFn original = s_original_player_ctrl_spawn;
+        if (original != nullptr)
+        {
+            original(ctx, slot_id_ptr, char_data_ptr);
+        }
+    }
+
     bool TryArmBonfireRestObserver(const RuntimeWorkerConfig& config)
     {
         if (!config.ExeMatchesKnownBaseline)
@@ -2584,6 +2746,60 @@ namespace
             HexPointer(reinterpret_cast<uintptr_t>(s_original_rest_at_bonfire));
         AppendRuntimeEvent(config, "bonfire.rest_observer_armed", payload);
         InterlockedExchange(&s_bonfire_rest_observer_state, 2);
+        return true;
+    }
+
+    // Track C Phase 2B.1 install — Detours-attach the spawn observer.
+    // Run once per process (CompareExchange gates re-entry). The
+    // function is idempotent — re-calling after a successful arm
+    // returns true without re-detouring.
+    bool TryArmPlayerCtrlSpawnObserver(const RuntimeWorkerConfig& config)
+    {
+        if (!config.ExeMatchesKnownBaseline)
+        {
+            return false;
+        }
+        if (config.GameBaseAddress == 0)
+        {
+            return false;
+        }
+        if (InterlockedCompareExchange(
+                &s_player_ctrl_spawn_observer_state, 1, 0) != 0)
+        {
+            return s_player_ctrl_spawn_observer_state == 2;
+        }
+
+        s_original_player_ctrl_spawn =
+            reinterpret_cast<PlayerCtrlSpawnFn>(
+                config.GameBaseAddress + kPlayerCtrlSpawnRva);
+
+        DetourTransactionBegin();
+        DetourUpdateThread(GetCurrentThread());
+        DetourAttach(
+            &(PVOID&)s_original_player_ctrl_spawn, PlayerCtrlSpawnHook);
+        const LONG result = DetourTransactionCommit();
+
+        nlohmann::json payload;
+        payload["player_ctrl_spawn_target"] =
+            HexPointer(config.GameBaseAddress + kPlayerCtrlSpawnRva);
+        payload["hook_target"] =
+            HexPointer(reinterpret_cast<uintptr_t>(&PlayerCtrlSpawnHook));
+        payload["detour_result"] = result;
+
+        if (result != NO_ERROR)
+        {
+            AppendRuntimeEvent(
+                config, "player_ctrl.spawn_observer_arm_failed", payload);
+            s_original_player_ctrl_spawn = nullptr;
+            InterlockedExchange(&s_player_ctrl_spawn_observer_state, 0);
+            return false;
+        }
+
+        payload["original_trampoline"] =
+            HexPointer(reinterpret_cast<uintptr_t>(s_original_player_ctrl_spawn));
+        AppendRuntimeEvent(
+            config, "player_ctrl.spawn_observer_armed", payload);
+        InterlockedExchange(&s_player_ctrl_spawn_observer_state, 2);
         return true;
     }
 
@@ -3816,6 +4032,11 @@ namespace
         TryArmItemUseValidationObserver(*config);
         TryArmInventorySelectedItemCategoryObserver(*config);
         TryArmInventorySelectedActionExecuteObserver(*config);
+        // Track C Phase 2B.1: hook PlayerCtrl spawn — observer only.
+        // Logs every engine-driven phantom spawn so we can see what
+        // shape the engine passes its three args. No game-logic
+        // change; the hook forwards unconditionally.
+        TryArmPlayerCtrlSpawnObserver(*config);
         EmitInventoryProbeAndMaybeArm(*config);
 
         uintmax_t command_offset = 0;
@@ -4085,6 +4306,18 @@ void DS2_NativeRuntimeHook::Uninstall()
         DetourTransactionCommit();
         s_original_rest_at_bonfire = nullptr;
         InterlockedExchange(&s_bonfire_rest_observer_state, 0);
+    }
+
+    // Track C Phase 2B.1 — detach the PlayerCtrl spawn observer.
+    if (s_original_player_ctrl_spawn != nullptr)
+    {
+        DetourTransactionBegin();
+        DetourUpdateThread(GetCurrentThread());
+        DetourDetach(
+            &(PVOID&)s_original_player_ctrl_spawn, PlayerCtrlSpawnHook);
+        DetourTransactionCommit();
+        s_original_player_ctrl_spawn = nullptr;
+        InterlockedExchange(&s_player_ctrl_spawn_observer_state, 0);
     }
 
     if (s_inventory_adjust_quantity_slot != nullptr &&
