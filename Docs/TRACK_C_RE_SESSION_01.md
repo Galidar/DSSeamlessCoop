@@ -149,27 +149,62 @@ or a network phantom.
 Useful for: knowing which area the local player is in (we already
 have this via Plan v3 Track A discovery, but this is a runtime confirm).
 
-### 3. Per-character data array — `PlayerCtrl + 0xE0` sub-module + 0x3E0..+0x440
+### 3. **Equipment slot array** — `PlayerCtrl + 0xE0` sub-module + 0x37C..+0x534
 
-20-byte-stride array of `(u32 id, u32 flag=1, f32 value)` entries.
-Local and phantom have DIFFERENT entries → confirms per-character
-allocation.
+**FULLY DECODED** — every value cross-references cleanly against
+`Paramdex/DS2S/Names/{WeaponParam,ArmorParam,ItemParam}.txt`. The
+earlier confusion was because I was checking the wrong Paramdex
+range. Real DS2 armor IDs start at 11,000,000 (e.g.
+`11001100 = "1001 [Body], Head"`), not at 6-digit values.
 
-Example entries:
-| Offset | Local | Phantom |
-|---|---|---|
-| +0x3F4 | 11001100 (10.0) | 17440100 (65.0) |
-| +0x408 | 12180101 (30.0) | 13300101 (65.0) |
-| +0x41C | 11001102 (48.33) | 13300102 (20.0) |
-| +0x430 | 11100103 (33.33) | 17440103 (20.0) |
+Stride: 20 bytes per slot. Slot layout (per 20-byte entry):
+```
++0x00  u32 item_id          (param ID — direct, NOT a handle!)
++0x04  u32 flag/count       (= 1 for valid)
++0x08  u32 unknown          (often 1 or 0)
++0x0C  u32 unknown          (often 1)
++0x10  f32 weight/value     (item weight in DS2 units)
+```
 
-**NOT confirmed as equipment IDs**. The phantom's value `133001`
-cross-references to `EnemyParam: Bonewheel Skeleton`. The other
-values (174401, 110011, 121801, ...) don't appear in any DS2S
-param. Best guess: this is a **bestiary / encounter tracking
-array** or **active VFX list** per-character. Equipment is
-elsewhere — likely in the unprobed `+0x378..+0x3F0` cluster or
-behind the `PlayerCtrl + 0x18` sub-pointer.
+Slot map (verified live with both local + phantom):
+
+| Slot offset | Slot name | Local | Phantom |
+|---|---|---|---|
+| +0x37C | R1 (right hand 1) | 11220000 = Silver Eagle Kite Shield | 11420000 = Hollow Soldier Shield |
+| +0x390 | R2 (right hand 2) | 3800000 = Sorcerer's Staff | 2400000 = Club |
+| +0x3A4 | R3 (right hand 3) | 3400000 = Fists (empty) | 3400000 = Fists |
+| +0x3B8 | L1 (left hand 1) | 1220000 = Longsword | 3400000 = Fists |
+| +0x3CC | L2 (left hand 2) | 3400000 = Fists | 3400000 = Fists |
+| +0x3E0 | L3 (left hand 3) | 3400000 = Fists | 3400000 = Fists |
+| +0x3F4 | Head | 11001100 = placeholder helm | 17440100 = Standard Helm |
+| +0x408 | Chest | 12180101 = Black Hollow Mage Robe | 13300101 = Old Knight Armor |
+| +0x41C | Arms | 11001102 = placeholder gauntlets | 13300102 = Old Knight Gauntlets |
+| +0x430 | Feet | 11100103 = Imported Trousers | 17440103 = Hard Leather Boots |
+| +0x444..+0x4A8 | Ammo (arrows + bolts), 6 slots | EMPTY × 6 | EMPTY × 6 |
+| +0x4BC | Ring 1 | 40230000 = Stone Ring | 40160000 = Ring of Blades |
+| +0x4D0 | Ring 2 | EMPTY | 40370001 = Covetous Silver Serpent Ring+1 |
+| +0x4E4 | Ring 3 | EMPTY | 40020000 = Chloranthy Ring |
+| +0x4F8 | Ring 4 | EMPTY | 40530000 = Ring of Thorns |
+| +0x50C | Quickbar 1 | **62061000 = bonfire_blessed_eye_orb** ✓ | 60155000 = Estus Flask |
+| +0x520 | Quickbar 2 | **62061001 = bonfire_crystal_eye_orb** ✓ | **62061000 = bonfire_blessed_eye_orb** (used to summon!) ✓ |
+| +0x534 | Quickbar 3 | 62030000 = White Sign Soapstone | (not measured) |
+
+**The custom Bonfire orbs (62061000/62061001) appear at +0x50C/+0x520**
+— that's the smoking gun that this IS the equipment+quickbar array
+(we know the user has those because they used them to summon).
+
+"Fists" (3400000) is the canonical empty-hand value, not a missing
+slot. Same for armor: every armor slot HAS to be filled (DS2 doesn't
+allow naked, except via specific "Hood" / "Trousers" placeholder
+armors).
+
+Total: 21 slots × 20 bytes = 420 bytes equipment+quickbar block.
+
+### 4. Frame-changing state array — `PlayerCtrl + 0x268` sub-module + 0x1C8
+
+10 packed `(u16 high, u16 low)` values that **change frame-to-frame**.
+Not equipment (confirmed — actual equipment is at +0xE0 sub +0x37C).
+Likely buff timers / active-effect IDs.
 
 ### 4. Runtime state / buff timers — `PlayerCtrl + 0x268` sub-module + 0x1C8
 
