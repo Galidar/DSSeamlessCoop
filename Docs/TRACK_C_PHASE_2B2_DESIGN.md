@@ -496,6 +496,96 @@ representation that gets transmitted unchanged (compact 0x39).
    #2's position Vector. Could be a useful trigger for Bonfire to
    correlate against signage activity.
 
+## 2026-05-17 update (later again) — Frpg2ClientImpl mapped, triple hunt parked
+
+Walked back from Frpg2PlayerImpl to its parent.
+
+### Frpg2ClientImpl ctor disassembled (RVA 0x68F890)
+
+```
+0x7FF76FB7F8AB: 48 8D 05 26 02 A8 00   lea rax,[0x7FF7705FFAD8]    ; vftable
+0x7FF76FB7F8B2: 48 89 01               mov [rcx],rax
+0x7FF76FB7F8B5: 48 83 C1 08            add rcx,08
+0x7FF76FB7F8B9: E8 522B0000            call FUN_140692410           ; subsystem A (+0x08)
+0x7FF76FB7F8BF: 48 8D 8F 80 00 00 00   lea rcx,[rdi+0x80]
+0x7FF76FB7F8C6: 48 8D 57 08            lea rdx,[rdi+0x08]
+0x7FF76FB7F8CA: E8 71650000            call FUN_140695E40           ; subsystem B (+0x80)
+```
+
+**Frpg2ClientImpl::vftable = `0x7FF7705FFAD8`**  (RVA `0x110FAD8`).
+
+### Live instance
+
+Computed live: Frpg2PlayerImpl @ ClientImpl+0x90 + we have Frpg2PlayerImpl @ `0x7FF4B456F610` →
+**Frpg2ClientImpl @ `0x7FF4B456F580`**. Confirmed by reading +0x00 = vftable.
+
+The instance is 0x788 bytes (allocated by FUN_14068D910). Key fields
+verified live:
+
+| Offset | Field | Value at live read |
+|---|---|---|
+| +0x000 | vftable | `0x7FF7705FFAD8` ✓ |
+| +0x008 | secondary vftable | `0x7FF770600278` |
+| +0x010 | subsystem A start (FUN_140692410) | heap ptr |
+| +0x080 | subsystem B start (FUN_140695E40) | sub-vftable |
+| +0x090 | Frpg2PlayerImpl::vftable | `0x7FF770601CB8` ✓ |
+| +0x258 | subsystem C (FUN_14069CD30) | ... |
+| +0x308 | subsystem F (FUN_1406A38A0) | ... |
+| +0x358..+0x4B8 | 5x stream-handlers (FUN_1406A5880 with kinds 0,1,2,4,3) | ... |
+| +0x510..+0x5C0 | 3x ... (FUN_1406A8520 with kinds 0,1,2) | ... |
+| +0x618 | FUN_1406AA330 | ... |
+| +0x6D8/+0x730 | 2x FUN_1406AC290 with kinds 0,1 | ... |
+
+The 5 streams at +0x358..+0x4B8 are likely the per-channel
+Frpg2 message queues (Player, Ghosts, BloodMessages, Bloodstains,
+Signs) and align with the saponita-related code paths.
+
+### Triple-ptr hunt result: PARKED
+
+`FUN_1401A29C0` consumes a `longlong[3]` triple at RCX. The triple
+lives at `*(N + 0x28)` for some sub-manager N reached from NetSvr
+code paths. Two static callers were found:
+
+- `FUN_14019F520` (line 346118): passes `*(M + 0x28)` as N where M
+  is `*(*(caller + 0x18) + 0x20)` or `*(caller + 0x18)`.
+- `FUN_1401A37D0` (line 349704): passes its own param_1 as N.
+  Has ZERO direct callers in `decompiled.c` — invoked only via
+  function pointer / vtable. So N is an abstract class with
+  virtual encode methods.
+
+Memory triple-pattern scan of Frpg2ClientImpl returned only
+AllStatus sub-message clusters (not real ring-buffer triples).
+The triple_ptr lives in a heap-allocated NetSvr sub-manager, not
+directly inside Frpg2ClientImpl.
+
+### Path forward
+
+**Triple hunt requires live encoder hook** (capture RCX at
+FUN_1401A29C0 entry on a real fire). Pure static tracing is
+diminishing returns. The capture would need either:
+- A DBVM watch (anti-cheat-safe) on the encoder, OR
+- An indirect runtime breakpoint via a Detours hook on
+  FUN_1401A29C0 entry (similar to the spawn-entry hook in v2.9.11).
+
+For phantom spawn (the real goal), Path B remains the right
+move — v2.9.11's spawn-entry capture hook will get the compact
+buffer template directly when a host receives a summon, no need
+to construct the triple ourselves.
+
+### Operational utility unlocked NOW
+
+What Path E gives Bonfire today, with zero further work:
+
+1. **Live player coords**: read AllStatus #1 player_location → Vector → XYZ.
+2. **Live zone/cell**: read AllStatus #1 player_location.online_area_id.
+3. **Sign-drop detection**: poll AllStatus #2 position; X/Z change = saponita drop.
+4. **Equipment changes**: AllStatus #1 equipment_info has repeated arrays of
+   slot IDs at +0x30/+0x48/+0x60/+0x78 (consumables/left/right/rings).
+5. **HP/level state**: AllStatus #1 physical_status, level_status sub-messages.
+
+All of these are stable cross-launch via the vftable-anchored
+location strategy (one AOB qword scan + walk).
+
 Old Path C-easiest's premise (in-repo `AllStatus` source =
 in-memory format DS2 reads) is **disproven**. The protobuf
 source in `Source/Server.DarkSouls2/Protobuf/Generated/` is
