@@ -30,10 +30,39 @@ public static class Methods
         });
 
         // ----- app updates -----
-        server.Register("app.update_status", async (_, ct) =>
+        //
+        // v2.9.0 / Plan v3: update_status accepts a "channel" param.
+        // "stable" filters out tags with a SemVer prerelease suffix
+        // (anything after a '-'); "experimental" returns whatever
+        // semver-tops the /releases list (current legacy behaviour).
+        // The Flutter UI reads the channel from app.get_update_channel
+        // on boot and passes it back here so the user's pinned
+        // preference drives the resolved "latest".
+        server.Register("app.update_status", async (@params, ct) =>
         {
-            var status = await AppUpdater.QueryStatusAsync(ct);
+            var channel = @params.GetString("channel");
+            var status = await AppUpdater.QueryStatusAsync(channel, ct);
             return status is null ? null : UpdateStatusJson(status);
+        });
+
+        server.Register("app.get_update_channel", async (_, _) =>
+        {
+            await Task.Yield();
+            return new JsonObject
+            {
+                ["channel"] = AppUpdater.GetChannel(),
+            };
+        });
+
+        server.Register("app.set_update_channel", async (@params, _) =>
+        {
+            await Task.Yield();
+            var raw = @params.GetString("channel") ?? "experimental";
+            var resolved = AppUpdater.SetChannel(raw);
+            return new JsonObject
+            {
+                ["channel"] = resolved,
+            };
         });
 
         server.Register("app.apply_update", async (@params, ct) =>
@@ -78,6 +107,7 @@ public static class Methods
                 ["asset_url"] = status.AssetUrl,
                 ["asset_size"] = status.AssetSize,
                 ["update_available"] = status.UpdateAvailable,
+                ["channel"] = status.Channel,
             };
         }
 
@@ -302,7 +332,10 @@ public static class Methods
 
         server.Register("server.fetch_latest_release", async (_, ct) =>
         {
-            var info = await ReleaseDownloader.QueryLatestAsync(ct);
+            // Server install probe respects the currently-pinned channel
+            // so a "stable" user does not get pushed onto a prerelease
+            // bundle.
+            var info = await ReleaseDownloader.QueryLatestAsync(AppUpdater.GetChannel(), ct);
             if (info is null) return null;
             return new JsonObject
             {
@@ -317,7 +350,7 @@ public static class Methods
             var url = @params.GetString("url");
             if (string.IsNullOrEmpty(url))
             {
-                var info = await ReleaseDownloader.QueryLatestAsync(ct);
+                var info = await ReleaseDownloader.QueryLatestAsync(AppUpdater.GetChannel(), ct);
                 url = info?.AssetUrl;
                 if (string.IsNullOrEmpty(url))
                     throw new Exception("Could not resolve the latest release.");

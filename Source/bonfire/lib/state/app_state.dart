@@ -572,7 +572,14 @@ class AppState extends ChangeNotifier {
     // offline (which was happening when both PCs hammered the
     // /releases endpoint during the v2.8.x rollout).
     scheduleMicrotask(_refreshServiceVersion);
-    scheduleMicrotask(() => refreshUpdateStatus(silent: true));
+    // v2.9.0: load the persisted update channel BEFORE the first
+    // update probe so refreshUpdateStatus honours the saved choice
+    // on cold boot instead of using the default ("experimental") for
+    // one cycle.
+    scheduleMicrotask(() async {
+      await _loadUpdateChannel();
+      await refreshUpdateStatus(silent: true);
+    });
     _updateTimer = Timer.periodic(
       const Duration(minutes: 30),
       (_) => refreshUpdateStatus(silent: true),
@@ -654,6 +661,51 @@ class AppState extends ChangeNotifier {
 
   void setMinPlayers(int v) {
     minPlayers = v;
+    notifyListeners();
+  }
+
+  // v2.9.0 / Plan v3: update channel. Stable filters out any release
+  // whose tag carries a SemVer prerelease suffix (anything after the
+  // first '-'). Experimental shows everything, matching the legacy
+  // behaviour that brought the user up to 2.8.x. Default for fresh
+  // installs is Stable; existing installs migrating from <2.9.0 keep
+  // their effective experimental channel because the saved value
+  // isn't set yet and we fall through to a quick "do they have any
+  // -experimental release installed?" probe in the boot path.
+  //
+  // The channel string lives in the BonfireService config so it
+  // survives reinstalls and follows the user across update cycles.
+  String updateChannel = 'experimental';
+  bool _updateChannelLoaded = false;
+
+  Future<void> setUpdateChannel(String channel) async {
+    final normalized = channel.toLowerCase() == 'stable' ? 'stable' : 'experimental';
+    if (updateChannel == normalized && _updateChannelLoaded) return;
+    updateChannel = normalized;
+    _updateChannelLoaded = true;
+    notifyListeners();
+    try {
+      await _rpc.call('app.set_update_channel', {'channel': normalized});
+    } catch (_) {
+      // best-effort persistence; UI state still reflects the choice
+    }
+    // Re-probe so the banner reflects the new channel's "latest".
+    unawaited(refreshUpdateStatus(silent: true));
+  }
+
+  Future<void> _loadUpdateChannel() async {
+    try {
+      final raw = await _rpc.call('app.get_update_channel');
+      if (raw is Map<String, dynamic>) {
+        final v = raw['channel'];
+        if (v is String && v.isNotEmpty) {
+          updateChannel = v.toLowerCase() == 'stable' ? 'stable' : 'experimental';
+        }
+      }
+    } catch (_) {
+      // ignore — keep the default
+    }
+    _updateChannelLoaded = true;
     notifyListeners();
   }
 
@@ -959,7 +1011,14 @@ class AppState extends ChangeNotifier {
     }
     notifyListeners();
     try {
-      final raw = await _rpc.call('app.update_status');
+      // v2.9.0: pass the active channel so the service-side resolver
+      // can filter out prereleases when the user is on Stable.
+      // Legacy services (pre-2.9.0) ignore the extra param and keep
+      // returning the highest semver overall — UX degrades to
+      // "always experimental" but doesn't break.
+      final raw = await _rpc.call('app.update_status', {
+        'channel': updateChannel,
+      });
       if (raw is Map<String, dynamic>) {
         updateStatus = AppUpdateStatus.fromJson(raw);
         updateLastCheckedAt = DateTime.now();

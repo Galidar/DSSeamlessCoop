@@ -25,7 +25,9 @@ public sealed class ReleaseDownloader
         string AssetUrl,
         long AssetSize);
 
-    public static async Task<ReleaseInfo?> QueryLatestAsync(CancellationToken ct = default)
+    public static async Task<ReleaseInfo?> QueryLatestAsync(
+        string? channel = null,
+        CancellationToken ct = default)
     {
         try
         {
@@ -43,6 +45,16 @@ public sealed class ReleaseDownloader
             // beat plain releases of an older version and a plain
             // release beats a prerelease of the same numeric version.
             //
+            // The "stable" channel additionally drops every candidate
+            // whose SemVer parse leaves a non-empty Prerelease suffix
+            // (e.g. "2.8.6-experimental" → suffix "experimental" →
+            // skipped). The "experimental" channel keeps the legacy
+            // behaviour where any tag is fair game and the highest
+            // semver-tag wins. The GitHub release.prerelease boolean
+            // is treated as a secondary signal because we sometimes
+            // re-flag a release post-publication and want the tag
+            // suffix to be the source of truth.
+            //
             // This costs ~30 KB more bandwidth per check vs the old
             // single-release endpoint — negligible for an update
             // probe that runs once per Bonfire launch.
@@ -52,6 +64,8 @@ public sealed class ReleaseDownloader
             using var doc = JsonDocument.Parse(json);
             if (doc.RootElement.ValueKind != JsonValueKind.Array)
                 return null;
+
+            var stableOnly = string.Equals(channel, AppUpdater.ChannelStable, StringComparison.OrdinalIgnoreCase);
 
             ReleaseInfo? best = null;
             AppUpdater.ParsedVersion bestVer = default;
@@ -74,6 +88,23 @@ public sealed class ReleaseDownloader
                     candidate.TagName.StartsWith("v", StringComparison.OrdinalIgnoreCase)
                         ? candidate.TagName[1..]
                         : candidate.TagName);
+
+                if (stableOnly)
+                {
+                    // Tag-level prerelease check (SemVer suffix after '-').
+                    if (!string.IsNullOrEmpty(ver.Prerelease))
+                        continue;
+
+                    // GitHub-flag prerelease check (the UI "Pre-release"
+                    // checkbox on the release page). Trust the tag if
+                    // the flag is missing.
+                    if (release.TryGetProperty("prerelease", out var preEl) &&
+                        preEl.ValueKind == JsonValueKind.True)
+                    {
+                        continue;
+                    }
+                }
+
                 if (!haveBest || ver.CompareTo(bestVer) > 0)
                 {
                     best = candidate;

@@ -814,6 +814,8 @@ class _UpdateBanner extends StatelessWidget {
                             text: _formatChecked(app.updateLastCheckedAt!)),
                     ],
                   ),
+                  const SizedBox(height: Sp.md),
+                  const _UpdateChannelPicker(),
                 ],
               ],
             );
@@ -1069,6 +1071,118 @@ class _UpdateFact extends StatelessWidget {
             ),
           ),
         ],
+      ),
+    );
+  }
+}
+
+/// Two-pill toggle that lets the user switch between the Stable and
+/// Experimental update channels. The pill labelled "Stable" pins
+/// AppUpdater to ignore prerelease tags (anything with a SemVer
+/// suffix); "Experimental" lets the highest semver tag win, including
+/// `-experimental` / `-rc` / `-beta` releases.
+///
+/// The choice round-trips through the service via app.set_update_channel
+/// and persists across Bonfire restarts.
+class _UpdateChannelPicker extends StatelessWidget {
+  const _UpdateChannelPicker();
+
+  @override
+  Widget build(BuildContext context) {
+    final app = context.watch<AppState>();
+    final p = Palette.of(context);
+    final current = app.updateChannel;
+    final disabled = app.updateInstalling || app.updateChecking;
+    return Row(
+      crossAxisAlignment: CrossAxisAlignment.center,
+      children: [
+        Icon(Icons.alt_route, size: IS.sm, color: p.textMuted),
+        const SizedBox(width: Sp.xs),
+        Text(
+          'Update channel',
+          style: BT.monoMuted.copyWith(color: p.textMuted),
+        ),
+        const SizedBox(width: Sp.md),
+        _ChannelChip(
+          label: 'Stable',
+          selected: current == 'stable',
+          disabled: disabled,
+          onTap: () => app.setUpdateChannel('stable'),
+          tooltip: 'Only install tagged release builds. Skips any '
+              'release tagged "-experimental", "-rc" or "-beta".',
+        ),
+        const SizedBox(width: Sp.xs),
+        _ChannelChip(
+          label: 'Experimental',
+          selected: current == 'experimental',
+          disabled: disabled,
+          onTap: () => app.setUpdateChannel('experimental'),
+          tooltip: 'Receive prerelease builds first. Newer features '
+              'ship here before they reach Stable.',
+        ),
+      ],
+    );
+  }
+}
+
+class _ChannelChip extends StatelessWidget {
+  final String label;
+  final bool selected;
+  final bool disabled;
+  final String tooltip;
+  final VoidCallback onTap;
+  const _ChannelChip({
+    required this.label,
+    required this.selected,
+    required this.disabled,
+    required this.onTap,
+    required this.tooltip,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    final p = Palette.of(context);
+    final fg = selected
+        ? p.textPrimary
+        : disabled
+            ? p.textMuted
+            : p.textSecondary;
+    final bg = selected ? p.accent.withOpacity(0.18) : Colors.transparent;
+    final border = selected
+        ? p.accent
+        : disabled
+            ? p.textMuted.withOpacity(0.25)
+            : p.textMuted.withOpacity(0.4);
+    return Tooltip(
+      message: tooltip,
+      child: InkWell(
+        borderRadius: BorderRadius.circular(R.sm),
+        onTap: disabled ? null : onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+              horizontal: Sp.md, vertical: Sp.xs),
+          decoration: BoxDecoration(
+            color: bg,
+            borderRadius: BorderRadius.circular(R.sm),
+            border: Border.all(color: border, width: 1),
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              if (selected) ...[
+                Icon(Icons.check, size: IS.sm, color: p.accent),
+                const SizedBox(width: Sp.xs),
+              ],
+              Text(
+                label,
+                style: BT.caption.copyWith(
+                  color: fg,
+                  fontWeight: selected ? FontWeight.w600 : FontWeight.w400,
+                ),
+              ),
+            ],
+          ),
+        ),
       ),
     );
   }
@@ -2607,20 +2721,58 @@ class _Ds2NativeSessionRowState extends State<_Ds2NativeSessionRow> {
       if (isArmed) _Chip(label: 'TARGET ARMED', color: p.accent),
     ];
 
+    // v2.9.0 / Plan v3: Join + Cancel buttons removed. Sessions are
+    // now armed exclusively by using the Crystal Eye Orb in-game —
+    // the runtime worker fires session.join from the item handler
+    // and BonfireService auto-discovers the host's endpoint via the
+    // LAN beacon (Track A). The UI's role here shrinks to passive
+    // status: "this is an open BNS session, here are its details,
+    // use your guest orb to join". Cleared/armed state still shows
+    // as a chip so the user can confirm what their last item-use
+    // did, but the buttons that did the arming via UI are gone.
     final Widget actionButton = isArmed
-        ? OutlinedButton.icon(
-            onPressed: _busy ? null : () => _clear(app),
-            icon: const Icon(Icons.close, size: 16),
-            label: const Text('Cancel'),
+        ? Container(
+            padding: const EdgeInsets.symmetric(
+                horizontal: Sp.md, vertical: Sp.xs),
+            decoration: BoxDecoration(
+              color: p.accent.withValues(alpha: 0.10),
+              borderRadius: BorderRadius.circular(R.sm),
+              border: Border.all(color: p.accent, width: 1),
+            ),
+            child: Row(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Icon(Icons.check_circle_outline,
+                    size: 16, color: p.accent),
+                const SizedBox(width: Sp.xs),
+                Text('Armed via item',
+                    style: BT.caption.copyWith(color: p.accent)),
+              ],
+            ),
           )
-        : FilledButton.tonal(
-            onPressed: _busy ? null : () => _arm(app),
-            child: _busy
-                ? const SizedBox(
-                    width: 14,
-                    height: 14,
-                    child: CircularProgressIndicator(strokeWidth: 2))
-                : const Text('Join'),
+        : Tooltip(
+            message:
+                'Use the Crystal Eye Orb in-game to join this session — '
+                'the Bonfire UI no longer arms targets directly.',
+            child: Container(
+              padding: const EdgeInsets.symmetric(
+                  horizontal: Sp.md, vertical: Sp.xs),
+              decoration: BoxDecoration(
+                color: p.surface,
+                borderRadius: BorderRadius.circular(R.sm),
+                border: Border.all(color: p.border, width: 1),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.local_fire_department_outlined,
+                      size: 16, color: p.textMuted),
+                  const SizedBox(width: Sp.xs),
+                  Text('Use orb in-game',
+                      style: BT.caption.copyWith(color: p.textMuted)),
+                ],
+              ),
+            ),
           );
 
     return Padding(

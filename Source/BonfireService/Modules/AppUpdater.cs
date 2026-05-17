@@ -2,11 +2,23 @@ using System.Diagnostics;
 using System.Globalization;
 using System.IO.Compression;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 
 namespace Bonfire.Service.Modules;
 
 public static class AppUpdater
 {
+    public const string ChannelStable = "stable";
+    public const string ChannelExperimental = "experimental";
+
+    private static readonly object ChannelLock = new();
+    private static string _channel = ChannelExperimental;
+    private static bool _channelLoadedFromDisk;
+
+    private static string ChannelFilePath =>
+        Path.Combine(Paths.InstallRoot, "Runtime", "AppUpdater", "channel.json");
+
     public sealed record UpdateStatus(
         string CurrentVersion,
         string LatestVersion,
@@ -15,11 +27,55 @@ public static class AppUpdater
         string AssetName,
         string AssetUrl,
         long AssetSize,
-        bool UpdateAvailable);
+        bool UpdateAvailable,
+        string Channel);
 
-    public static async Task<UpdateStatus?> QueryStatusAsync(CancellationToken ct = default)
+    /// <summary>
+    /// Returns the currently-active update channel ("stable" or
+    /// "experimental"). Lazily loads the persisted preference on first
+    /// call so a Bonfire restart preserves the user's selection.
+    /// </summary>
+    public static string GetChannel()
     {
-        var info = await ReleaseDownloader.QueryLatestAsync(ct);
+        lock (ChannelLock)
+        {
+            EnsureChannelLoaded();
+            return _channel;
+        }
+    }
+
+    /// <summary>
+    /// Normalises <paramref name="raw"/> to "stable" or "experimental",
+    /// updates the in-memory channel, and persists to disk best-effort.
+    /// Returns the resolved channel.
+    /// </summary>
+    public static string SetChannel(string raw)
+    {
+        var resolved = NormalizeChannel(raw);
+        lock (ChannelLock)
+        {
+            EnsureChannelLoaded();
+            _channel = resolved;
+            PersistChannel(resolved);
+        }
+        return resolved;
+    }
+
+    /// <summary>
+    /// Probe GitHub for the latest release applicable to
+    /// <paramref name="channel"/>. Pass <c>null</c> or empty to use the
+    /// persisted preference (typically what the Flutter UI does on its
+    /// silent-boot probe before it has read the channel back).
+    /// </summary>
+    public static async Task<UpdateStatus?> QueryStatusAsync(
+        string? channel = null,
+        CancellationToken ct = default)
+    {
+        var resolved = string.IsNullOrWhiteSpace(channel)
+            ? GetChannel()
+            : NormalizeChannel(channel);
+
+        var info = await ReleaseDownloader.QueryLatestAsync(resolved, ct);
         if (info is null)
             return null;
 
@@ -33,7 +89,55 @@ public static class AppUpdater
             AssetName: info.AssetName,
             AssetUrl: info.AssetUrl,
             AssetSize: info.AssetSize,
-            UpdateAvailable: CompareVersions(latest, current) > 0);
+            UpdateAvailable: CompareVersions(latest, current) > 0,
+            Channel: resolved);
+    }
+
+    private static string NormalizeChannel(string? raw)
+    {
+        if (string.IsNullOrWhiteSpace(raw)) return ChannelExperimental;
+        var trimmed = raw.Trim().ToLowerInvariant();
+        return trimmed switch
+        {
+            "stable" or "release" or "latest" => ChannelStable,
+            "experimental" or "pre" or "prerelease" or "beta" or "rc" => ChannelExperimental,
+            _ => ChannelExperimental,
+        };
+    }
+
+    private static void EnsureChannelLoaded()
+    {
+        if (_channelLoadedFromDisk) return;
+        _channelLoadedFromDisk = true;
+        try
+        {
+            if (!File.Exists(ChannelFilePath)) return;
+            var raw = File.ReadAllText(ChannelFilePath);
+            var node = JsonNode.Parse(raw) as JsonObject;
+            var stored = node?["channel"]?.GetValue<string>();
+            if (!string.IsNullOrWhiteSpace(stored))
+                _channel = NormalizeChannel(stored);
+        }
+        catch
+        {
+            // Best effort — fall back to the default channel.
+        }
+    }
+
+    private static void PersistChannel(string channel)
+    {
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(ChannelFilePath)!);
+            var node = new JsonObject { ["channel"] = channel };
+            File.WriteAllText(
+                ChannelFilePath,
+                node.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+        }
+        catch
+        {
+            // Best effort — the in-memory value is authoritative.
+        }
     }
 
     public static async Task<UpdateStatus> StageAndLaunchAsync(
@@ -41,7 +145,10 @@ public static class AppUpdater
         Action<long, long?> onProgress,
         CancellationToken ct = default)
     {
-        var status = await QueryStatusAsync(ct)
+        // Apply respects the currently-pinned channel — if the user is
+        // on "stable", we install the latest non-prerelease even when an
+        // experimental tag is newer.
+        var status = await QueryStatusAsync(channel: null, ct)
             ?? throw new InvalidOperationException("Could not resolve the latest release.");
 
         if (!status.UpdateAvailable)
