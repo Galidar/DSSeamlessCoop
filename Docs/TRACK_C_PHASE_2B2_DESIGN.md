@@ -586,6 +586,101 @@ What Path E gives Bonfire today, with zero further work:
 All of these are stable cross-launch via the vftable-anchored
 location strategy (one AOB qword scan + walk).
 
+## 2026-05-17 update — encoder caller disassembled
+
+User session, online + summoned-as-phantom in another player's
+world. Tried to catch a compact-format buffer in flight; the
+heap scan for `39 00 ?? 00 ?? ?? ?? ?? <zeros>` returned ZERO
+hits. The encoder only fires on certain triggers (join time,
+gear change, death — not per-tick). Per-tick traffic is a
+different lighter-weight protocol.
+
+Disassembled the runtime call chain:
+
+```
+FUN_14019F520  RVA 0x19F520:  (THUNK)
+  0x...F520: 48 8B 49 28        mov rcx,[rcx+0x28]   ; N = *(M+0x28)
+  0x...F524: 48 85 C9           test rcx,rcx
+  0x...F527: 0F 85 A3 42 00 00  jne FUN_1401A37D0    ; jump to real impl
+  0x...F52D: 33 C0              xor eax,eax
+  0x...F52F: C3                 ret
+
+FUN_1401A37D0  RVA 0x1A37D0:  (REAL ENCODER CALLER)
+  entry: rcx = N
+  +0x35: mov rcx,[rcx+0x28]    ; <-- triple_ptr loaded at ABS 0x7FF76F693820
+  ... size + alloc + zero ...
+  +0xF0: mov rcx,[rbx+0x28]    ; <-- triple_ptr again at ABS 0x7FF76F6938C0
+  ... call FUN_1401A29C0 ...
+```
+
+So at absolute address **0x7FF76F6938C0** (RVA 0x1A38C0), the
+instruction `mov rcx, [rbx+0x28]` loads triple_ptr right before
+the encoder fires. To capture triple_ptr at runtime, hook here
+and snapshot RCX after the load (or RBX before, then deref +0x28).
+
+Scanning all memory for a qword equal to FUN_1401A37D0
+(0x7FF76F6937D0) returned ZERO hits — meaning the function is
+NOT in any vtable. It's invoked indirectly via plain function
+pointers stored in stream-manager structs, not virtual dispatch.
+
+### What this implies for v2.9.12 (future)
+
+Add a Detours hook on FUN_1401A37D0 (or directly on FUN_1401A29C0
+at 0x7FF76F692DC0) that:
+1. Reads RCX (= N for the wrapper, = triple_ptr for the encoder)
+2. Logs the address + dereferences to capture the buffer contents
+3. Forwards to the original
+
+This is the same pattern as v2.9.11's `SpawnEntryHook`. Gated
+behind `BONFIRE_DS2_ENCODER_CAPTURE=1` env var. Triggering one
+real encoder fire (e.g. swap gear in-game during a coop session)
+gives us a complete capture of:
+- The triple_ptr address
+- The three ring-buffer pointers it contains
+- The resulting compact 0x39 buffer
+
+### Path E live verification (this session)
+
+Read local player position from `AllStatus #1.player_location.position`
+twice with a few minutes apart:
+- T0: `(3.8387, -18.5166, 207.0676)`
+- T1: `(3.2319, -18.5166, 208.8245)` (after user moved)
+
+Position update confirms the AllStatus #1 instance is alive and
+being updated by the engine each tick. Bonfire can poll this
+address at any rate to get live coords without any hooks.
+
+### Heap exploration of Frpg2 stream queues
+
+Stream 0 (Player channel) at ClientImpl+0x358 has its own
+internal queue structure with linked-list nodes (vftable
+`0x7FF7705C2898` repeated). Each node holds a buffer-ptr +
+count. These look like outbound message queues, not the
+encoder's ring buffer triple. Confirms triple lives in a
+DIFFERENT subsystem.
+
+### Final inventory of in-memory artifacts mapped
+
+| Artifact | Address | Vftable | How found |
+|---|---|---|---|
+| Frpg2ClientImpl singleton | `0x7FF4B456F580` | `0x7FF7705FFAD8` | walk back from PlayerImpl |
+| Frpg2PlayerImpl singleton | `0x7FF4B456F610` | `0x7FF770601CB8` | qword AOB scan |
+| AllStatus #1 (live) | `0x7FF4B456F620` | `0x7FF7706079F8` | offset +0x10 |
+| AllStatus #2 (advertised) | `0x7FF4B456F6A0` | `0x7FF7706079F8` | offset +0x90 |
+| PlayerLocation (current) | `0x7FF4B456FDA0` | `0x7FF770607528` | AllStatus#1 sub-msg #1 |
+| PhysicalStatus | `0x7FF4B4570100` | `0x7FF770607838` | AllStatus#1 sub-msg #6 |
+| EquipmentInfo | `0x7FF4B4570320` | `0x7FF770607988` | AllStatus#1 sub-msg #10 |
+| Position Vector (live) | `0x7FF4B45AC700` | — | PlayerLocation.position |
+| Stream 0 (Player ch.) | `0x7FF4B456F8D8` | `0x7FF770604AA8` | ClientImpl+0x358 |
+| Encoder call site instr | `0x7FF76F6938C0` | — | disassembly of FUN_1401A37D0 |
+
+All addresses are session-specific. Stable resolution path:
+1. Disassemble FUN_140698550 (RVA 0x698550), extract Frpg2PlayerImpl
+   vftable bytes from the `lea rax,[...]` instruction at +0x16.
+2. AOB qword scan for that vftable → exactly 1 hit = Frpg2PlayerImpl.
+3. Walk back 0x90 = Frpg2ClientImpl.
+4. From either, navigate to any sub-struct by fixed offset.
+
 Old Path C-easiest's premise (in-repo `AllStatus` source =
 in-memory format DS2 reads) is **disproven**. The protobuf
 source in `Source/Server.DarkSouls2/Protobuf/Generated/` is
