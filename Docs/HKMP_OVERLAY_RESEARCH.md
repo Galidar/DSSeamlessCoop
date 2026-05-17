@@ -1177,7 +1177,19 @@ self-sufficient without UI help.
    the freshest beacon (peer endpoint = packet source IP +
    beacon-advertised port, defends against host
    misconfiguration). RPC: `ds2_runtime.lan_beacon.status`.*
-5. **Track C — character-data sync + engine-cooperative render**
+5a. **Track C Phase 1 — client-side pose interpolation** —
+   independent of any new memory work. Lerps between the last
+   two received network snapshots on the Injector side so the
+   cube renders smoothly even at 30 Hz packet cadence (one
+   packet's worth of buffering, ~33 ms). Shortest-arc yaw
+   interpolation. Per-peer history matched by sender_id with
+   index-based fallback. *Shipped: tag `v2.9.3-experimental`.
+   Lives in `DS2_PoseShm::PollThreadProc` — render hook
+   untouched. `DS2_PeerPose` gained a `sender_id` field; layout
+   bumped 32 B → 40 B (binary-compatible because no external
+   consumer assumed a size).*
+
+5b. **Track C Phase 2 — character-data sync + engine-cooperative render**
    — re-scoped after external research
    (see `Docs/TRACK_C_SAPONITA_RESEARCH.md`). The phantom mesh
    is NOT transmitted by the network: both PCs have all assets

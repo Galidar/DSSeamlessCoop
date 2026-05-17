@@ -124,6 +124,11 @@ struct DS2_PeerPose
     float yaw_radians;     // facing direction, rotation around world Y
     float color[3];        // RGB tint for this peer's cube
     uint32_t valid;        // 0 = slot empty / departed, 1 = active
+    // v2.9.3 Track C Phase 1: per-peer identity carried alongside the
+    // pose so the client-side interpolator (DS2_PoseShm) can match a
+    // peer across snapshots even when the source-side iteration
+    // order changes. Zero = "anonymous" / no identity available.
+    int64_t sender_id;
 };
 
 // Publish a new peer-pose table. `count` is clamped to the internal
