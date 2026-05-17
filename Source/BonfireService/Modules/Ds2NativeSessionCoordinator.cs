@@ -265,6 +265,12 @@ public static class Ds2NativeSessionCoordinator
                 // UDP packets fly after the session is closed.
                 try { Ds2NativePoseBridge.Stop(); } catch { }
                 serverEffect["pose_bridge_stopped"] = true;
+                // Plan v3 Track A: stop advertising on the LAN so
+                // guests stop seeing the session in their beacon
+                // cache. Listener stays up so we can still pick up
+                // other hosts' beacons after closing our own.
+                try { Ds2LanBeacon.StopHostBroadcast(); } catch { }
+                serverEffect["lan_beacon_stopped"] = true;
                 break;
 
             case "rules.cycle":
@@ -751,7 +757,44 @@ public static class Ds2NativeSessionCoordinator
             result["started"] = false;
             result["error"] = ex.Message;
         }
+
+        // Plan v3 Track A: start broadcasting a LAN beacon so any
+        // guest on the same subnet can auto-arm a JoinTarget by
+        // using the Crystal Eye Orb — no Bonfire UI clicks.
+        var beaconResult = TryStartLanBeacon();
+        result["lan_beacon"] = beaconResult;
         return result;
+    }
+
+    private static JsonObject TryStartLanBeacon()
+    {
+        var info = new JsonObject();
+        try
+        {
+            var privateIp = Network.GetPrivateIp() ?? "127.0.0.1";
+            var endpoint = $"{privateIp}:{kDefaultPoseBridgePort}";
+            var serverConfig = ServerConfig.Load(Paths.ConfigFile);
+            var sessionName = string.IsNullOrWhiteSpace(serverConfig?.ServerName)
+                ? "Bonfire DS2 fire"
+                : serverConfig.ServerName;
+            var sessionId = Guid.NewGuid().ToString("N");
+            // Cheap stable sender id from machine name — good enough
+            // to deduplicate the host's own beacon when it loops back.
+            var senderId = (long)Environment.MachineName.GetHashCode()
+                           ^ ((long)Environment.UserName.GetHashCode() << 32);
+            Ds2LanBeacon.EnsureListenerRunning();
+            Ds2LanBeacon.StartHostBroadcast(sessionId, endpoint, sessionName, senderId);
+            info["broadcasting"] = true;
+            info["endpoint"] = endpoint;
+            info["session_id"] = sessionId;
+            info["session_name"] = sessionName;
+        }
+        catch (Exception ex)
+        {
+            info["broadcasting"] = false;
+            info["error"] = ex.Message;
+        }
+        return info;
     }
 
     // v2.8.3: called every worker tick (~1 Hz). Watches the latest
@@ -929,12 +972,53 @@ public static class Ds2NativeSessionCoordinator
         };
         try
         {
+            // Make sure the listener has had a chance to populate the
+            // beacon cache. Idempotent.
+            Ds2LanBeacon.EnsureListenerRunning();
+
             var target = Ds2NativeJoinTarget.Get();
-            var peers = BuildPeerEndpointsFromTarget(target);
+            // BuildPeerEndpointsFromTarget returns IReadOnlyList; copy
+            // into a List so the beacon-fallback path can append to it.
+            var peers = new List<string>(BuildPeerEndpointsFromTarget(target));
+
+            // Plan v3 Track A: if the user fired the Crystal Eye Orb
+            // without first arming a JoinTarget from the Bonfire UI,
+            // try to auto-arm one from the freshest LAN beacon. This
+            // makes the in-game flow item-driven end-to-end on local
+            // networks (no UI clicks required).
+            string? beaconNote = null;
+            if (peers.Count == 0)
+            {
+                var beacon = Ds2LanBeacon.PickStrongest();
+                if (beacon is not null)
+                {
+                    // Prefer the source IP of the packet over the
+                    // host's self-reported endpoint string — the
+                    // packet's source is what's actually routable
+                    // back to the host (handles a host with multiple
+                    // NICs or a misadvertised endpoint).
+                    var hostPort = ExtractPort(beacon.HostEndpoint, kDefaultPoseBridgePort);
+                    var resolved = $"{beacon.SourceIp}:{hostPort}";
+                    peers.Add(resolved);
+                    result["lan_beacon"] = new JsonObject
+                    {
+                        ["used"] = true,
+                        ["session_id"] = beacon.SessionId,
+                        ["host_endpoint"] = beacon.HostEndpoint,
+                        ["source_ip"] = beacon.SourceIp.ToString(),
+                        ["resolved"] = resolved,
+                        ["seen_count"] = beacon.SeenCount,
+                        ["age_ms"] = (DateTime.UtcNow - beacon.LastSeenUtc).TotalMilliseconds,
+                    };
+                    beaconNote = $"auto-armed from LAN beacon {beacon.SessionId} ({resolved})";
+                }
+            }
+
             if (peers.Count == 0)
             {
                 result["started"] = false;
-                result["error"] = "no armed join target — guest has nothing to point the bridge at";
+                result["error"] = "no armed join target and no LAN beacon visible — guest has nothing to point the bridge at";
+                result["lan_beacon"] = new JsonObject { ["used"] = false };
                 return result;
             }
             result["peers"] = new JsonArray(peers.Select(p => (JsonNode?)p).ToArray());
@@ -950,6 +1034,7 @@ public static class Ds2NativeSessionCoordinator
                 result["already_running"] = true;
             }
             result["started"] = true;
+            if (beaconNote is not null) result["note"] = beaconNote;
         }
         catch (Exception ex)
         {
@@ -957,6 +1042,19 @@ public static class Ds2NativeSessionCoordinator
             result["error"] = ex.Message;
         }
         return result;
+    }
+
+    /// Best-effort port extractor for an "ip:port" endpoint string.
+    /// Falls back to <paramref name="fallback"/> on any parse failure
+    /// so a malformed beacon can never crash the auto-join path.
+    private static int ExtractPort(string endpoint, int fallback)
+    {
+        if (string.IsNullOrWhiteSpace(endpoint)) return fallback;
+        var idx = endpoint.LastIndexOf(':');
+        if (idx <= 0 || idx >= endpoint.Length - 1) return fallback;
+        return int.TryParse(endpoint.AsSpan(idx + 1), out var p) && p > 0 && p < 65536
+            ? p
+            : fallback;
     }
 
     private sealed class SessionMemory

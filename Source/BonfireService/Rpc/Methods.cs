@@ -207,6 +207,24 @@ public static class Methods
             return Ds2NativePoseBridge.Status();
         });
 
+        // Plan v3 Track A — LAN beacon visibility.
+        //
+        // Two consumers expected:
+        //   - Flutter UI: render a "found 1 host on LAN" chip when
+        //     a beacon is in cache; an empty list = no LAN hosts.
+        //   - Diagnostic CLI / unit tests: read the broadcaster's
+        //     sequence number to confirm the host is publishing.
+        //
+        // The lifecycle (start/stop) is driven by session.create /
+        // session.leave in Ds2NativeSessionCoordinator — there's no
+        // public RPC to manually broadcast a beacon, by design. The
+        // UI should never need to spoof one.
+        server.Register("ds2_runtime.lan_beacon.status", async (@params, _) =>
+        {
+            await Task.Yield();
+            return Ds2LanBeacon.Status();
+        });
+
         // ----- DS2 native runtime: join target arming -----
         //
         // Flow: Flutter's DS2 Native Sessions browser calls set_join_target

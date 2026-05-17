@@ -38,6 +38,13 @@ public static class Program
         Methods.Register(server);
         Ds2NativeSessionCoordinator.Start(server);
 
+        // Plan v3 Track A: bring the LAN-discovery listener up at
+        // boot so a guest's Bonfire already has a cache of host
+        // beacons by the time the Crystal Eye Orb fires in-game.
+        // No-op on networks where multicast is filtered — the orb
+        // path still falls back to the master-list/UI flow.
+        try { Ds2LanBeacon.EnsureListenerRunning(); } catch { }
+
         // Phase 4c bootstrap: if the env vars are set we auto-start
         // the pose bridge without waiting for the Flutter UI to RPC
         // it. Useful for the single-PC loopback test (see
@@ -59,6 +66,7 @@ public static class Program
         {
             Ds2NativeSessionCoordinator.Stop();
             try { Ds2NativePoseBridge.Stop(); } catch { }
+            try { Ds2LanBeacon.ShutdownAll(); } catch { }
         }
     }
 

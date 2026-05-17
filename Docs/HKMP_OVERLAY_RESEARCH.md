@@ -1168,7 +1168,15 @@ self-sufficient without UI help.
    (network RTT + 5 ms poll + 16 ms render frame).*
 4. **Track A — item-driven discovery** — BonfireService LAN
    beacon + item handler wiring, ship as v2.9.2. UI's role
-   shrinks to status display.
+   shrinks to status display. *Shipped: tag
+   `v2.9.2-experimental`. UDP multicast on
+   `239.255.42.42:50032`, 1 Hz beacon while a host session is
+   open; listener always-on so a guest's cache is warm when
+   the Crystal Eye Orb fires. When the orb fires without a
+   manually-armed JoinTarget, the coordinator auto-arms from
+   the freshest beacon (peer endpoint = packet source IP +
+   beacon-advertised port, defends against host
+   misconfiguration). RPC: `ds2_runtime.lan_beacon.status`.*
 5. **Track C — mesh capture from memory** — Cheat Engine session
    (brother as saponita-summoned phantom), Ds2MemoryReader
    extensions, render hook FLVER submit. Multi-session research
