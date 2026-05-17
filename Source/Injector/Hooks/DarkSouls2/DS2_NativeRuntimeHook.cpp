@@ -4179,18 +4179,30 @@ namespace
         TryArmItemUseValidationObserver(*config);
         TryArmInventorySelectedItemCategoryObserver(*config);
         TryArmInventorySelectedActionExecuteObserver(*config);
-        // Track C Phase 2B.1: hook PlayerCtrl spawn — observer only.
-        // Logs every engine-driven phantom spawn so we can see what
-        // shape the engine passes its three args. No game-logic
-        // change; the hook forwards unconditionally.
-        TryArmPlayerCtrlSpawnObserver(*config);
-        // v2.9.7: parallel observer on the PlayerCtrl ctor itself —
-        // wider net. The spawn-function hook (0x355930) armed clean
-        // in v2.9.6 but didn't fire during regular gameplay
-        // (probably called once at world load, not per-phantom).
-        // The ctor (0x37EBE0) fires for every PlayerCtrl creation
-        // regardless of which caller drove it.
-        TryArmPlayerCtrlCtorObserver(*config);
+        // Track C Phase 2B observers — gated behind an env var so
+        // they're OFF by default. v2.9.7 shipped them always-on and
+        // a regression was reported: ItemUseValidation Detours-attach
+        // started failing with ERROR_INVALID_OPERATION when these
+        // were added (the EyeOrb custom items stopped working as a
+        // result). We don't know why Detours errors out with the
+        // extra hooks attached, but for normal users we want the
+        // Eye Orbs to keep working. RE sessions set
+        // `BONFIRE_DS2_RE_HOOKS=1` to enable both observers.
+        //
+        // We already captured the data we needed in v2.9.7 (6 ctor
+        // hits + slot pool layout), so this flag stays off in
+        // production until Phase 2B.2 turns them into producers
+        // instead of observers.
+        char re_hook_flag[8] = {};
+        DWORD re_hook_len = GetEnvironmentVariableA(
+            "BONFIRE_DS2_RE_HOOKS",
+            re_hook_flag,
+            sizeof(re_hook_flag));
+        if (re_hook_len > 0 && re_hook_flag[0] == '1')
+        {
+            TryArmPlayerCtrlSpawnObserver(*config);
+            TryArmPlayerCtrlCtorObserver(*config);
+        }
         EmitInventoryProbeAndMaybeArm(*config);
 
         uintmax_t command_offset = 0;
