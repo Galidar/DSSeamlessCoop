@@ -81,8 +81,74 @@ feared — only 7 fields touched by the spawn entry.
 
 | Offset | Width | Direction | Meaning |
 |---|---|---|---|
-| `+0x08` | qword | IN | Pointer to peer identity / character data. Read by 3 sibling validators (`FUN_1401A2680/2740/2800`) that fill local stack buffers later passed into `FUN_1401A0E40`. Exact shape TBD — Phase 2B.2C work. |
+| `+0x08` | qword | IN | Pointer to peer identity / character data. Read by 3 sibling validators (`FUN_1401A2680/2740/2800`) that fill local stack buffers later passed into `FUN_1401A0E40`. **The qword points at a Frpg2-style protobuf-deserialized struct** (see below). |
 | `+0x14` | u32 | IN | **player_id** — the integer that ends up formatted into `NetworkPlayer_%06u` (= our `000100` etc). |
+
+**`inner+0x08` deep dive** (`FUN_1401A2680` body):
+
+```c
+void FUN_1401A2680(u32* out_16bytes, void* protobuf_data) {
+  if (protobuf_data == 0) return;
+  uVar8 = *(u16*)(protobuf_data + 0x1F0) >> 0xC;   // upper 4 bits = entry count
+  puVar6 = protobuf_data + 0x1F0 + *(u16*)(protobuf_data + 0x1F2)
+                              + *(u16*)(protobuf_data + 0x02) * 4;
+  // Iterates packed entries; on tag (uVar1 & 0x3F) == 0, extracts 16 bytes
+}
+```
+
+This is **classic Frpg2 protobuf in-memory encoding**:
+- `+0x02`: a u16 length/offset
+- `+0x1F0`: u16 with a packed (count, flags) header
+- `+0x1F2`: u16 offset
+- Packed entries follow with (tag,length,payload) shape
+
+**The struct is ~0x200+ bytes** and corresponds to the in-memory
+form of `Frpg2RequestMessage::PlayerCharacterData` (the same
+message ID we saw advertised at line 2723817 of decompiled.c).
+Synthesizing from scratch requires understanding the Frpg2
+encoding. There are three more pragmatic paths:
+
+## Three paths for Phase 2B.2C inner-data synthesis
+
+### Path A — full synthesis from scratch (hardest)
+
+Build the ~0x200-byte protobuf-encoded struct in C from our SHM
+peer data. Requires reverse-engineering every field tag + offset
+that the 3 validators consume. Estimated 4-8 h of additional RE.
+
+### Path B — capture & replay (recommended next step) ⭐
+
+1. Add a one-shot **capture hook** at the entry to
+   `FUN_1401A1650`. When the engine spawns a real phantom
+   (vanilla saponita), we **snapshot the entire
+   Ds2PhantomRequest + its inner struct + the protobuf blob**
+   into a file. ~10 KB total per capture.
+2. Replay the captured snapshot for our peer: copy the byte-
+   pattern into Injector-allocated memory, **patch just the
+   delta fields** (player_id at inner+0x14, equipment IDs
+   inside the protobuf at known offsets we already mapped in
+   RE Session 01).
+3. Call `FUN_1401A1650(replayed_request)`.
+
+This trades one constraint (need one vanilla summon ever, to
+capture a template) for a massive reduction in RE complexity.
+
+### Path C — hook the upstream deserializer
+
+Find the function that **takes a `PlayerCharacterData`
+protobuf bytestream and builds the internal struct**. That
+function exists (the network handler uses it to build inner
+from the wire format). Call it with our SHM peer's serialized
+data. Cleanest architecturally but requires finding +
+understanding that deserializer — likely 2-4h of RE.
+
+## Recommendation
+
+**Path B for the first working prototype**. Once we have a
+template captured, we can spawn brother any time without
+saponita matching. After it's working visually, do Path C as
+the production-grade path so we're not dependent on a captured
+template (the protobuf layout could change between game patches).
 
 ## State machine — `FUN_1401A0D20` dispatcher
 
