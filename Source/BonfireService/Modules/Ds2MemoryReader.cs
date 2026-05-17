@@ -121,6 +121,38 @@ public static class Ds2MemoryReader
         get { lock (Lock) { return _processHandle != IntPtr.Zero && _gmImpGlobalAddr != IntPtr.Zero; } }
     }
 
+    /// <summary>
+    /// Phase 2B.2A — runtime resolver for the world manager pointer
+    /// that the engine passes as `param_1` to the phantom-spawn chain
+    /// (`FUN_1401A1650` / `FUN_1403572A0` / `FUN_1403572E0`).
+    ///
+    /// In Ghidra terms: `world_mgr = *(DAT_1416148F0 + 0x18)`.
+    /// Since `DAT_1416148F0` is the same global we already resolve
+    /// for the gm chain (`_gmImpGlobalAddr` at the AOB hit), this
+    /// reads the qword `+0x18` bytes past that address.
+    ///
+    /// Returns IntPtr.Zero on any read failure (process detached,
+    /// DS2 loading, etc). Verified in the v2.9.7 ctor hook log:
+    /// across 6 hits the world_mgr was constant `0x7FF4770E0F60`
+    /// (matching arg3 of `FUN_14037EBE0` in every fire).
+    /// </summary>
+    public static IntPtr TryReadWorldMgr()
+    {
+        lock (Lock)
+        {
+            if (_processHandle == IntPtr.Zero || _gmImpGlobalAddr == IntPtr.Zero)
+            {
+                return IntPtr.Zero;
+            }
+            var target = (IntPtr)((long)_gmImpGlobalAddr + 0x18);
+            if (!TryReadUInt64(target, out var value) || value == 0)
+            {
+                return IntPtr.Zero;
+            }
+            return (IntPtr)(long)value;
+        }
+    }
+
     /// <summary>Drop the cached handle/scan result (e.g. on shutdown).</summary>
     public static void Release()
     {

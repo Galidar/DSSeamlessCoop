@@ -377,6 +377,14 @@ public static class Ds2NativePoseBridge
 
             // Track C Phase 2A — char_data round-trip diagnostics.
             ["char_data"] = BuildCharDataStatus(),
+
+            // Track C Phase 2B.2A — engine-spawn-chain anchors. Surfaces
+            // the world_mgr pointer (= param_1 we'd pass into
+            // FUN_1401A1650 for engine-cooperative phantom spawn).
+            // A non-zero value here proves the resolver works on the
+            // live DS2 process; zero means DS2 isn't running or the
+            // gm chain hasn't resolved yet.
+            ["spawn_chain"] = BuildSpawnChainStatus(),
         };
     }
 
@@ -413,6 +421,29 @@ public static class Ds2NativePoseBridge
             });
         }
         return arr;
+    }
+
+    // Track C Phase 2B.2A — surface the engine-spawn-chain anchors so
+    // the user (and us) can see the world_mgr resolver is alive
+    // before Phase 2B.2B starts populating the request struct. All
+    // values come from Ds2MemoryReader — no new side effects.
+    private static JsonObject BuildSpawnChainStatus()
+    {
+        var worldMgr = Ds2MemoryReader.TryReadWorldMgr();
+        return new JsonObject
+        {
+            ["ds2_attached"] = Ds2MemoryReader.IsAttached,
+            ["world_mgr_ptr"] = worldMgr == IntPtr.Zero
+                ? null
+                : "0x" + ((ulong)worldMgr).ToString("X"),
+            // RVAs of the spawn-chain entry points — these are static
+            // (binary-relative), not addresses; the Injector adds the
+            // module base at runtime when it actually calls them.
+            ["spawn_entry_rva"] = "0x1A1650",   // FUN_1401A1650 — 1-arg cleanest entry
+            ["spawn_wrapper_rva"] = "0x3572A0", // FUN_1403572A0 — 2-arg wrapper
+            ["spawn_core_rva"] = "0x3572E0",    // FUN_1403572E0 — actual phantom spawner
+            ["player_ctrl_ctor_rva"] = "0x37EBE0", // FUN_14037EBE0 — PlayerCtrl ctor
+        };
     }
 
     private static JsonObject BuildCharDataStatus()
