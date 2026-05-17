@@ -2834,6 +2834,15 @@ namespace
     void* __fastcall PlayerCtrlCtorHook(
         void* this_ptr, void* arg2, void* arg3, void* arg4)
     {
+        // v2.9.8: capture the return RIP from the hook entry. This
+        // is the address inside DS2's .text that the engine wants
+        // control to return to after the ctor finishes — i.e. the
+        // exact caller line of the ctor. With this we can pinpoint
+        // which of FUN_1403560A0 / 1403572E0 / 140357920 is the
+        // path that actually fires during gameplay (v2.9.6 proved
+        // it's NOT FUN_140355930).
+        void* return_rip = _ReturnAddress();
+
         const uint64_t hit_n = s_player_ctrl_ctor_hit_count.fetch_add(
             1, std::memory_order_relaxed) + 1;
 
@@ -2850,6 +2859,18 @@ namespace
             HexPointer(reinterpret_cast<uintptr_t>(arg3));
         payload["arg4"] =
             HexPointer(reinterpret_cast<uintptr_t>(arg4));
+        payload["return_rip"] =
+            HexPointer(reinterpret_cast<uintptr_t>(return_rip));
+        // Compute the RVA (return_rip - DS2 base) so we can match it
+        // to a Ghidra-decompiled function header even without manual
+        // subtraction. GameBaseAddress is captured at install time.
+        if (s_active_runtime_config_ready &&
+            s_active_runtime_config.GameBaseAddress != 0)
+        {
+            payload["return_rva"] = HexPointer(
+                reinterpret_cast<uintptr_t>(return_rip) -
+                s_active_runtime_config.GameBaseAddress);
+        }
         payload["original_target"] =
             HexPointer(reinterpret_cast<uintptr_t>(s_original_player_ctrl_ctor));
 
