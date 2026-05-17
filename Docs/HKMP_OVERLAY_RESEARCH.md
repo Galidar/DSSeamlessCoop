@@ -1054,6 +1054,121 @@ stream, not Steam P2P.
   server might disconnect us. Mitigation: keep the override delta
   bounded.
 
+## 13f. Plan v3 — native in-game co-op flow (2026-05-17, post-Phase 4d)
+
+After two PCs successfully ran the cube overlay end-to-end, the
+review surfaced a cleaner long-term architecture. The Bonfire UI
+"click Join then click Travel to this fire" dance turned out
+**incómodo y nada natural** — it pulled the player out of DS2 every
+time they wanted to start or join a session. The right shape:
+
+```
+Host in-game        →  inventory → custom orb  → session open
+Guest in-game       →  inventory → custom orb  → finds + joins
+Bonfire UI          →  status only, no Join/Travel buttons
+Both peers see each other with imperceptible latency
+```
+
+This replaces the saponita "drop a sign, wait, walk to it" pattern
+with a direct "use the item, you're in" pattern — same item-based
+muscle memory, no leaving signs scattered on the ground, no
+matchmaking wait. The custom items already exist
+(`bonfire_blessed_eye_orb` = 62061000 fires `session.create`,
+`bonfire_crystal_eye_orb` = 62061001 fires `session.join`). What's
+missing is the discovery + zero-friction join path that makes them
+self-sufficient without UI help.
+
+### Three tracks toward the plan-v3 end state
+
+**Track A — items drive the entire lifecycle**
+
+- Host orb in-game: opens session AND publishes a LAN beacon (UDP
+  multicast or broadcast) so any local Bonfire instance can find
+  it without polling the master server.
+- Guest orb in-game: when used, BonfireService listens for the
+  beacon → auto-arms JoinTarget → triggers the launch sequence →
+  joins. Zero UI clicks.
+- For non-LAN deployments (different networks), fall back to the
+  current master-listing flow but still item-driven (the orb tells
+  BonfireService to query the listing and pick).
+- UI surfaces only **status** ("waiting for peer", "joined to X")
+  and config; the action buttons go away.
+
+**Track B — sub-10 ms IPC for imperceptible latency**
+
+- Current bottleneck is the Injector's command-inbox file polling
+  at ~1 Hz. Even with the pose bridge sending at 30 Hz, the
+  Injector's render loop sees the new pose 1 second later. Total
+  roundtrip ~1.1 s in worst case.
+- Replace `commands.jsonl` polling with **shared memory** between
+  BonfireService and the Injector. Layout: a small fixed-size
+  ringbuffer in a named section (`Local\BonfireRtPosePipe`), 16
+  entries × 64 bytes each (sender_id + pose + timestamp + flags).
+- BonfireService writes the latest pose snapshot to the ringbuffer
+  on every received UDP packet — no file I/O on the hot path.
+- The Injector's render hook reads the ringbuffer **on every
+  D3D11 frame** (60+ Hz). Total network → render lag is now
+  network RTT + ~16 ms (one frame). On LAN that's sub-10 ms.
+- Keep `commands.jsonl` as a fallback / debug telemetry path —
+  small write rate (1 Hz) for diagnostics only.
+
+**Track C — capture the peer mesh from DS2 memory after summon**
+
+- This is the part of the saponita we DO want: when DS2 spawns a
+  phantom, it loads the peer's FLVER mesh + armor pieces +
+  skinning skeleton + animation set into the local process.
+- Reverse-engineer where those buffers live (Cheat Engine session,
+  brother as phantom; scan for known FLVER signatures or the
+  vertex buffer pointers held by the phantom ChrIns).
+- BonfireService reads the mesh buffers via `Ds2MemoryReader`
+  (already have ReadProcessMemory plumbing) and broadcasts the
+  data over UDP.
+- Render hook receives, submits to D3D11 as a skinned mesh draw
+  at the peer's overlay anchor (instead of the cube/humanoid
+  primitives).
+- **We bypass the phantom system entirely** — the mesh data is
+  cloned, the overlay still owns the rendering, none of the
+  vanilla limits (4-cap, fog gates, SM matching) carry over.
+
+### UI refactor that lands with Track A
+
+- **Remove** the "Join" button on `DS2 NATIVE SESSIONS` rows. The
+  whole section either disappears or becomes read-only status.
+- **Remove** the "Set as join target" workflow — superseded by
+  item-driven discovery.
+- **Keep** `MY BONFIRES` (you still configure your own server) and
+  `PUBLIC BONFIRES` as a browsable list for first-time setup or
+  cross-network co-op.
+- **Add** an **Update Channel** selector in the update banner /
+  settings:
+  - **Stable** — `AppUpdater` filters out any tag with a `-`
+    prerelease suffix. Only ships releases marked as stable (no
+    `-experimental`/`-rc`/`-beta`).
+  - **Experimental** — current behavior, sees everything.
+  - Default for existing installs: experimental (matches what
+    they've been on). New installs: stable.
+- **Add** in-game item status overlay: when host/guest orb is
+  active, show in the UI: "Hosting via Blessed Eye Orb — 1 peer
+  connected" / "Joined via Crystal Eye Orb — connected to X".
+
+### Implementation order (next sessions)
+
+1. **Doc update** — this section (just landed). Source of truth
+   for the plan-v3.
+2. **UI refactor — channels + remove Join** — Flutter changes
+   only, ship as v2.9.0. No protocol change. Brother updates
+   normally, no breaking change.
+3. **Track B — shared memory IPC** — BonfireService + Injector
+   changes, ship as v2.9.1. Sub-10 ms latency. The "feel" jump
+   the user was after.
+4. **Track A — item-driven discovery** — BonfireService LAN
+   beacon + item handler wiring, ship as v2.9.2. UI's role
+   shrinks to status display.
+5. **Track C — mesh capture from memory** — Cheat Engine session
+   (brother as saponita-summoned phantom), Ds2MemoryReader
+   extensions, render hook FLVER submit. Multi-session research
+   work, ships as v3.0.0 when ready.
+
 ## 14. Next concrete milestones
 
 ### Track A — multi-actor rendering (next rebuild)
