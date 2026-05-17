@@ -276,16 +276,34 @@ public static class Ds2NativePoseBridge
         {
             try
             {
-                var path = LatestEventLog();
-                if (path != null && _lastEventLogPath != path)
+                // v2.8.4: PRIMARY pose source — read DS2 process
+                // memory directly via Ds2MemoryReader. Bypasses the
+                // Injector's worker thread (which has a habit of
+                // hanging on chain-walk failures during DS2's
+                // pre-world loading), so the broadcaster runs even
+                // when events.jsonl is frozen.
+                if (Ds2MemoryReader.TryReadHostPose(out var px, out var py, out var pz))
                 {
-                    DebugLog($"WatcherLoop: switched session log to {Path.GetFileName(path)}");
-                    _lastEventLogPath = path;
-                    _lastEventLogOffset = 0;
+                    _latestLocalPose = new PoseSample(px, py, pz, 0f, DateTime.UtcNow);
                 }
-                if (_lastEventLogPath != null)
+                else
                 {
-                    ScanForNewPoses(_lastEventLogPath, ref _lastEventLogOffset);
+                    // Fallback: tail events.jsonl as before. Kept so
+                    // Bonfire-only deployments without injector
+                    // access (e.g. a future relay-only mode) still
+                    // have a pose source. Also covers the small
+                    // window before the AOB scan resolves.
+                    var path = LatestEventLog();
+                    if (path != null && _lastEventLogPath != path)
+                    {
+                        DebugLog($"WatcherLoop: switched session log to {Path.GetFileName(path)}");
+                        _lastEventLogPath = path;
+                        _lastEventLogOffset = 0;
+                    }
+                    if (_lastEventLogPath != null)
+                    {
+                        ScanForNewPoses(_lastEventLogPath, ref _lastEventLogOffset);
+                    }
                 }
 
                 if (_latestLocalPose is { } pose)

@@ -780,21 +780,18 @@ public static class Ds2NativeSessionCoordinator
         if (now - _lastPoseAutoStartCheck < TimeSpan.FromSeconds(2)) return;
         _lastPoseAutoStartCheck = now;
 
-        var eventLog = FindLatestEventLog();
-        if (eventLog is null) return;
-
-        // Recent activity gate: the events.jsonl must have been
-        // written to within the last 15 s, otherwise we're looking
-        // at a stale session.
+        // v2.8.4: gate purely on DS2 process existence. We no longer
+        // require resolved player.live_transform events because the
+        // bridge now reads pose directly from DS2 memory via
+        // Ds2MemoryReader, bypassing the Injector's worker thread
+        // (which sometimes hangs on pre-world chain-walk failures).
+        // Events.jsonl freshness only matters for the fallback path.
         try
         {
-            var info = new FileInfo(eventLog);
-            if (!info.Exists || (now - info.LastWriteTimeUtc) > TimeSpan.FromSeconds(15))
+            if (!System.Diagnostics.Process.GetProcessesByName("DarkSoulsII").Any())
                 return;
         }
         catch { return; }
-
-        if (!HasRecentResolvedPose(eventLog, now)) return;
 
         // Decide role from JoinTarget. Wrap each call in try/catch
         // so a malformed disk file can't break the heartbeat loop.
