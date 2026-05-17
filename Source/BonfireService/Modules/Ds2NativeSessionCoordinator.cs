@@ -773,7 +773,17 @@ public static class Ds2NativeSessionCoordinator
 
     private static void TryAutoStartPoseBridgeFromHeartbeat()
     {
-        if (Ds2NativePoseBridge.IsRunning) return;
+        if (Ds2NativePoseBridge.IsRunning)
+        {
+            // v2.8.5: even if the bridge is already running, the user
+            // may have armed the JoinTarget AFTER the bridge auto-
+            // started (e.g. legacy code path where the bridge started
+            // host-mode first, then "Join" was clicked). Make sure
+            // the configured peer list reflects the current
+            // JoinTarget. Idempotent — AddPeer no-ops if already in.
+            TryReconcilePeersWithJoinTarget();
+            return;
+        }
 
         // Throttle: at most one auto-start attempt per 2 s.
         var now = DateTime.UtcNow;
@@ -798,16 +808,55 @@ public static class Ds2NativeSessionCoordinator
         try
         {
             var target = Ds2NativeJoinTarget.Get();
-            if (target != null && !string.IsNullOrWhiteSpace(target.Hostname))
+            var peers = BuildPeerEndpointsFromTarget(target);
+            Ds2NativePoseBridge.EnsureStarted(kDefaultPoseBridgePort, peers);
+        }
+        catch { /* best-effort */ }
+    }
+
+    // v2.8.5: build the initial peer-endpoint list from a JoinTarget,
+    // including BOTH the master-listing Hostname (WAN address) and
+    // PrivateHostname (LAN address) when both look usable. The bridge
+    // broadcasts to all configured peers — packets to whichever is
+    // actually reachable land at the destination's listener; the
+    // other path just silently drops. This unblocks same-LAN co-op
+    // (where WAN-routed packets require port-forwarding the user
+    // hasn't set up) without breaking different-network co-op (where
+    // only WAN works).
+    private static IReadOnlyList<string> BuildPeerEndpointsFromTarget(
+        Ds2NativeJoinTarget.JoinTarget? target)
+    {
+        var peers = new List<string>();
+        if (target == null) return peers;
+
+        void Maybe(string raw)
+        {
+            if (string.IsNullOrWhiteSpace(raw)) return;
+            // Reject obviously-useless values.
+            if (raw == "0.0.0.0" || raw == "127.0.0.1" || raw == "::1") return;
+            var candidate = $"{raw}:{kDefaultPoseBridgePort}";
+            if (!peers.Contains(candidate, StringComparer.OrdinalIgnoreCase))
+                peers.Add(candidate);
+        }
+        Maybe(target.Hostname);
+        Maybe(target.PrivateHostname);
+        return peers;
+    }
+
+    // v2.8.5: when the bridge is already running but the JoinTarget
+    // arming happens later (e.g. user clicks "Join" after the bridge
+    // auto-started in host-mode on DS2 launch), inject the JoinTarget
+    // peers without restarting. Ds2NativePoseBridge.AddPeer is a
+    // public no-op-on-duplicate helper we added in Phase 4d.
+    private static void TryReconcilePeersWithJoinTarget()
+    {
+        try
+        {
+            var target = Ds2NativeJoinTarget.Get();
+            if (target == null) return;
+            foreach (var peer in BuildPeerEndpointsFromTarget(target))
             {
-                var peer = $"{target.Hostname}:{kDefaultPoseBridgePort}";
-                Ds2NativePoseBridge.EnsureStarted(
-                    kDefaultPoseBridgePort, new[] { peer });
-            }
-            else
-            {
-                Ds2NativePoseBridge.EnsureStarted(
-                    kDefaultPoseBridgePort, Array.Empty<string>());
+                Ds2NativePoseBridge.AddPeer(peer);
             }
         }
         catch { /* best-effort */ }
@@ -881,28 +930,23 @@ public static class Ds2NativeSessionCoordinator
         try
         {
             var target = Ds2NativeJoinTarget.Get();
-            // Prefer the public hostname (master-server-listed) — works
-            // across NATs as long as the host has UDP 50031 forwarded.
-            // For LAN-only sessions the brother's join target should
-            // be the LAN IP and PrivateHostname would be the same.
-            var hostIp = target?.Hostname;
-            if (string.IsNullOrWhiteSpace(hostIp))
+            var peers = BuildPeerEndpointsFromTarget(target);
+            if (peers.Count == 0)
             {
                 result["started"] = false;
                 result["error"] = "no armed join target — guest has nothing to point the bridge at";
                 return result;
             }
-            var peer = $"{hostIp}:{kDefaultPoseBridgePort}";
-            result["peer"] = peer;
+            result["peers"] = new JsonArray(peers.Select(p => (JsonNode?)p).ToArray());
 
             var started = Ds2NativePoseBridge.EnsureStarted(
-                kDefaultPoseBridgePort, new[] { peer });
+                kDefaultPoseBridgePort, peers);
             if (!started)
             {
-                // Already running — make sure the host is in the peer
-                // list (covers re-join after a session.leave that
-                // didn't fully tear down).
-                Ds2NativePoseBridge.AddPeer(peer);
+                // Already running — reconcile so any newly-resolved
+                // peer endpoints (e.g. LAN address that wasn't in the
+                // original list) get folded in.
+                foreach (var p in peers) Ds2NativePoseBridge.AddPeer(p);
                 result["already_running"] = true;
             }
             result["started"] = true;
