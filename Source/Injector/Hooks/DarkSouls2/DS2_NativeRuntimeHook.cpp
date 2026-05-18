@@ -70,6 +70,20 @@ namespace
     //   rdx = pointer-to-pointer where the spawned PlayerCtrl* lands
     //   r8  = req2: the inner data wrapper. *(r8 + 0x08) = compact 0x39 buffer
     constexpr uintptr_t kPhantomSpawnerRva = 0x3572E0;
+    // v2.9.14 — FUN_14051CE20 is the per-entry queue dispatcher. The
+    // phantom-spawn queue lives at `phantom_mgr + 0x5C0 + N*0x640`,
+    // each entry 0x640 bytes. Network packets carrying compact-0x39
+    // spawn buffers land in `entry + 0x40..+0x630` (0x5F0 bytes).
+    // FUN_14051DBB0 (per-tick) walks the queue, calls FUN_14051CE20
+    // for each ready entry, then ZEROES the 0x5F0 payload region.
+    //
+    // Hooking FUN_14051CE20 entry catches the compact buffer BEFORE
+    // the zero-out, regardless of host- or guest-side direction.
+    // Signature (per Ghidra): void(longlong phantom_mgr, longlong entry)
+    constexpr uintptr_t kQueueDispatchRva = 0x51CE20;
+    constexpr size_t    kQueueEntrySize    = 0x640;
+    constexpr size_t    kQueuePayloadOff   = 0x40;
+    constexpr size_t    kQueuePayloadSize  = 0x5F0;
     // v2.9.7 Phase 2B.1b — coverage expansion. The spawn function
     // above hooked clean but never fired in the captured window,
     // suggesting it's a once-per-world-load entry, not the
@@ -274,6 +288,14 @@ namespace
     LONG s_phantom_spawner_observer_state = 0;
     std::atomic<uint64_t> s_phantom_spawner_hit_count{0};
     std::atomic<int> s_phantom_spawner_captures_remaining{
+        kSpawnCaptureMaxPerSession};
+    // v2.9.14: queue-dispatcher observer state.
+    using QueueDispatchFn = uintptr_t(__fastcall*)(
+        void* phantom_mgr, void* entry);
+    QueueDispatchFn s_original_queue_dispatch = nullptr;
+    LONG s_queue_dispatch_observer_state = 0;
+    std::atomic<uint64_t> s_queue_dispatch_hit_count{0};
+    std::atomic<int> s_queue_dispatch_captures_remaining{
         kSpawnCaptureMaxPerSession};
     ItemUseValidationFn s_original_item_use_validation = nullptr;
     InventoryAdjustQuantityFn s_original_inventory_adjust_quantity = nullptr;
@@ -3540,6 +3562,162 @@ namespace
         return true;
     }
 
+    // v2.9.14 — QueueDispatchHook. Catches FUN_14051CE20 per-entry
+    // dispatch. The queue entry contains the compact-0x39 payload at
+    // +0x40..+0x630 (0x5F0 bytes). The engine ZEROES this region right
+    // after dispatch, so we MUST capture inside this hook before the
+    // caller's memset fires.
+    //
+    // The return value is non-zero on success (dispatched), zero on
+    // skip. We forward unchanged.
+    uintptr_t __fastcall QueueDispatchHook(
+        void* phantom_mgr, void* entry)
+    {
+        const uint64_t hit_n = s_queue_dispatch_hit_count.fetch_add(
+            1, std::memory_order_relaxed) + 1;
+
+        int remaining = s_queue_dispatch_captures_remaining.fetch_sub(
+            1, std::memory_order_relaxed);
+        const bool will_dump = (remaining > 0) && (entry != nullptr);
+
+        // Snapshot the full queue entry (0x640 bytes).
+        std::vector<uint8_t> entry_bytes;
+        size_t entry_copied = 0;
+        if (will_dump)
+        {
+            entry_bytes.resize(kQueueEntrySize);
+            entry_copied = SafeSpawnEntry_ReadBytes(
+                entry, kQueueEntrySize, entry_bytes.data());
+            entry_bytes.resize(entry_copied);
+        }
+
+        // Header peek: u32 at +0x80 is the "type field" (0xE = end-of-
+        // queue sentinel, others = real entry). u8 at +0x630 is status,
+        // u8 at +0x631 is the "ready" flag.
+        uint32_t type_field = 0;
+        uint16_t status_word = 0;
+        if (entry_copied >= 0x632)
+        {
+            std::memcpy(&type_field, entry_bytes.data() + 0x80, 4);
+            std::memcpy(&status_word, entry_bytes.data() + 0x630, 2);
+        }
+
+        // Validate compact-0x39 magic at the payload offset.
+        uint16_t payload_magic = 0;
+        if (entry_copied >= kQueuePayloadOff + 2)
+        {
+            std::memcpy(&payload_magic,
+                entry_bytes.data() + kQueuePayloadOff, 2);
+        }
+
+        RuntimeWorkerConfig config =
+            GetActiveRuntimeConfig("queue_dispatch.events.jsonl");
+
+        nlohmann::json payload;
+        payload["hit_number"] = hit_n;
+        payload["phantom_mgr"] = HexPointer(
+            reinterpret_cast<uintptr_t>(phantom_mgr));
+        payload["entry"] = HexPointer(
+            reinterpret_cast<uintptr_t>(entry));
+        payload["entry_bytes"] = entry_copied;
+        payload["entry_type_field"] = HexPointer(type_field);
+        payload["entry_status_word"] = HexPointer(status_word);
+        payload["payload_magic"] = HexPointer(payload_magic);
+        payload["payload_magic_ok"] = (payload_magic == 0x39);
+
+        if (will_dump && entry_copied > 0)
+        {
+            std::filesystem::path captures_dir =
+                RuntimeSiblingPath(config, ".spawn-captures");
+            std::error_code ec;
+            std::filesystem::create_directories(captures_dir, ec);
+
+            std::string stem = UtcNowIso8601();
+            for (auto& c : stem)
+            {
+                if (c == ':' || c == '.' || c == '-' || c == 'T' || c == 'Z')
+                    c = '_';
+            }
+            stem += "_queue_hit";
+            stem += std::to_string(hit_n);
+
+            // Dump full entry (0x640) AND the payload region alone
+            // (the compact-0x39 buffer at +0x40..+0x630).
+            {
+                std::ofstream s(captures_dir / (stem + "_entry.bin"),
+                    std::ios::binary);
+                if (s) s.write(
+                    reinterpret_cast<const char*>(entry_bytes.data()),
+                    static_cast<std::streamsize>(entry_bytes.size()));
+            }
+            if (entry_copied >= kQueuePayloadOff + kQueuePayloadSize)
+            {
+                std::ofstream s(captures_dir / (stem + "_compact39.bin"),
+                    std::ios::binary);
+                if (s) s.write(
+                    reinterpret_cast<const char*>(
+                        entry_bytes.data() + kQueuePayloadOff),
+                    static_cast<std::streamsize>(kQueuePayloadSize));
+            }
+            payload["dump_entry_path"] =
+                (captures_dir / (stem + "_entry.bin")).string();
+        }
+
+        AppendRuntimeEvent(config, "queue_dispatch.observed", payload);
+
+        // Forward — engine processes the entry + zeroes payload after.
+        QueueDispatchFn original = s_original_queue_dispatch;
+        if (original != nullptr)
+        {
+            return original(phantom_mgr, entry);
+        }
+        return 0;
+    }
+
+    bool TryArmQueueDispatchObserver(const RuntimeWorkerConfig& config)
+    {
+        if (!config.ExeMatchesKnownBaseline) return false;
+        if (config.GameBaseAddress == 0) return false;
+        if (InterlockedCompareExchange(
+                &s_queue_dispatch_observer_state, 1, 0) != 0)
+        {
+            return s_queue_dispatch_observer_state == 2;
+        }
+
+        s_original_queue_dispatch = reinterpret_cast<QueueDispatchFn>(
+            config.GameBaseAddress + kQueueDispatchRva);
+
+        DetourTransactionBegin();
+        DetourUpdateThread(GetCurrentThread());
+        DetourAttach(
+            &(PVOID&)s_original_queue_dispatch, QueueDispatchHook);
+        const LONG result = DetourTransactionCommit();
+
+        nlohmann::json payload;
+        payload["queue_dispatch_target"] = HexPointer(
+            config.GameBaseAddress + kQueueDispatchRva);
+        payload["hook_target"] = HexPointer(
+            reinterpret_cast<uintptr_t>(&QueueDispatchHook));
+        payload["detour_result"] = result;
+        payload["capture_budget"] = kSpawnCaptureMaxPerSession;
+
+        if (result != NO_ERROR)
+        {
+            AppendRuntimeEvent(
+                config, "queue_dispatch.observer_arm_failed", payload);
+            s_original_queue_dispatch = nullptr;
+            InterlockedExchange(&s_queue_dispatch_observer_state, 0);
+            return false;
+        }
+
+        payload["original_trampoline"] = HexPointer(
+            reinterpret_cast<uintptr_t>(s_original_queue_dispatch));
+        AppendRuntimeEvent(
+            config, "queue_dispatch.observer_armed", payload);
+        InterlockedExchange(&s_queue_dispatch_observer_state, 2);
+        return true;
+    }
+
     bool TryArmItemUseValidationObserver(const RuntimeWorkerConfig& config)
     {
         if (!config.ExeMatchesKnownBaseline)
@@ -4813,6 +4991,10 @@ namespace
             // v2.9.13: also hook FUN_1403572E0. SpawnEntry only catches
             // host-side spawns; this one catches guest-side too.
             TryArmPhantomSpawnerObserver(*config);
+            // v2.9.14: hook FUN_14051CE20 — per-entry queue dispatcher.
+            // This is the cleanest capture point: fires BEFORE the
+            // engine zeroes the 0x5F0 compact-0x39 payload at +0x40.
+            TryArmQueueDispatchObserver(*config);
         }
         EmitInventoryProbeAndMaybeArm(*config);
 
