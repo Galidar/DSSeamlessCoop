@@ -1178,17 +1178,49 @@ float4 main(PSIn input) : SV_Target
                         CubeDraw draws[kMaxPeers + 2];
                         int draw_count = 0;
 
-                        float host_px = 76.0f, host_py = 1.6f, host_pz = -184.0f;
-                        const bool host_ok =
-                            TryReadHostPosition(host_px, host_py, host_pz);
-                        if (host_ok)
+                        // v2.9.17: cubo debug COMPLETAMENTE DESACTIVADO.
+                        //
+                        // Antes (v2.9.16 y previas): dibujabamos un cubo
+                        // magenta para el host + un cubo coloreado por
+                        // cada peer en s_peer_table. Esto fue util
+                        // durante el desarrollo Phase 4a/4b como
+                        // feedback visual de que el SHM peer table
+                        // estaba sincronizando.
+                        //
+                        // Ahora (v2.9.17+): el objetivo es engine-spawn
+                        // real (Saponita Desbloqueada). Si el spawn
+                        // engine triunfa, el cuerpo real aparece via
+                        // mesh + animaciones del engine. Si falla,
+                        // queremos VER que falla (no esconderlo con
+                        // un cubo simulado) — events.jsonl + heartbeat
+                        // diagnostics nos lo dicen.
+                        //
+                        // El skip via draw_count = 0 deja toda la
+                        // infraestructura (peer table, SetPeerPoses,
+                        // cube-suppression check) intacta para
+                        // diagnosticos future, pero NO emite ningun
+                        // cubo en pantalla.
+                        const bool kDrawCubeOverlayEnabled = false;
+                        if (!kDrawCubeOverlayEnabled) {
+                            // Skip todo el cube draw path entirely.
+                            // No host cube, no peer cubes.
+                            // draw_count stays at 0, downstream loop
+                            // does nothing.
+                        }
+                        else
                         {
-                            CubeDraw& d = draws[draw_count++];
-                            d.pos[0] = host_px;
-                            d.pos[1] = host_py;
-                            d.pos[2] = host_pz;
-                            d.yaw_radians = 0.0f;
-                            d.color[0] = 1.0f; d.color[1] = 0.1f; d.color[2] = 0.9f;  // magenta
+                            float host_px = 76.0f, host_py = 1.6f, host_pz = -184.0f;
+                            const bool host_ok =
+                                TryReadHostPosition(host_px, host_py, host_pz);
+                            if (host_ok)
+                            {
+                                CubeDraw& d = draws[draw_count++];
+                                d.pos[0] = host_px;
+                                d.pos[1] = host_py;
+                                d.pos[2] = host_pz;
+                                d.yaw_radians = 0.0f;
+                                d.color[0] = 1.0f; d.color[1] = 0.1f; d.color[2] = 0.9f;  // magenta
+                            }
                         }
 
                         // v17 Phase 4b: the hard-coded cyan ghost
@@ -1200,40 +1232,45 @@ float4 main(PSIn input) : SV_Target
                         // additional cubes are unambiguous proof
                         // that the IPC bridge is alive.
 
-                        // Copy any IPC-supplied peer poses under a
-                        // shared lock — minimises contention since
-                        // BonfireService updates the table rarely
-                        // compared to draw frequency.
-                        AcquireSRWLockShared(&s_peer_table_lock);
-                        const int peer_n = s_peer_table_count.load(
-                            std::memory_order_acquire);
-                        for (int i = 0; i < peer_n && draw_count < kMaxPeers + 2; ++i)
+                        // v2.9.17: peer cube loop tambien gateado.
+                        // SetPeerPoses sigue funcionando (peer table
+                        // se popula desde BonfireService), solo NO
+                        // emitimos cubos por cada peer. Manteniendo
+                        // la infra disponible para diagnosticos via
+                        // GetPeerCount().
+                        if (kDrawCubeOverlayEnabled)
                         {
-                            const PeerPoseEntry& src = s_peer_table[i];
-                            if (!src.valid) continue;
-                            // v2.9.12 Phase 4c — cube suppression. If
-                            // DS2's vanilla matchmaking has already
-                            // summoned this peer into a phantom slot
-                            // (e.g. brother via saponita), the engine is
-                            // rendering his real character mesh at the
-                            // same world position. Drawing a cube on top
-                            // is redundant and visually noisy — skip it.
-                            //
-                            // The check is a pure-read of the slot pool
-                            // walked from the gm AOB anchor; no hooks,
-                            // no writes, no anti-cheat surface.
-                            if (PeerIsCoveredByActivePhantomSlot(src.position))
-                                continue;
-                            CubeDraw& d = draws[draw_count++];
-                            d.pos[0] = src.position[0];
-                            d.pos[1] = src.position[1];
-                            d.pos[2] = src.position[2];
-                            d.yaw_radians = src.yaw_radians;
-                            d.color[0] = src.color[0];
-                            d.color[1] = src.color[1];
-                            d.color[2] = src.color[2];
+                            // Copy any IPC-supplied peer poses under a
+                            // shared lock — minimises contention since
+                            // BonfireService updates the table rarely
+                            // compared to draw frequency.
+                            AcquireSRWLockShared(&s_peer_table_lock);
+                            const int peer_n = s_peer_table_count.load(
+                                std::memory_order_acquire);
+                            for (int i = 0; i < peer_n && draw_count < kMaxPeers + 2; ++i)
+                            {
+                                const PeerPoseEntry& src = s_peer_table[i];
+                                if (!src.valid) continue;
+                                // v2.9.12 Phase 4c — cube suppression. If
+                                // DS2's vanilla matchmaking has already
+                                // summoned this peer into a phantom slot
+                                // (e.g. brother via saponita), the engine is
+                                // rendering his real character mesh at the
+                                // same world position. Drawing a cube on top
+                                // is redundant and visually noisy — skip it.
+                                if (PeerIsCoveredByActivePhantomSlot(src.position))
+                                    continue;
+                                CubeDraw& d = draws[draw_count++];
+                                d.pos[0] = src.position[0];
+                                d.pos[1] = src.position[1];
+                                d.pos[2] = src.position[2];
+                                d.yaw_radians = src.yaw_radians;
+                                d.color[0] = src.color[0];
+                                d.color[1] = src.color[1];
+                                d.color[2] = src.color[2];
+                            }
+                            ReleaseSRWLockShared(&s_peer_table_lock);
                         }
-                        ReleaseSRWLockShared(&s_peer_table_lock);
 
                         // ── Apply common overlay state ONCE ──────────
                         s_d3d_context->RSSetViewports(1, &vp);
@@ -1312,11 +1349,18 @@ float4 main(PSIn input) : SV_Target
                                 s_live_vp_read_count.load(std::memory_order_relaxed);
                             const uint64_t fails =
                                 s_live_vp_fail_count.load(std::memory_order_relaxed);
-                            Log("DS2_RenderHook: drew %d cubes "
+                            // v2.9.17: host_px/py/pz are scoped inside
+                            // the (now disabled) cube draw block, so
+                            // read host position fresh here just for
+                            // diagnostic purposes. Doesn't affect render.
+                            float diag_hx = 0.0f, diag_hy = 0.0f, diag_hz = 0.0f;
+                            TryReadHostPosition(diag_hx, diag_hy, diag_hz);
+                            Log("DS2_RenderHook: drew %d cubes (overlay %s) "
                                 "host=(%.2f,%.2f,%.2f) liveVP_row3=%.2f,%.2f,%.2f "
                                 "live_reads=%llu live_fails=%llu",
                                 draw_count,
-                                host_px, host_py, host_pz,
+                                kDrawCubeOverlayEnabled ? "enabled" : "disabled",
+                                diag_hx, diag_hy, diag_hz,
                                 live_vp[12], live_vp[13], live_vp[14],
                                 static_cast<unsigned long long>(reads),
                                 static_cast<unsigned long long>(fails));

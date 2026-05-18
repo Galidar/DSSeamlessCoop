@@ -392,130 +392,18 @@ namespace
             15,
             false,
         },
-        {
-            // v2.9.16: kept recognized for users who already have it,
-            // but NO LONGER granted at bonfire. Only the unlocked
-            // soapstone above gets granted.
-            62061001,
-            62061001,
-            1,
-            false,   // <-- GrantAtBonfire = false (was true)
-            "bonfire_crystal_eye_orb",
-            "session.join",
-            "(legacy) join a Bonfire co-op session",
-            15,
-            false,
-        },
-        {
-            62061002,
-            62061002,
-            1,
-            false,   // <-- GrantAtBonfire = false (was true)
-            "bonfire_chaos_eye_orb",
-            "session.invade",
-            "(legacy) invade a Bonfire co-op session",
-            14,
-            false,
-        },
-        {
-            62061003,
-            62061003,
-            1,
-            false,   // <-- GrantAtBonfire = false (was true)
-            "bonfire_abyssal_eye_orb",
-            "session.leave",
-            "(legacy) leave or disband the current Bonfire session",
-            14,
-            false,
-        },
-        {
-            62061004,
-            62061004,
-            1,
-            false,   // <-- GrantAtBonfire = false (was true)
-            "bonfire_ominous_tome",
-            "rules.cycle",
-            "(legacy) cycle Bonfire runtime rules",
-            15,
-            false,
-        },
-        {
-            62061005,
-            62061005,
-            1,
-            false,   // <-- GrantAtBonfire = false (was true)
-            "bonfire_dried_fingers",
-            "invasions.taunt",
-            "(legacy) invite invaders into the Bonfire world",
-            13,
-            false,
-        },
-        {
-            62061006,
-            62061006,
-            1,
-            false,   // <-- GrantAtBonfire = false (was true)
-            "bonfire_cursed_pendant",
-            "world.infection",
-            "(legacy) apply a Bonfire world disaster request",
-            13,
-            false,
-        },
-        {
-            62061007,
-            62061007,
-            1,
-            false,   // <-- GrantAtBonfire = false (was true)
-            "bonfire_crimson_blossom",
-            "curse.accrue",
-            "(legacy) accrue a Bonfire curse sigil",
-            13,
-            false,
-        },
-        {
-            62061008,
-            62061008,
-            1,
-            false,   // <-- GrantAtBonfire = false (was true)
-            "bonfire_deliverance_parchment",
-            "world.recover",
-            "(legacy) revive allies and repair Bonfire runtime items",
-            13,
-            false,
-        },
-        {
-            60360001,
-            60151000,
-            1,
-            false,
-            "bonfire_legacy_liberation_scroll",
-            "world.recover",
-            "legacy DS2 test item; kept recognized but no longer granted",
-            13,
-            true,
-        },
-        {
-            62060001,
-            62060000,
-            1,
-            false,
-            "bonfire_legacy_abyssal_eye_orb",
-            "session.leave",
-            "legacy DS2 test item; kept recognized but no longer granted",
-            14,
-            true,
-        },
-        {
-            62060002,
-            62050000,
-            1,
-            false,
-            "bonfire_legacy_ominous_tome",
-            "rules.cycle",
-            "legacy DS2 test item; kept recognized but no longer granted",
-            15,
-            true,
-        },
+        // v2.9.17: tabla colapsada a UN SOLO item — la Saponita
+        // Desbloqueada. Todos los items legacy (Crystal/Chaos/Abyssal
+        // Eye Orb, Ominous Tome, Dried Fingers, Cursed Pendant,
+        // Crimson Blossom, Deliverance Parchment, y los legacy test
+        // items) fueron removidos del runtime grant/recognition
+        // table.
+        //
+        // Si el usuario todavia tiene esos items en inventario por
+        // sesiones previas, Bonfire ya no los reconocera como custom
+        // items. Vanilla DS2 los trataria como items inexistentes
+        // (es decir, no usables). Eso esta bien: el objetivo es UN
+        // solo flujo, una sola identidad.
     };
 
     struct RuntimeBehaviorDescriptor
