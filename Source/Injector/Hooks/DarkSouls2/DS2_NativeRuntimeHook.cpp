@@ -56,6 +56,20 @@ namespace
     // into an active producer that calls the original with our
     // peer's char_data when a phantom slot is free.
     constexpr uintptr_t kPlayerCtrlSpawnRva = 0x355930;
+    // v2.9.13 — FUN_1403572E0 is the actual phantom spawner (per Ghidra:
+    // contains the literal L"NetworkPlayer_%06u" string and allocates
+    // 0x4A0 bytes via FUN_140833320 for the PlayerCtrl). v2.9.11's
+    // SpawnEntryHook at FUN_1401A1650 ONLY catches host-side spawns
+    // (when YOU accept a guest's sign). Live observation 2026-05-17
+    // session: when you're the GUEST in someone else's world, FUN_1401A1650
+    // is bypassed but FUN_1403572E0 still fires (return_rva 0x357413 in
+    // captured ctor hits proves it). Hooking here catches BOTH directions.
+    //
+    // Signature: void FUN_1403572E0(world_mgr, out_pctrl_ptr_ref, req2)
+    //   rcx = world_mgr (= *(gm + 0x18))
+    //   rdx = pointer-to-pointer where the spawned PlayerCtrl* lands
+    //   r8  = req2: the inner data wrapper. *(r8 + 0x08) = compact 0x39 buffer
+    constexpr uintptr_t kPhantomSpawnerRva = 0x3572E0;
     // v2.9.7 Phase 2B.1b — coverage expansion. The spawn function
     // above hooked clean but never fired in the captured window,
     // suggesting it's a once-per-world-load entry, not the
@@ -250,6 +264,16 @@ namespace
     LONG s_spawn_entry_observer_state = 0;
     std::atomic<uint64_t> s_spawn_entry_hit_count{0};
     std::atomic<int> s_spawn_entry_captures_remaining{
+        kSpawnCaptureMaxPerSession};
+    // v2.9.13: FUN_1403572E0 phantom-spawner observer. Same hook shape
+    // as SpawnEntry but catches the guest-side spawn path that bypasses
+    // FUN_1401A1650.
+    using PhantomSpawnerFn = void(__fastcall*)(
+        void* world_mgr, void** out_pctrl, void* req2);
+    PhantomSpawnerFn s_original_phantom_spawner = nullptr;
+    LONG s_phantom_spawner_observer_state = 0;
+    std::atomic<uint64_t> s_phantom_spawner_hit_count{0};
+    std::atomic<int> s_phantom_spawner_captures_remaining{
         kSpawnCaptureMaxPerSession};
     ItemUseValidationFn s_original_item_use_validation = nullptr;
     InventoryAdjustQuantityFn s_original_inventory_adjust_quantity = nullptr;
@@ -3342,6 +3366,180 @@ namespace
         return true;
     }
 
+    // v2.9.13 — PhantomSpawnerHook fires on FUN_1403572E0. This is the
+    // ACTUAL phantom spawner (allocates 0x4A0 bytes for PlayerCtrl + calls
+    // FUN_14037EBE0 ctor). Catches the guest-side spawn path that
+    // bypasses FUN_1401A1650 (verified live 2026-05-17 — ctor fires with
+    // return_rva 0x357413 = inside FUN_1403572A0 → which calls
+    // FUN_1403572E0, NOT FUN_1401A1650).
+    //
+    // We capture the SAME shape as SpawnEntryHook: req2 (= r8) holds a
+    // pointer to inner buffer at +0x08. Dump that to disk for use as
+    // Phase 4d template.
+    void __fastcall PhantomSpawnerHook(
+        void* world_mgr, void** out_pctrl, void* req2)
+    {
+        const uint64_t hit_n = s_phantom_spawner_hit_count.fetch_add(
+            1, std::memory_order_relaxed) + 1;
+
+        int remaining = s_phantom_spawner_captures_remaining.fetch_sub(
+            1, std::memory_order_relaxed);
+        const bool will_dump = (remaining > 0) && (req2 != nullptr);
+
+        // Snapshot req2 (~0x30 bytes outer wrapper).
+        uint8_t outer_block[kSpawnOuterCaptureSize] = {};
+        size_t outer_copied = 0;
+        if (req2 != nullptr)
+        {
+            outer_copied = SafeSpawnEntry_ReadBytes(
+                req2, kSpawnOuterCaptureSize, outer_block);
+        }
+
+        // Pull inner ptr at req2 + 0x08 (per Ghidra mapping).
+        uint64_t inner_qword = 0;
+        bool inner_ok = false;
+        if (outer_copied >= 0x10)
+        {
+            const uint64_t* p = reinterpret_cast<const uint64_t*>(
+                static_cast<const uint8_t*>(req2) + 0x08);
+            inner_ok = SafeSpawnEntry_ReadU64(p, &inner_qword);
+        }
+        const void* inner_ptr =
+            reinterpret_cast<const void*>(inner_qword);
+
+        // Validate compact-format magic 0x39 at inner.
+        uint16_t inner_magic = 0;
+        bool magic_ok = false;
+        if (inner_ok && inner_ptr != nullptr)
+        {
+            magic_ok = SafeSpawnEntry_ReadU16(
+                reinterpret_cast<const uint16_t*>(inner_ptr),
+                &inner_magic);
+        }
+
+        std::vector<uint8_t> inner_bytes;
+        size_t inner_copied = 0;
+        if (magic_ok && inner_magic == 0x39 && will_dump)
+        {
+            inner_bytes.resize(kSpawnInnerCaptureMax);
+            inner_copied = SafeSpawnEntry_ReadBytes(
+                inner_ptr, kSpawnInnerCaptureMax, inner_bytes.data());
+            inner_bytes.resize(inner_copied);
+        }
+
+        RuntimeWorkerConfig config =
+            GetActiveRuntimeConfig("phantom_spawner.events.jsonl");
+
+        nlohmann::json payload;
+        payload["hit_number"] = hit_n;
+        payload["world_mgr"] = HexPointer(
+            reinterpret_cast<uintptr_t>(world_mgr));
+        payload["out_pctrl"] = HexPointer(
+            reinterpret_cast<uintptr_t>(out_pctrl));
+        payload["req2"] = HexPointer(
+            reinterpret_cast<uintptr_t>(req2));
+        payload["outer_bytes"] = outer_copied;
+        if (outer_copied >= 0x10)
+        {
+            payload["req2_inner_ptr"] = HexPointer(
+                reinterpret_cast<uintptr_t>(inner_ptr));
+        }
+        if (magic_ok)
+        {
+            payload["inner_magic"] = HexPointer(inner_magic);
+            payload["inner_magic_ok"] = (inner_magic == 0x39);
+        }
+        payload["dump_inner_bytes"] = inner_copied;
+
+        if (will_dump && inner_copied > 0)
+        {
+            std::filesystem::path captures_dir =
+                RuntimeSiblingPath(config, ".spawn-captures");
+            std::error_code ec;
+            std::filesystem::create_directories(captures_dir, ec);
+
+            std::string stem = UtcNowIso8601();
+            for (auto& c : stem)
+            {
+                if (c == ':' || c == '.' || c == '-' || c == 'T' || c == 'Z')
+                    c = '_';
+            }
+            stem += "_spawner_hit";
+            stem += std::to_string(hit_n);
+
+            {
+                std::ofstream s(captures_dir / (stem + "_req2.bin"),
+                    std::ios::binary);
+                if (s) s.write(
+                    reinterpret_cast<const char*>(outer_block),
+                    static_cast<std::streamsize>(outer_copied));
+            }
+            {
+                std::ofstream s(captures_dir / (stem + "_inner.bin"),
+                    std::ios::binary);
+                if (s) s.write(
+                    reinterpret_cast<const char*>(inner_bytes.data()),
+                    static_cast<std::streamsize>(inner_bytes.size()));
+            }
+            payload["dump_req2_path"] =
+                (captures_dir / (stem + "_req2.bin")).string();
+            payload["dump_inner_path"] =
+                (captures_dir / (stem + "_inner.bin")).string();
+        }
+
+        AppendRuntimeEvent(config, "phantom_spawner.observed", payload);
+
+        PhantomSpawnerFn original = s_original_phantom_spawner;
+        if (original != nullptr)
+        {
+            original(world_mgr, out_pctrl, req2);
+        }
+    }
+
+    bool TryArmPhantomSpawnerObserver(const RuntimeWorkerConfig& config)
+    {
+        if (!config.ExeMatchesKnownBaseline) return false;
+        if (config.GameBaseAddress == 0) return false;
+        if (InterlockedCompareExchange(
+                &s_phantom_spawner_observer_state, 1, 0) != 0)
+        {
+            return s_phantom_spawner_observer_state == 2;
+        }
+
+        s_original_phantom_spawner = reinterpret_cast<PhantomSpawnerFn>(
+            config.GameBaseAddress + kPhantomSpawnerRva);
+
+        DetourTransactionBegin();
+        DetourUpdateThread(GetCurrentThread());
+        DetourAttach(
+            &(PVOID&)s_original_phantom_spawner, PhantomSpawnerHook);
+        const LONG result = DetourTransactionCommit();
+
+        nlohmann::json payload;
+        payload["phantom_spawner_target"] = HexPointer(
+            config.GameBaseAddress + kPhantomSpawnerRva);
+        payload["hook_target"] = HexPointer(
+            reinterpret_cast<uintptr_t>(&PhantomSpawnerHook));
+        payload["detour_result"] = result;
+        payload["capture_budget"] = kSpawnCaptureMaxPerSession;
+
+        if (result != NO_ERROR)
+        {
+            AppendRuntimeEvent(
+                config, "phantom_spawner.observer_arm_failed", payload);
+            s_original_phantom_spawner = nullptr;
+            InterlockedExchange(&s_phantom_spawner_observer_state, 0);
+            return false;
+        }
+
+        payload["original_trampoline"] = HexPointer(
+            reinterpret_cast<uintptr_t>(s_original_phantom_spawner));
+        AppendRuntimeEvent(
+            config, "phantom_spawner.observer_armed", payload);
+        InterlockedExchange(&s_phantom_spawner_observer_state, 2);
+        return true;
+    }
+
     bool TryArmItemUseValidationObserver(const RuntimeWorkerConfig& config)
     {
         if (!config.ExeMatchesKnownBaseline)
@@ -4612,6 +4810,9 @@ namespace
         if (capture_len > 0 && capture_flag[0] == '1')
         {
             TryArmSpawnEntryObserver(*config);
+            // v2.9.13: also hook FUN_1403572E0. SpawnEntry only catches
+            // host-side spawns; this one catches guest-side too.
+            TryArmPhantomSpawnerObserver(*config);
         }
         EmitInventoryProbeAndMaybeArm(*config);
 
