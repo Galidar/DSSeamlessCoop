@@ -373,43 +373,37 @@ namespace
 
     constexpr RuntimeGrantItem kBonfireRuntimeItems[] = {
         {
-            // v2.9.21 PIVOT — abandono del custom-item path porque
-            // el queue-write con datos placeholder causaba slowdown +
-            // crashes (engine cargando assets para PlayerCtrl con
-            // armadura/armas/status en cero). Ahora el bonfire entrega
-            // la SAPONITA PEQUENA VANILLA (62040000 = Small White Sign
-            // Soapstone) en cantidad 1. El item ya tiene Max Held=1 +
-            // Non-Consumable=2 asi que es infinito.
+            // v2.9.16 Phase 4d — repurposed from "Blessed Eye Orb" to
+            // "Saponita Desbloqueada". This item triggers an engine-
+            // cooperative phantom spawn (queue-write at
+            // phantom_mgr+0x5C0) with timer freeze. End goal:
+            // user uses this item -> brother appears as real body
+            // (not cube) with NO saponita limitations.
             //
-            // El flujo de convocacion ahora es:
-            //   1. Player usa saponita pequena vanilla del inventario
-            //   2. Engine corre lógica vanilla (UseAnim 850 + UseID 2410)
-            //   3. Sign se planta en el mundo
-            //   4. Server privado DSSeamlessCoop (DS3OS-derived) maneja
-            //      el matchmaking de la senyal
-            //   5. Hermano ve la senyal -> activa -> engine spawnea
-            //      un PlayerCtrl REAL (no cubo) con su mesh + equipo
-            //   6. Nuestro Injector AUTO-FREEZA el timer al usar el
-            //      item (HandleBonfireRuntimeItemUse + session.create)
-            //      asi nunca expira.
-            62040000,
-            62040000,
+            // GrantAtBonfire = true (ONLY this item gets granted on
+            // bonfire rest now — see other entries below set to false).
+            62061000,
+            62061000,
             1,
             true,
-            "bonfire_saponita_pequenya_unlocked",
+            "bonfire_unlocked_soapstone",
             "session.create",
-            "Saponita Pequenya — sin limite de tiempo",
+            "Saponita Desbloqueada — sesion sin limites",
             15,
             false,
         },
-        // v2.9.17 nota historica: tabla previa colapso de 12 items a
-        // 1. Esa entrada custom (62061000 = Saponita Desbloqueada) ya
-        // no esta en runtime — los FMG/icon/ItemParam ediciones a ese
-        // ID quedan en disco pero son codigo muerto. Si reaparecen
-        // crashes o se quiere reintentar la via custom, revertir a
-        // 62061000 + arreglar SaponitaDesbloqueada_Trigger() para
-        // escribir datos completos (armas/armaduras/status, no solo
-        // pos/level/HP como hacia v2.9.16).
+        // v2.9.17: tabla colapsada a UN SOLO item — la Saponita
+        // Desbloqueada. Todos los items legacy (Crystal/Chaos/Abyssal
+        // Eye Orb, Ominous Tome, Dried Fingers, Cursed Pendant,
+        // Crimson Blossom, Deliverance Parchment, y los legacy test
+        // items) fueron removidos del runtime grant/recognition
+        // table.
+        //
+        // Si el usuario todavia tiene esos items en inventario por
+        // sesiones previas, Bonfire ya no los reconocera como custom
+        // items. Vanilla DS2 los trataria como items inexistentes
+        // (es decir, no usables). Eso esta bien: el objetivo es UN
+        // solo flujo, una sola identidad.
     };
 
     struct RuntimeBehaviorDescriptor
@@ -723,18 +717,6 @@ namespace
     {
         if (out_target_entry_index) *out_target_entry_index = -1;
 
-        // v2.9.21 — DISABLED. El queue-write con datos placeholder
-        // (armas/armaduras/status en cero) causaba slowdown + crashes
-        // porque el engine cargaba assets para un PlayerCtrl invalido.
-        // Pivote: vanilla saponita pequena 62040000 ahora hace el spawn
-        // por la via real (server privado + engine spawn correcto).
-        // Esta funcion queda como no-op para no romper call-sites; si
-        // se quiere reactivar, hay que completar la queue entry con
-        // TODOS los campos (weapons/armor/status, no solo pos/level/HP).
-        return false;
-
-        // Codigo legacy preservado abajo para futura reactivacion:
-        // (no se ejecuta por el early-return)
         const uintptr_t pm = DS2_TryResolvePhantomMgr();
         if (pm == 0) return false;
 
@@ -1913,24 +1895,18 @@ namespace
                     s_last_session_request = "create";
                     payload["action"] = "session_create_requested";
 
-                    // v2.9.21 — Saponita Pequena Vanilla + timer freeze.
-                    // El bonfire ahora entrega saponita pequena 62040000
-                    // (vanilla). Cuando el player la usa, el engine corre
-                    // la logica vanilla de saponita y planta el sign. Lo
-                    // unico que agregamos es:
-                    //   * freezar el session timer a 99999.0f para que
-                    //     nunca expire (DS2_SaponitaTimer_Write)
-                    //   * enable freeze_auto para que el worker tick
-                    //     mantenga el valor cada frame
-                    // El spawn engine-real lo hace vanilla DS2 via la
-                    // ruta cooperativa estandar + tu servidor privado.
-                    bool freeze_ok =
-                        DS2_SaponitaTimer_Write(kSaponitaTimerEternal);
-                    DS2_SaponitaTimer_WriteMax(kSaponitaTimerEternal);
-                    s_saponita_desbloqueada_freeze_auto.store(
-                        true, std::memory_order_release);
-                    payload["saponita_timer_frozen"] = freeze_ok;
-                    payload["saponita_freeze_auto"] = true;
+                    // v2.9.16 Phase 4d — Saponita Desbloqueada engine spawn.
+                    // When user uses the Saponita Desbloqueada item
+                    // (62061000 = bonfire_unlocked_soapstone), trigger
+                    // a queue-write that the engine will dispatch as a
+                    // real PlayerCtrl spawn next tick. v1 spawns a
+                    // clone of the local player as test pattern; v2.9.17
+                    // will read peer data from SHM and apply is_phantom
+                    // bypass post-spawn.
+                    int entry_idx = -1;
+                    bool spawn_ok = SaponitaDesbloqueada_Trigger(&entry_idx);
+                    payload["saponita_desbloqueada_spawn"] = spawn_ok;
+                    payload["saponita_queue_entry_index"] = entry_idx;
                     payload["saponita_phantom_count_pre"] =
                         DS2_SaponitaPhantomCount_Read();
                 }
@@ -5059,17 +5035,12 @@ namespace
                 s_last_session_request = "create";
                 payload["action"] = "session_create_requested";
 
-                // v2.9.21 — command-bus session.create path. Trigger
-                // queue-write deshabilitado por crashes; en su lugar
-                // freeze el saponita session timer asi el sign vanilla
-                // del player nunca expira.
-                bool freeze_ok =
-                    DS2_SaponitaTimer_Write(kSaponitaTimerEternal);
-                DS2_SaponitaTimer_WriteMax(kSaponitaTimerEternal);
-                s_saponita_desbloqueada_freeze_auto.store(
-                    true, std::memory_order_release);
-                payload["saponita_timer_frozen"] = freeze_ok;
-                payload["saponita_freeze_auto"] = true;
+                // v2.9.16 Phase 4d — also from command bus path,
+                // trigger the engine spawn.
+                int entry_idx = -1;
+                bool spawn_ok = SaponitaDesbloqueada_Trigger(&entry_idx);
+                payload["saponita_desbloqueada_spawn"] = spawn_ok;
+                payload["saponita_queue_entry_index"] = entry_idx;
             }
             else if (command == "session.join")
             {
