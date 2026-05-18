@@ -34,7 +34,7 @@ FILES = ['ItemParam.txt', 'WeaponParam.txt', 'ArmorParam.txt']
 OVERRIDES = {
     3400000: 'Fists',
     62030000: 'White Sign Soapstone',
-    62061000: 'Blessed Eye Orb (Bonfire)',
+    62061000: 'Saponita Desbloqueada',
     62061001: 'Crystal Eye Orb (Bonfire)',
 }
 
