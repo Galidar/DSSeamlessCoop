@@ -603,6 +603,138 @@ namespace
         };
     }
 
+    // v2.9.15 Phase 4d — engine-spawn phantom clone.
+    //
+    // EXPERIMENTAL: copies slot 1's live PlayerCtrl (the engine-rendered
+    // body, e.g. brother summoned via saponita) into a free slot record
+    // (2-5) and activates that slot. The engine sees the new slot as
+    // populated and renders it on next frame.
+    //
+    // Known risks:
+    // - Sub-pointers (+0xB0..+0x118 of PlayerCtrl) point to source
+    //   slot's heap allocations (intermediate, weapon_mgr, equipment).
+    //   Two slots sharing them might cause race conditions in the
+    //   animation/physics threads, or double-free on cleanup.
+    // - The engine's "first sub-tick after spawn" runs init logic that
+    //   may not handle a slot that was bytewise-copied rather than
+    //   ctor-built.
+    //
+    // Approach to minimise risk:
+    // - SEH-guarded throughout. Any fault returns false cleanly.
+    // - Target slot's pre-allocated PlayerCtrl region is reused (it's
+    //   the same 1 MB buffer the engine itself uses).
+    // - Position is offset +5 m on X so the clone is visibly distinct
+    //   from the source (no two-bodies-in-same-spot ambiguity).
+    // - Self-references in PlayerCtrl are patched to target addresses.
+    //
+    // If the engine accepts this clone, the user sees TWO copies of the
+    // source phantom — proof that we can drive engine-rendered phantoms
+    // from our code. From there Phase 4d-v2 swaps in peer-specific data.
+    //
+    // If it crashes, the user reverts to Injector.dll.v2.9.14-staged.
+    bool DS2_TryEngineClonePhantomToFreeSlot(int* out_target_slot)
+    {
+        if (out_target_slot) *out_target_slot = -1;
+
+        const uintptr_t gm_imp_global =
+            s_published_gm_imp_global_addr.load(std::memory_order_acquire);
+        if (gm_imp_global == 0) return false;
+
+        constexpr uintptr_t kSlotMgrPtrOff_  = 0x650;
+        constexpr uintptr_t kSlotRecBaseOff_ = 0x5D0;
+        constexpr uintptr_t kSlotStride_     = 0xA90;
+        constexpr uintptr_t kSlotPCField_    = 0xC8;
+        constexpr size_t    kPCSize_         = 0x4A0;
+        constexpr uintptr_t kPCSelfRefOff_   = 0x158;
+        constexpr uintptr_t kPCSlotRecOff_   = 0x020;
+        constexpr uintptr_t kPCPositionOff_  = 0x090;
+        constexpr uintptr_t kRecFlagsAOff_   = 0x0A0;
+        constexpr uintptr_t kRecFlagsBOff_   = 0x0C0;
+        constexpr uintptr_t kRecActiveOff_   = 0x0E0;
+        constexpr float     kCloneOffsetX_   = 5.0f;
+
+        __try
+        {
+            uintptr_t gm = *reinterpret_cast<const uintptr_t*>(gm_imp_global);
+            if (gm == 0) return false;
+
+            uintptr_t slot_mgr =
+                *reinterpret_cast<const uintptr_t*>(gm + kSlotMgrPtrOff_);
+            if (slot_mgr == 0) return false;
+
+            // Source = slot 1 (brother summoned via saponita).
+            const uintptr_t src_rec =
+                slot_mgr + kSlotRecBaseOff_ + 1 * kSlotStride_;
+            uintptr_t src_pc =
+                *reinterpret_cast<const uintptr_t*>(src_rec + kSlotPCField_);
+            if (src_pc == 0) return false;
+            uintptr_t src_vtbl = *reinterpret_cast<const uintptr_t*>(src_pc);
+            if (src_vtbl < 0x7FF7'0000'0000ull ||
+                src_vtbl > 0x7FF8'0000'0000ull)
+            {
+                // Slot 1 is empty (vptr points back into slot_mgr range).
+                return false;
+            }
+
+            // Find a free target slot in 2..5.
+            int target = -1;
+            uintptr_t dst_rec = 0;
+            uintptr_t dst_pc  = 0;
+            for (int i = 2; i < 6; ++i)
+            {
+                uintptr_t rec =
+                    slot_mgr + kSlotRecBaseOff_ + i * kSlotStride_;
+                uintptr_t pc = *reinterpret_cast<const uintptr_t*>(
+                    rec + kSlotPCField_);
+                if (pc == 0) continue;
+                uintptr_t vt = *reinterpret_cast<const uintptr_t*>(pc);
+                // Empty pre-alloc slots have vptr pointing back into the
+                // slot manager scratch range (~0x7FF4_xxxx_xxxx). Active
+                // slots have vptr in DS2 module range (~0x7FF7_xxxx_xxxx).
+                if (vt < 0x7FF7'0000'0000ull || vt > 0x7FF8'0000'0000ull)
+                {
+                    target  = i;
+                    dst_rec = rec;
+                    dst_pc  = pc;
+                    break;
+                }
+            }
+            if (target < 0) return false;
+
+            // Copy source PlayerCtrl bytes to target. The target's 1 MB
+            // pre-allocated region is reused.
+            std::memcpy(
+                reinterpret_cast<void*>(dst_pc),
+                reinterpret_cast<const void*>(src_pc),
+                kPCSize_);
+
+            // Patch self-references inside the cloned PlayerCtrl.
+            *reinterpret_cast<uintptr_t*>(dst_pc + kPCSelfRefOff_) = dst_pc;
+            *reinterpret_cast<uintptr_t*>(dst_pc + kPCSlotRecOff_) = dst_rec;
+
+            // Offset the position by +5 m on X so the clone is visually
+            // distinct from the source.
+            *reinterpret_cast<float*>(dst_pc + kPCPositionOff_ + 0) +=
+                kCloneOffsetX_;
+
+            // Copy slot record activation markers from source. These
+            // tell the engine the slot is in use.
+            *reinterpret_cast<uint32_t*>(dst_rec + kRecFlagsAOff_) =
+                *reinterpret_cast<const uint32_t*>(src_rec + kRecFlagsAOff_);
+            *reinterpret_cast<uint32_t*>(dst_rec + kRecFlagsBOff_) =
+                *reinterpret_cast<const uint32_t*>(src_rec + kRecFlagsBOff_);
+            *reinterpret_cast<uint32_t*>(dst_rec + kRecActiveOff_) =
+                *reinterpret_cast<const uint32_t*>(src_rec + kRecActiveOff_);
+
+            if (out_target_slot) *out_target_slot = target;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
+    }
+
     void AddRuntimeBehaviorPayload(
         nlohmann::json& payload,
         const RuntimeBehaviorDescriptor& behavior)
@@ -4872,6 +5004,28 @@ namespace
             {
                 ApplyRuntimeCommandState(config, command, payload);
                 AppendRuntimeEvent(config, "command.applied", payload);
+                return;
+            }
+
+            // v2.9.15 Phase 4d test trigger — manually drive an engine
+            // phantom clone via the command bus.
+            //
+            // Usage: append a JSON line `{"command":"phantom.clone"}`
+            // to the runtime commands.jsonl, or send via the bridge.
+            // Effect: while a phantom is engine-summoned in slot 1
+            // (e.g. via saponita), copies it into the first empty
+            // slot (2-5) with a +5 m X offset.
+            //
+            // EXPERIMENTAL. If it crashes DS2, restore the v2.9.14
+            // staged Injector.dll and the command never runs.
+            if (command == "phantom.clone")
+            {
+                int target_slot = -1;
+                bool ok = DS2_TryEngineClonePhantomToFreeSlot(&target_slot);
+                payload["clone_attempted"] = true;
+                payload["clone_ok"] = ok;
+                payload["target_slot"] = target_slot;
+                AppendRuntimeEvent(config, "phantom.clone.result", payload);
                 return;
             }
 
