@@ -633,6 +633,65 @@ namespace
         }
     }
 
+    // v2.9.20 — POD snapshot for memory.peek.phantom_mgr diagnostic.
+    // SEH-safe (no C++ unwound members), populated by
+    // DS2_SnapshotPhantomMgr inside __try/__except.
+    struct DS2_PhantomQueueEntrySnapshot
+    {
+        uintptr_t Address;
+        float X, Y, Z;
+        uint32_t Type;
+        uint8_t Level;
+        int32_t HpMax;
+        uint8_t Status;
+        uint8_t Ready;
+    };
+    struct DS2_PhantomMgrSnapshot
+    {
+        float Timer;
+        float TimerMax;
+        uint32_t PhantomCount;
+        DS2_PhantomQueueEntrySnapshot Entries[8];
+    };
+
+    bool DS2_SnapshotPhantomMgr(uintptr_t pm, DS2_PhantomMgrSnapshot& out)
+    {
+        if (pm == 0) return false;
+        __try {
+            out.Timer = *reinterpret_cast<const float*>(
+                pm + kSaponitaTimerOff);
+            out.TimerMax = *reinterpret_cast<const float*>(
+                pm + kSaponitaTimerMaxOff);
+            out.PhantomCount = *reinterpret_cast<const uint32_t*>(
+                pm + kSaponitaPhantomCountOff);
+            for (size_t i = 0; i < kQueueEntryCount; ++i) {
+                const uintptr_t entry =
+                    pm + kQueueBaseOff + i * kQueueEntryStride;
+                auto& e = out.Entries[i];
+                e.Address = entry;
+                e.X = *reinterpret_cast<const float*>(
+                    entry + kEntryPositionOff + 0);
+                e.Y = *reinterpret_cast<const float*>(
+                    entry + kEntryPositionOff + 4);
+                e.Z = *reinterpret_cast<const float*>(
+                    entry + kEntryPositionOff + 8);
+                e.Type = *reinterpret_cast<const uint32_t*>(
+                    entry + kEntryTypeFieldOff);
+                e.Level = *reinterpret_cast<const uint8_t*>(
+                    entry + kEntryLevelOff);
+                e.HpMax = *reinterpret_cast<const int32_t*>(
+                    entry + kEntryHpMaxOff);
+                e.Status = *reinterpret_cast<const uint8_t*>(
+                    entry + kEntryStatusOff);
+                e.Ready = *reinterpret_cast<const uint8_t*>(
+                    entry + kEntryReadyFlagOff);
+            }
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
     // ⭐ Core of Phase 4d: write a synthetic saponita-pequena-style
     // queue entry from peer SHM data so the engine spawns a real
     // PlayerCtrl in a free slot (1-5).
@@ -5294,6 +5353,72 @@ namespace
                 payload["freeze_auto"] = enable;
                 AppendRuntimeEvent(
                     config, "saponita.timer.freeze_auto", payload);
+                return;
+            }
+
+            // v2.9.20 — live phantom_mgr dump (CE replacement since DS2
+            // anti-cheat blocks user-mode memory reads). Walks the
+            // resolved phantom_mgr and reports:
+            //   * timer @ +0x218 (saponita session timer)
+            //   * timer_max @ +0x230 (MAX const, normally 500.0)
+            //   * phantom_count @ +0x010 (active mirror)
+            //   * each of 8 queue entries @ +0x5C0 + N*0x640
+            // Fields per entry: position (vec3), type, level, hp_max,
+            // status, ready_flag. Safe pointer-guarded; if phantom_mgr
+            // is null (no map loaded yet) reports null and skips.
+            if (command == "memory.peek.phantom_mgr")
+            {
+                const uintptr_t pm = DS2_TryResolvePhantomMgr();
+                payload["phantom_mgr"] = HexPointer(pm);
+                if (pm == 0)
+                {
+                    payload["resolved"] = false;
+                    payload["note"] = "phantom_mgr null (not in-world?)";
+                    AppendRuntimeEvent(
+                        config, "memory.peek.phantom_mgr", payload);
+                    return;
+                }
+                payload["resolved"] = true;
+
+                // Snapshot raw memory into POD struct using SEH (helper)
+                // — the helper has no C++ unwound objects so SEH is safe.
+                DS2_PhantomMgrSnapshot snap{};
+                const bool snap_ok =
+                    DS2_SnapshotPhantomMgr(pm, snap);
+                if (!snap_ok)
+                {
+                    payload["seh"] = "read crashed (anti-cheat or stale ptr)";
+                    AppendRuntimeEvent(
+                        config, "memory.peek.phantom_mgr", payload);
+                    return;
+                }
+
+                payload["timer"] = snap.Timer;
+                payload["timer_max"] = snap.TimerMax;
+                payload["phantom_count"] = snap.PhantomCount;
+                payload["freeze_auto"] =
+                    s_saponita_desbloqueada_freeze_auto.load(
+                        std::memory_order_acquire);
+
+                nlohmann::json queue = nlohmann::json::array();
+                for (size_t i = 0; i < kQueueEntryCount; ++i)
+                {
+                    const auto& e = snap.Entries[i];
+                    nlohmann::json je;
+                    je["index"] = static_cast<int>(i);
+                    je["addr"] = HexPointer(e.Address);
+                    je["pos"] = nlohmann::json::array({e.X, e.Y, e.Z});
+                    je["type"] = e.Type;
+                    je["level"] = static_cast<int>(e.Level);
+                    je["hp_max"] = e.HpMax;
+                    je["status"] = static_cast<int>(e.Status);
+                    je["ready"] = static_cast<int>(e.Ready);
+                    queue.push_back(std::move(je));
+                }
+                payload["queue"] = std::move(queue);
+
+                AppendRuntimeEvent(
+                    config, "memory.peek.phantom_mgr", payload);
                 return;
             }
 
