@@ -84,6 +84,40 @@ namespace
     constexpr size_t    kQueueEntrySize    = 0x640;
     constexpr size_t    kQueuePayloadOff   = 0x40;
     constexpr size_t    kQueuePayloadSize  = 0x5F0;
+
+    // v2.9.16 Phase 4d — Saponita Desbloqueada implementation.
+    //
+    // The phantom_mgr global is reached via .data slot at RVA 0x1616CF8.
+    // Inside it lives a sub-pointer at +0x20 that points to the actual
+    // phantom_mgr struct containing the spawn queue + session timer.
+    //
+    // ⚠ CRITICAL CORRECTION from v2.9.15: the RVA is 0x1616CF8, NOT
+    // 0x16616CF8 (one extra '6' was a typo). Verified live 2026-05-18.
+    constexpr uintptr_t kPhantomMgrHolderRva = 0x1616CF8;
+    constexpr uintptr_t kPhantomMgrSubOff    = 0x20;
+    // Within phantom_mgr:
+    constexpr uintptr_t kQueueBaseOff        = 0x5C0;     // queue start
+    constexpr size_t    kQueueEntryStride    = 0x640;     // per entry
+    constexpr size_t    kQueueEntryCount     = 8;         // 8 entries
+    // Per-entry structured fields (verified vs Ghidra FUN_14051CE20):
+    constexpr uintptr_t kEntryPositionOff    = 0x40;      // vec3 floats X,Y,Z
+    constexpr uintptr_t kEntryRotationOff    = 0x70;      // 4 u32 / quat
+    constexpr uintptr_t kEntryTypeFieldOff   = 0x80;      // u32, 0xE = sentinel
+    constexpr uintptr_t kEntryLevelOff       = 0x270;     // u8, <=20
+    constexpr uintptr_t kEntryWeaponLvlsOff  = 0x272;     // 10 bytes
+    constexpr uintptr_t kEntryWeaponStatsOff = 0x27C;     // 10 u16 = 20 bytes
+    constexpr uintptr_t kEntryArmorIdsOff    = 0x290;     // 11 bytes
+    constexpr uintptr_t kEntryHpMaxOff       = 0x2D8;     // int
+    constexpr uintptr_t kEntryStatusOff      = 0x630;     // u8 status
+    constexpr uintptr_t kEntryReadyFlagOff   = 0x631;     // u8 ready (set last)
+    // Phantom-type values (per Ghidra L"NetworkPlayer_%06u" selection):
+    constexpr uint32_t  kEntryTypeNetworkPlayer = 0x12;   // saponita pequena equivalent
+    constexpr uint32_t  kEntryTypeGhostPlayer   = 0x13;   // red sign equivalent
+    // Saponita session timer (mapped + verified writable 2026-05-17):
+    constexpr uintptr_t kSaponitaTimerOff    = 0x218;     // float, decrements 1/sec
+    constexpr uintptr_t kSaponitaTimerMaxOff = 0x230;     // float, MAX const (500.0)
+    constexpr float     kSaponitaTimerEternal = 99999.0f; // freeze-mode value
+    constexpr uintptr_t kSaponitaPhantomCountOff = 0x010; // u32 active count mirror
     // v2.9.7 Phase 2B.1b — coverage expansion. The spawn function
     // above hooked clean but never fired in the captured window,
     // suggesting it's a once-per-world-load entry, not the
@@ -339,24 +373,36 @@ namespace
 
     constexpr RuntimeGrantItem kBonfireRuntimeItems[] = {
         {
+            // v2.9.16 Phase 4d — repurposed from "Blessed Eye Orb" to
+            // "Saponita Desbloqueada". This item triggers an engine-
+            // cooperative phantom spawn (queue-write at
+            // phantom_mgr+0x5C0) with timer freeze. End goal:
+            // user uses this item -> brother appears as real body
+            // (not cube) with NO saponita limitations.
+            //
+            // GrantAtBonfire = true (ONLY this item gets granted on
+            // bonfire rest now — see other entries below set to false).
             62061000,
             62061000,
             1,
             true,
-            "bonfire_blessed_eye_orb",
+            "bonfire_unlocked_soapstone",
             "session.create",
-            "create a Bonfire co-op session",
+            "Saponita Desbloqueada — sesion sin limites",
             15,
             false,
         },
         {
+            // v2.9.16: kept recognized for users who already have it,
+            // but NO LONGER granted at bonfire. Only the unlocked
+            // soapstone above gets granted.
             62061001,
             62061001,
             1,
-            true,
+            false,   // <-- GrantAtBonfire = false (was true)
             "bonfire_crystal_eye_orb",
             "session.join",
-            "join a Bonfire co-op session",
+            "(legacy) join a Bonfire co-op session",
             15,
             false,
         },
@@ -364,10 +410,10 @@ namespace
             62061002,
             62061002,
             1,
-            true,
+            false,   // <-- GrantAtBonfire = false (was true)
             "bonfire_chaos_eye_orb",
             "session.invade",
-            "invade a Bonfire co-op session",
+            "(legacy) invade a Bonfire co-op session",
             14,
             false,
         },
@@ -375,10 +421,10 @@ namespace
             62061003,
             62061003,
             1,
-            true,
+            false,   // <-- GrantAtBonfire = false (was true)
             "bonfire_abyssal_eye_orb",
             "session.leave",
-            "leave or disband the current Bonfire session",
+            "(legacy) leave or disband the current Bonfire session",
             14,
             false,
         },
@@ -386,10 +432,10 @@ namespace
             62061004,
             62061004,
             1,
-            true,
+            false,   // <-- GrantAtBonfire = false (was true)
             "bonfire_ominous_tome",
             "rules.cycle",
-            "cycle Bonfire runtime rules",
+            "(legacy) cycle Bonfire runtime rules",
             15,
             false,
         },
@@ -397,10 +443,10 @@ namespace
             62061005,
             62061005,
             1,
-            true,
+            false,   // <-- GrantAtBonfire = false (was true)
             "bonfire_dried_fingers",
             "invasions.taunt",
-            "invite invaders into the Bonfire world",
+            "(legacy) invite invaders into the Bonfire world",
             13,
             false,
         },
@@ -408,10 +454,10 @@ namespace
             62061006,
             62061006,
             1,
-            true,
+            false,   // <-- GrantAtBonfire = false (was true)
             "bonfire_cursed_pendant",
             "world.infection",
-            "apply a Bonfire world disaster request",
+            "(legacy) apply a Bonfire world disaster request",
             13,
             false,
         },
@@ -419,10 +465,10 @@ namespace
             62061007,
             62061007,
             1,
-            true,
+            false,   // <-- GrantAtBonfire = false (was true)
             "bonfire_crimson_blossom",
             "curse.accrue",
-            "accrue a Bonfire curse sigil",
+            "(legacy) accrue a Bonfire curse sigil",
             13,
             false,
         },
@@ -430,10 +476,10 @@ namespace
             62061008,
             62061008,
             1,
-            true,
+            false,   // <-- GrantAtBonfire = false (was true)
             "bonfire_deliverance_parchment",
             "world.recover",
-            "revive allies and repair Bonfire runtime items",
+            "(legacy) revive allies and repair Bonfire runtime items",
             13,
             false,
         },
@@ -601,6 +647,250 @@ namespace
             "runtime_state",
             "state_update",
         };
+    }
+
+    // v2.9.16 Phase 4d — Saponita Desbloqueada infrastructure.
+    //
+    // Resolves the phantom_mgr struct at runtime via the chain
+    // documented in SAPONITA_DESBLOQUEADA_DESIGN.md:
+    //   ds2_base + 0x1616CF8  → holder slot in .data
+    //   *(holder_slot)         → holder struct (sub-manager)
+    //   *(holder_struct + 0x20) → phantom_mgr (the actual struct)
+    //
+    // Returns 0 if any link in the chain is null (= game not in a
+    // co-op-capable state yet, e.g. main menu, loading screen).
+    uintptr_t DS2_TryResolvePhantomMgr()
+    {
+        HMODULE mod = GetModuleHandleW(L"DarkSoulsII.exe");
+        if (mod == nullptr) return 0;
+        const uintptr_t ds2_base = reinterpret_cast<uintptr_t>(mod);
+        __try
+        {
+            uintptr_t holder = *reinterpret_cast<const uintptr_t*>(
+                ds2_base + kPhantomMgrHolderRva);
+            if (holder == 0) return 0;
+            return *reinterpret_cast<const uintptr_t*>(
+                holder + kPhantomMgrSubOff);
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return 0;
+        }
+    }
+
+    // Worker thread sets this to true when saponita-desbloqueada has
+    // been activated by the user (via Saponita Desbloqueada item or
+    // saponita.timer.freeze_auto command). The worker loop reads it
+    // each iteration and, if true, writes 99999.0 to the timer to
+    // keep the session eternal.
+    std::atomic<bool> s_saponita_desbloqueada_freeze_auto{false};
+
+    // Flag set by SaponitaDesbloqueada_Trigger when we just wrote a
+    // queue entry, so the next PlayerCtrlCtorHook fire (which should
+    // be from OUR injected spawn) knows to apply post-spawn bypasses.
+    std::atomic<bool> s_saponita_desbloqueada_pending_spawn{false};
+
+    // Public read of the saponita session timer.
+    float DS2_SaponitaTimer_Read()
+    {
+        const uintptr_t pm = DS2_TryResolvePhantomMgr();
+        if (pm == 0) return 0.0f;
+        __try {
+            return *reinterpret_cast<const float*>(pm + kSaponitaTimerOff);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return 0.0f;
+        }
+    }
+
+    // Write arbitrary float to the saponita timer. Engine has zero
+    // validation — accepts any value (verified live: 9999, -50, 0, 500
+    // all stuck).
+    bool DS2_SaponitaTimer_Write(float value)
+    {
+        const uintptr_t pm = DS2_TryResolvePhantomMgr();
+        if (pm == 0) return false;
+        __try {
+            *reinterpret_cast<float*>(pm + kSaponitaTimerOff) = value;
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
+    // Write the MAX timer constant. Engine reads this when a new
+    // summon is accepted to set the initial countdown value.
+    bool DS2_SaponitaTimer_WriteMax(float value)
+    {
+        const uintptr_t pm = DS2_TryResolvePhantomMgr();
+        if (pm == 0) return false;
+        __try {
+            *reinterpret_cast<float*>(pm + kSaponitaTimerMaxOff) = value;
+            return true;
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return false;
+        }
+    }
+
+    // Read the engine's phantom count (mirror of world_mgr+0x301).
+    // Useful for diagnostics: confirms whether a real spawn happened.
+    uint32_t DS2_SaponitaPhantomCount_Read()
+    {
+        const uintptr_t pm = DS2_TryResolvePhantomMgr();
+        if (pm == 0) return 0;
+        __try {
+            return *reinterpret_cast<const uint32_t*>(
+                pm + kSaponitaPhantomCountOff);
+        } __except (EXCEPTION_EXECUTE_HANDLER) {
+            return 0;
+        }
+    }
+
+    // ⭐ Core of Phase 4d: write a synthetic saponita-pequena-style
+    // queue entry from peer SHM data so the engine spawns a real
+    // PlayerCtrl in a free slot (1-5).
+    //
+    // Strategy: build a minimum-viable structured record + set
+    // ready flag. The engine's per-tick FUN_14051DBB0 dispatcher
+    // picks it up next frame and runs the SAME pipeline saponita
+    // uses (queue → FUN_14051CE20 → FUN_1403572A0 → FUN_1403572E0 →
+    // FUN_14037EBE0 PlayerCtrl ctor).
+    //
+    // SECURITY: SEH-guarded throughout. If any field write faults,
+    // returns false cleanly without crashing DS2.
+    //
+    // ⚠ EXPERIMENTAL v1: this version uses placeholder values for
+    // most fields. The engine may reject incomplete entries (FUN_14016eed0
+    // validation, level clamp, etc.). The diagnostic events log will
+    // show whether the entry got picked up by FUN_14051DBB0.
+    //
+    // For per-peer real data, future versions will read from the
+    // Bonfire-coop SHM peer table (Ds2PoseShm). For now, v1 uses
+    // host's own data as test pattern (= "clone yourself into slot 2").
+    bool SaponitaDesbloqueada_Trigger(int* out_target_entry_index)
+    {
+        if (out_target_entry_index) *out_target_entry_index = -1;
+
+        const uintptr_t pm = DS2_TryResolvePhantomMgr();
+        if (pm == 0) return false;
+
+        __try
+        {
+            // 1. Find a free queue entry (type == 0xE sentinel OR
+            //    ready flag == 0).
+            const uintptr_t queue_base = pm + kQueueBaseOff;
+            uintptr_t entry = 0;
+            int found_index = -1;
+            for (size_t i = 0; i < kQueueEntryCount; ++i)
+            {
+                const uintptr_t e = queue_base + i * kQueueEntryStride;
+                const uint32_t type =
+                    *reinterpret_cast<const uint32_t*>(e + kEntryTypeFieldOff);
+                const uint8_t ready =
+                    *reinterpret_cast<const uint8_t*>(e + kEntryReadyFlagOff);
+                if (type == 0xE || ready == 0)
+                {
+                    entry = e;
+                    found_index = static_cast<int>(i);
+                    break;
+                }
+            }
+            if (entry == 0) return false;
+
+            // 2. Zero the entry first (clear stale data so engine
+            //    validations don't trip on garbage in fields we don't
+            //    populate).
+            std::memset(reinterpret_cast<void*>(entry), 0,
+                kQueueEntryStride);
+
+            // 3. Populate position from the LOCAL player as test
+            //    pattern. Live RE: local player PlayerCtrl @ slot 0,
+            //    position vec3 at +0x90. Offset target +2m on X so
+            //    the spawn doesn't overlap visually.
+            const uintptr_t gm_global =
+                s_published_gm_imp_global_addr.load(
+                    std::memory_order_acquire);
+            if (gm_global == 0) return false;
+            const uintptr_t gm = *reinterpret_cast<const uintptr_t*>(gm_global);
+            if (gm == 0) return false;
+            const uintptr_t slot_mgr =
+                *reinterpret_cast<const uintptr_t*>(gm + 0x650);
+            if (slot_mgr == 0) return false;
+            const uintptr_t slot0_rec = slot_mgr + 0x5D0;
+            const uintptr_t local_pc =
+                *reinterpret_cast<const uintptr_t*>(slot0_rec + 0xC8);
+            if (local_pc == 0) return false;
+
+            const float lx =
+                *reinterpret_cast<const float*>(local_pc + 0x90);
+            const float ly =
+                *reinterpret_cast<const float*>(local_pc + 0x94);
+            const float lz =
+                *reinterpret_cast<const float*>(local_pc + 0x98);
+
+            *reinterpret_cast<float*>(entry + kEntryPositionOff + 0) =
+                lx + 2.0f;
+            *reinterpret_cast<float*>(entry + kEntryPositionOff + 4) = ly;
+            *reinterpret_cast<float*>(entry + kEntryPositionOff + 8) = lz;
+            // 4th float (homogeneous w)
+            *reinterpret_cast<float*>(entry + kEntryPositionOff + 12) = 1.0f;
+
+            // 4. Rotation = identity (face north)
+            *reinterpret_cast<uint32_t*>(entry + kEntryRotationOff + 0) = 0;
+            *reinterpret_cast<uint32_t*>(entry + kEntryRotationOff + 4) = 0;
+            *reinterpret_cast<uint32_t*>(entry + kEntryRotationOff + 8) = 0;
+            *reinterpret_cast<uint32_t*>(entry + kEntryRotationOff + 12) =
+                0x3F800000;  // 1.0f
+
+            // 5. Phantom type = NetworkPlayer (= saponita-pequena
+            //    equivalent). Engine selects L"NetworkPlayer_%06u"
+            //    name format for this value.
+            *reinterpret_cast<uint32_t*>(entry + kEntryTypeFieldOff) =
+                kEntryTypeNetworkPlayer;
+
+            // 6. Level — copy local player's level (PlayerCtrl +0x128
+            //    per live verification 2026-05-17).
+            uint32_t local_level =
+                *reinterpret_cast<const uint32_t*>(local_pc + 0x128);
+            if (local_level > 20) local_level = 20;
+            *reinterpret_cast<uint8_t*>(entry + kEntryLevelOff) =
+                static_cast<uint8_t>(local_level);
+
+            // 7. HP max — copy local player's max HP at PlayerCtrl+0x174.
+            const int32_t local_hp_max =
+                *reinterpret_cast<const int32_t*>(local_pc + 0x174);
+            *reinterpret_cast<int32_t*>(entry + kEntryHpMaxOff) =
+                local_hp_max;
+
+            // 8. Pre-bypass timer to eternal value (so engine doesn't
+            //    immediately tick down or hit zero).
+            *reinterpret_cast<float*>(pm + kSaponitaTimerOff) =
+                kSaponitaTimerEternal;
+            *reinterpret_cast<float*>(pm + kSaponitaTimerMaxOff) =
+                kSaponitaTimerEternal;
+
+            // 9. Signal post-spawn hook to apply bypasses (v2.9.17).
+            //    For now this flag is just informational — v2.9.16
+            //    doesn't have the bypass code yet, so spawn will
+            //    render as vanilla phantom (golden shader etc.).
+            s_saponita_desbloqueada_pending_spawn.store(
+                true, std::memory_order_release);
+
+            // 10. Enable timer freeze-auto so the worker keeps
+            //     writing eternal value each tick.
+            s_saponita_desbloqueada_freeze_auto.store(
+                true, std::memory_order_release);
+
+            // 11. Set ready flag LAST (engine picks up next tick).
+            *reinterpret_cast<uint8_t*>(entry + kEntryReadyFlagOff) = 1;
+
+            if (out_target_entry_index)
+                *out_target_entry_index = found_index;
+            return true;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            return false;
+        }
     }
 
     // v2.9.15 Phase 4d — engine-spawn phantom clone.
@@ -1657,6 +1947,21 @@ namespace
                     s_session_mode = "host";
                     s_last_session_request = "create";
                     payload["action"] = "session_create_requested";
+
+                    // v2.9.16 Phase 4d — Saponita Desbloqueada engine spawn.
+                    // When user uses the Saponita Desbloqueada item
+                    // (62061000 = bonfire_unlocked_soapstone), trigger
+                    // a queue-write that the engine will dispatch as a
+                    // real PlayerCtrl spawn next tick. v1 spawns a
+                    // clone of the local player as test pattern; v2.9.17
+                    // will read peer data from SHM and apply is_phantom
+                    // bypass post-spawn.
+                    int entry_idx = -1;
+                    bool spawn_ok = SaponitaDesbloqueada_Trigger(&entry_idx);
+                    payload["saponita_desbloqueada_spawn"] = spawn_ok;
+                    payload["saponita_queue_entry_index"] = entry_idx;
+                    payload["saponita_phantom_count_pre"] =
+                        DS2_SaponitaPhantomCount_Read();
                 }
                 else if (command == "session.join")
                 {
@@ -4782,6 +5087,13 @@ namespace
                 s_session_mode = "host";
                 s_last_session_request = "create";
                 payload["action"] = "session_create_requested";
+
+                // v2.9.16 Phase 4d — also from command bus path,
+                // trigger the engine spawn.
+                int entry_idx = -1;
+                bool spawn_ok = SaponitaDesbloqueada_Trigger(&entry_idx);
+                payload["saponita_desbloqueada_spawn"] = spawn_ok;
+                payload["saponita_queue_entry_index"] = entry_idx;
             }
             else if (command == "session.join")
             {
@@ -5029,6 +5341,74 @@ namespace
                 return;
             }
 
+            // v2.9.16 Phase 4d — Saponita Desbloqueada test/admin commands.
+
+            if (command == "saponita.spawn")
+            {
+                int entry_idx = -1;
+                bool ok = SaponitaDesbloqueada_Trigger(&entry_idx);
+                payload["spawn_attempted"] = true;
+                payload["spawn_ok"] = ok;
+                payload["queue_entry_index"] = entry_idx;
+                payload["phantom_count_pre"] =
+                    DS2_SaponitaPhantomCount_Read();
+                AppendRuntimeEvent(config, "saponita.spawn.result", payload);
+                return;
+            }
+            if (command == "saponita.timer.read")
+            {
+                payload["timer"] = DS2_SaponitaTimer_Read();
+                payload["phantom_count"] =
+                    DS2_SaponitaPhantomCount_Read();
+                AppendRuntimeEvent(config, "saponita.timer.read", payload);
+                return;
+            }
+            if (command == "saponita.timer.freeze")
+            {
+                bool ok = DS2_SaponitaTimer_Write(kSaponitaTimerEternal);
+                s_saponita_desbloqueada_freeze_auto.store(
+                    true, std::memory_order_release);
+                payload["timer_set_to"] = kSaponitaTimerEternal;
+                payload["freeze_auto"] = true;
+                payload["ok"] = ok;
+                AppendRuntimeEvent(config, "saponita.timer.freeze", payload);
+                return;
+            }
+            if (command == "saponita.timer.kill")
+            {
+                bool ok = DS2_SaponitaTimer_Write(0.0f);
+                s_saponita_desbloqueada_freeze_auto.store(
+                    false, std::memory_order_release);
+                payload["timer_set_to"] = 0.0f;
+                payload["freeze_auto"] = false;
+                payload["ok"] = ok;
+                AppendRuntimeEvent(config, "saponita.timer.kill", payload);
+                return;
+            }
+            if (command == "saponita.timer.set")
+            {
+                float v = 500.0f;
+                if (parsed.contains("value") && parsed["value"].is_number())
+                    v = parsed["value"].get<float>();
+                bool ok = DS2_SaponitaTimer_Write(v);
+                payload["timer_set_to"] = v;
+                payload["ok"] = ok;
+                AppendRuntimeEvent(config, "saponita.timer.set", payload);
+                return;
+            }
+            if (command == "saponita.timer.freeze_auto")
+            {
+                bool enable = true;
+                if (parsed.contains("enable") && parsed["enable"].is_boolean())
+                    enable = parsed["enable"].get<bool>();
+                s_saponita_desbloqueada_freeze_auto.store(
+                    enable, std::memory_order_release);
+                payload["freeze_auto"] = enable;
+                AppendRuntimeEvent(
+                    config, "saponita.timer.freeze_auto", payload);
+                return;
+            }
+
             payload["note"] = "command bus is active; gameplay handlers are not armed yet";
             AppendRuntimeEvent(config, "command.received", payload);
         }
@@ -5158,6 +5538,22 @@ namespace
         {
             command_offset = PollCommandInbox(*config, command_offset);
 
+            // v2.9.16 Phase 4d — Saponita Desbloqueada timer keep-alive.
+            //
+            // While freeze_auto is on, write 99999.0 to the timer each
+            // worker loop iteration. The worker runs ~3 times per
+            // second (Sleep(333) below), so the engine's per-frame
+            // decrement (1.0/sec) never has a chance to reduce the
+            // timer below 99996 before we overwrite. Net effect:
+            // session timer is effectively eternal.
+            //
+            // Zero validation by engine — confirmed live 2026-05-17.
+            if (s_saponita_desbloqueada_freeze_auto.load(
+                    std::memory_order_acquire))
+            {
+                DS2_SaponitaTimer_Write(kSaponitaTimerEternal);
+            }
+
             if ((heartbeat_counter++ % 3) == 0)
             {
                 nlohmann::json heartbeat;
@@ -5278,6 +5674,16 @@ namespace
                     heartbeat["render_live_vp_row3"] = {
                         live[12], live[13], live[14], live[15] };
                 }
+                // v2.9.16 Phase 4d — Saponita Desbloqueada diagnostics.
+                heartbeat["saponita_timer"] = DS2_SaponitaTimer_Read();
+                heartbeat["saponita_phantom_count"] =
+                    DS2_SaponitaPhantomCount_Read();
+                heartbeat["saponita_freeze_auto"] =
+                    s_saponita_desbloqueada_freeze_auto.load(
+                        std::memory_order_acquire);
+                heartbeat["saponita_pending_spawn"] =
+                    s_saponita_desbloqueada_pending_spawn.load(
+                        std::memory_order_acquire);
                 AppendRuntimeEvent(*config, "runtime.heartbeat", heartbeat);
             }
             if ((heartbeat_counter % 15) == 0)
