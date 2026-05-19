@@ -2913,6 +2913,45 @@ namespace
                 payload);
         }
 
+        // v2.9.26 — restored trigger from selected-action-execute path.
+        // Background: Codex's v2.9.25 design moved the runtime
+        // activation into the actual InventoryUseItem vtable hook so
+        // session.create would only fire AFTER DS2's native "¿Usar?"
+        // confirmation. That worked in concept, but for this specific
+        // custom item (ItemUsageParam row 62061000 is a hueco placeholder
+        // without vanilla "use consumable" semantics) DS2 never reaches
+        // Inventory::UseItem at all — the action_execute path is the
+        // last hook the engine actually fires for this item.
+        //
+        // Observed in 39148 session JSONL: 12x inventory.selected_action_execute
+        // for item 62061000 with action_execute_caller=true, but ZERO
+        // inventory.use_item_candidate / bonfire.custom_item_use →
+        // ZERO session.create reaching BonfireService → ZERO LAN
+        // beacon → peer never auto-accepts.
+        //
+        // The guards inside HandleBonfireRuntimeItemUse (active-session
+        // suppression at lines 1856-1869 + debounce window) are
+        // sufficient to prevent re-entry / loops. We also skip the call
+        // when pending_bonfire_action is already true (recent activation
+        // by another hook within the suppress window).
+        //
+        // This brings the trigger semantics back to the v2.9.22-style
+        // (where Diux saw a real "you're being summoned" loading screen)
+        // while keeping Codex's anti-loop and active-session guards.
+        if (runtime_item != nullptr &&
+            action_execute_caller &&
+            !pending_bonfire_action)
+        {
+            HandleBonfireRuntimeItemUse(
+                config,
+                *runtime_item,
+                1,
+                1,
+                "inventory_selected_action_execute_0x500C40",
+                -1,
+                action_flag);
+        }
+
         if (suppress_vanilla)
         {
             return;
