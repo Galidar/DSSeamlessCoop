@@ -28,7 +28,13 @@
 #include "Shared/Core/Utils/Strings.h"
 #include "Shared/Core/Utils/DiffTracker.h"
 
+#include "ThirdParty/nlohmann/json.hpp"
+
+#include <algorithm>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <sstream>
 
 DS2_SignManager::DS2_SignManager(Server* InServerInstance, GameService* InGameServiceInstance)
     : ServerInstance(InServerInstance)
@@ -77,6 +83,221 @@ void DS2_SignManager::RemoveSignAndNotifyAware(const std::shared_ptr<SummonSign>
 
 void DS2_SignManager::Poll()
 {
+    // v2.9.27 — drain Saponita Desbloqueada admin inbox every tick.
+    ProcessAdminSummonInbox();
+}
+
+// v2.9.27 — Saponita Desbloqueada server-side direct-summon.
+//
+// Inbox: C:/DSSeamlessCoop/admin_summon_inbox.json (atomic write-then-rename
+// from BonfireService). Schema:
+//   { "summoner_steam_id": "...", "target_steam_id": "...",
+//     "request_id": "<uuid>", "issued_utc": "<iso8601>" }
+//
+// Flow:
+//   1. Read file (best-effort, skip if absent or unparseable).
+//   2. Delete the file IMMEDIATELY so we never double-process.
+//   3. Find both clients via GameService::FindClientBySteamId.
+//   4. Locate the target's most recently placed sign in
+//      Client->ActiveSummonSigns. We need it for the cached
+//      player_struct bytes (DS2 client expects these to display the
+//      summon UI properly). If target has no active sign, fall back
+//      to the summoner's own sign data (less realistic but keeps the
+//      summon attempt alive).
+//   5. Build PushRequestSummonSign with:
+//        push_message_id = PushID_PushRequestSummonSign
+//        player_id       = summoner's player ID
+//        player_steam_id = summoner's steam ID
+//        sign_id         = the located sign's SignId (or 0 fallback)
+//        player_struct   = summoner-side bytes if available
+//   6. Send via target_client->MessageStream->Send(&PushMessage).
+//   7. Mark sign->BeingSummonedByPlayerId = summoner so the same
+//      sign isn't re-used.
+//
+// Write back an outbox JSON file with the result so BonfireService
+// can confirm and skip the relaunch fallback:
+//   C:/DSSeamlessCoop/admin_summon_outbox.json
+//   { "request_id": "...", "ok": true|false, "error": "...",
+//     "target_player_id": N, "summoner_player_id": M,
+//     "sign_id": N, "issued_utc": "..." }
+void DS2_SignManager::ProcessAdminSummonInbox()
+{
+    static const std::string kInboxPath  = "C:/DSSeamlessCoop/admin_summon_inbox.json";
+    static const std::string kOutboxPath = "C:/DSSeamlessCoop/admin_summon_outbox.json";
+
+    if (!std::filesystem::exists(kInboxPath))
+    {
+        return;
+    }
+
+    std::string raw;
+    try
+    {
+        std::ifstream f(kInboxPath, std::ios::binary);
+        std::ostringstream ss;
+        ss << f.rdbuf();
+        raw = ss.str();
+    }
+    catch (...)
+    {
+        std::error_code ec;
+        std::filesystem::remove(kInboxPath, ec);
+        return;
+    }
+
+    // Delete immediately so a second tick doesn't reprocess.
+    {
+        std::error_code ec;
+        std::filesystem::remove(kInboxPath, ec);
+    }
+
+    nlohmann::json request;
+    try
+    {
+        request = nlohmann::json::parse(raw);
+    }
+    catch (...)
+    {
+        Warning("Saponita admin inbox: malformed JSON, dropped.");
+        return;
+    }
+
+    std::string RequestId =
+        request.value("request_id", std::string{});
+    std::string Mode =
+        request.value("mode", std::string{"auto_pick_two_players"});
+    std::string SummonerSteamId =
+        request.value("summoner_steam_id", std::string{});
+    std::string TargetSteamId =
+        request.value("target_steam_id", std::string{});
+
+    nlohmann::json result;
+    result["request_id"] = RequestId;
+    result["ok"] = false;
+    result["issued_utc"] = request.value("issued_utc", std::string{});
+    result["mode"] = Mode;
+
+    std::shared_ptr<GameClient> SummonerClient;
+    std::shared_ptr<GameClient> TargetClient;
+
+    if (!SummonerSteamId.empty() && !TargetSteamId.empty())
+    {
+        // Explicit steam-id path (future / multi-player support).
+        SummonerClient =
+            GameServiceInstance->FindClientBySteamId(SummonerSteamId);
+        TargetClient =
+            GameServiceInstance->FindClientBySteamId(TargetSteamId);
+    }
+    else
+    {
+        // auto_pick_two_players: take the 2 connected clients, pick
+        // summoner=lowest player_id (= host by convention), target=other.
+        // Only works for exactly 2 connected clients (our setup).
+        auto Clients = GameServiceInstance->FindClients(
+            [](const std::shared_ptr<GameClient>&) { return true; });
+        if (Clients.size() != 2)
+        {
+            result["error"] = "auto_pick requires exactly 2 connected clients; have " +
+                std::to_string(Clients.size());
+            WriteTextToFile(kOutboxPath, result.dump());
+            return;
+        }
+        // Sort by player_id ascending
+        std::sort(Clients.begin(), Clients.end(),
+            [](const std::shared_ptr<GameClient>& A,
+               const std::shared_ptr<GameClient>& B) {
+                return A->GetPlayerState().GetPlayerId() <
+                       B->GetPlayerState().GetPlayerId();
+            });
+        SummonerClient = Clients[0];
+        TargetClient = Clients[1];
+        result["auto_pick_summoner_player_id"] =
+            SummonerClient->GetPlayerState().GetPlayerId();
+        result["auto_pick_target_player_id"] =
+            TargetClient->GetPlayerState().GetPlayerId();
+    }
+
+    if (!SummonerClient)
+    {
+        result["error"] = "summoner not connected";
+        WriteTextToFile(kOutboxPath, result.dump());
+        return;
+    }
+    if (!TargetClient)
+    {
+        result["error"] = "target not connected";
+        WriteTextToFile(kOutboxPath, result.dump());
+        return;
+    }
+
+    result["summoner_player_id"] = SummonerClient->GetPlayerState().GetPlayerId();
+    result["target_player_id"]   = TargetClient->GetPlayerState().GetPlayerId();
+
+    // Pick a sign for player_struct bytes. Prefer target's own sign so
+    // the message looks like a normal vanilla summon to that client.
+    std::shared_ptr<SummonSign> SourceSign;
+    if (!TargetClient->ActiveSummonSigns.empty())
+    {
+        SourceSign = TargetClient->ActiveSummonSigns.back();
+    }
+    else if (!SummonerClient->ActiveSummonSigns.empty())
+    {
+        // Fallback: use summoner's own sign player_struct
+        // (peer will still get the push but the displayed summoner
+        // model may look like the summoner's last placed-sign avatar).
+        SourceSign = SummonerClient->ActiveSummonSigns.back();
+    }
+
+    DS2_Frpg2RequestMessage::PushRequestSummonSign PushMessage;
+    PushMessage.set_push_message_id(
+        DS2_Frpg2RequestMessage::PushID_PushRequestSummonSign);
+    PushMessage.set_player_id(SummonerClient->GetPlayerState().GetPlayerId());
+    PushMessage.set_player_steam_id(SummonerClient->GetPlayerState().GetSteamId());
+
+    if (SourceSign)
+    {
+        PushMessage.set_sign_id(SourceSign->SignId);
+        PushMessage.set_player_struct(
+            SourceSign->PlayerStruct.data(),
+            SourceSign->PlayerStruct.size());
+        result["sign_id"] = SourceSign->SignId;
+        result["player_struct_bytes"] =
+            static_cast<int64_t>(SourceSign->PlayerStruct.size());
+    }
+    else
+    {
+        // No cached player_struct anywhere — emit empty bytes and a
+        // synthetic sign id. Likely the client will reject, but we
+        // record it for diagnostic.
+        PushMessage.set_sign_id(0);
+        PushMessage.set_player_struct("");
+        result["sign_id"] = 0;
+        result["player_struct_bytes"] = 0;
+        result["warning"] =
+            "no cached player_struct — push may be rejected by target client";
+    }
+
+    if (!TargetClient->MessageStream->Send(&PushMessage))
+    {
+        result["error"] = "failed to send PushRequestSummonSign";
+        WarningS(TargetClient->GetName().c_str(),
+            "Saponita admin summon: failed to send PushRequestSummonSign.");
+        WriteTextToFile(kOutboxPath, result.dump());
+        return;
+    }
+
+    // Mark sign as being summoned (so vanilla flow won't double-trigger).
+    if (SourceSign)
+    {
+        SourceSign->BeingSummonedByPlayerId =
+            SummonerClient->GetPlayerState().GetPlayerId();
+    }
+
+    result["ok"] = true;
+    Log("Saponita admin summon: %s -> %s (sign_id=%llu).",
+        SummonerSteamId.c_str(), TargetSteamId.c_str(),
+        static_cast<unsigned long long>(SourceSign ? SourceSign->SignId : 0));
+    WriteTextToFile(kOutboxPath, result.dump());
 }
 
 MessageHandleResult DS2_SignManager::OnMessageRecieved(GameClient* Client, const Frpg2ReliableUdpMessage& Message)

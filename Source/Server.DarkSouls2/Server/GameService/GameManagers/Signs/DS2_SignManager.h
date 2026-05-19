@@ -38,6 +38,16 @@ public:
 
     size_t GetLiveCount() { return LiveCache.GetTotalEntries(); }
 
+    // v2.9.27 — Saponita Desbloqueada admin summon path.
+    // Called every tick from Poll() — checks for a JSON inbox file
+    // written by BonfireService when session.create fires, and
+    // dispatches a synthetic PushRequestSummonSign to the target peer
+    // so the engine spawns him in the summoner's world WITHOUT
+    // requiring a real sign-place + activate sequence. Cached
+    // player_struct from the target's most recent placed sign is
+    // used (or fallback to summoner's own latest sign data).
+    void ProcessAdminSummonInbox();
+
 protected:
     bool CanMatchWith(const DS2_Frpg2RequestMessage::MatchingParameter& Client, const DS2_Frpg2RequestMessage::MatchingParameter& Match, uint32_t SignType);
 

@@ -1,5 +1,8 @@
+using System.IO;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Threading;
 using System.Diagnostics;
 using Bonfire.Service.Rpc;
 
@@ -1055,10 +1058,99 @@ public static class Ds2NativeSessionCoordinator
         }
         else
         {
-            effect["auto_relaunch_scheduled"] = true;
-            ScheduleDirectInviteRelaunch(runtimeSessionId, target);
+            // v2.9.27 — Etapa C: try server-side direct summon first.
+            // Server's DS2_SignManager::ProcessAdminSummonInbox picks up
+            // C:/DSSeamlessCoop/admin_summon_inbox.json on next Poll()
+            // tick and emits PushRequestSummonSign to the target client
+            // via its existing TCP connection. No relaunch needed if it
+            // works.
+            //
+            // If the inbox-outbox handshake times out or reports failure,
+            // fall back to the legacy relaunch path (ScheduleDirectInviteRelaunch).
+            var directSummonOk = TryDirectServerSummon(target, effect);
+            if (directSummonOk)
+            {
+                effect["server_direct_summon"] = true;
+                effect["auto_relaunch_scheduled"] = false;
+            }
+            else
+            {
+                effect["server_direct_summon"] = false;
+                effect["auto_relaunch_scheduled"] = true;
+                ScheduleDirectInviteRelaunch(runtimeSessionId, target);
+            }
         }
         return effect;
+    }
+
+    // v2.9.27 — Saponita Desbloqueada direct server-side summon.
+    // Writes admin_summon_inbox.json (atomically) and polls for
+    // admin_summon_outbox.json with the matching request_id.
+    // Returns true if the server confirmed the push, false otherwise
+    // (caller falls back to the legacy relaunch path).
+    //
+    // v0 protocol: BonfireService does NOT know Steam IDs (it has no
+    // direct Steam SDK access from the service process). It just signals
+    // "summon the other connected player into the host's world". The
+    // server picks summoner+target from connected clients heuristically
+    // (lowest-player-id = host by convention in 2-player setup).
+    private static bool TryDirectServerSummon(
+        Ds2NativeJoinTarget.JoinTarget target,
+        JsonObject effect)
+    {
+        try
+        {
+            var requestId = Guid.NewGuid().ToString("N");
+            var inbox = new JsonObject
+            {
+                ["request_id"] = requestId,
+                ["issued_utc"] = DateTime.UtcNow.ToString("O"),
+                ["mode"] = "auto_pick_two_players",
+                ["target_hostname"] = target.Hostname ?? "",
+                ["target_private_hostname"] = target.PrivateHostname ?? "",
+            };
+
+            const string InboxRoot = @"C:\DSSeamlessCoop";
+            const string InboxPath = @"C:\DSSeamlessCoop\admin_summon_inbox.json";
+            const string InboxTemp = @"C:\DSSeamlessCoop\admin_summon_inbox.json.tmp";
+            const string OutboxPath = @"C:\DSSeamlessCoop\admin_summon_outbox.json";
+
+            Directory.CreateDirectory(InboxRoot);
+            try { File.Delete(OutboxPath); } catch { }
+
+            File.WriteAllText(InboxTemp, inbox.ToJsonString(), Encoding.UTF8);
+            File.Move(InboxTemp, InboxPath, overwrite: true);
+
+            // Poll outbox for matching request_id (max ~1500ms).
+            var deadline = DateTime.UtcNow.AddMilliseconds(1500);
+            while (DateTime.UtcNow < deadline)
+            {
+                if (File.Exists(OutboxPath))
+                {
+                    try
+                    {
+                        var raw = File.ReadAllText(OutboxPath, Encoding.UTF8);
+                        var node = System.Text.Json.Nodes.JsonNode.Parse(raw) as JsonObject;
+                        var rid = node?["request_id"]?.GetValue<string>();
+                        if (string.Equals(rid, requestId, StringComparison.Ordinal))
+                        {
+                            var ok = node?["ok"]?.GetValue<bool>() ?? false;
+                            effect["direct_summon_outbox"] = node?.DeepClone();
+                            return ok;
+                        }
+                    }
+                    catch { /* keep polling */ }
+                }
+                Thread.Sleep(50);
+            }
+            effect["direct_summon_timeout"] = true;
+            return false;
+        }
+        catch (Exception ex)
+        {
+            effect["direct_summon_error"] = ex.Message;
+            return false;
+        }
     }
 
     private static void ScheduleDirectInviteRelaunch(
