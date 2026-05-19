@@ -21,6 +21,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdio>
 #include <cstdint>
 #include <ctime>
 #include <filesystem>
@@ -232,6 +233,14 @@ namespace
     uint32_t s_taunt_request_count = 0;
     uint32_t s_infection_request_count = 0;
     uint32_t s_curse_sigil_count = 0;
+    bool s_pending_lan_invite = false;
+    std::string s_pending_lan_invite_session_id;
+    std::string s_pending_lan_invite_host_name;
+    std::string s_pending_lan_invite_server_id;
+    std::string s_pending_lan_invite_hostname;
+    std::string s_pending_lan_invite_private_hostname;
+    int32_t s_pending_lan_invite_login_port = 0;
+    uint64_t s_pending_lan_invite_last_input_tick = 0;
 
     struct RuntimeWorkerConfig
     {
@@ -1421,6 +1430,38 @@ namespace
         stream << action.dump() << "\n";
     }
 
+    void AppendRuntimePromptAction(
+        const RuntimeWorkerConfig& config,
+        const char* command,
+        const nlohmann::json& data)
+    {
+        std::lock_guard<std::mutex> guard(s_event_log_mutex);
+        const std::filesystem::path action_log =
+            RuntimeSiblingPath(config, ".actions.jsonl");
+        EnsureParentDirectory(action_log);
+
+        nlohmann::json action;
+        action["time_utc"] = UtcNowIso8601();
+        action["runtime"] = "ds2_native";
+        action["session_id"] = config.SessionId;
+        action["source"] = "in_game_invite_prompt";
+        action["item_id"] = 0;
+        action["item_id_hex"] = "0x00000000";
+        action["runtime_name"] = "bonfire_invite_prompt";
+        action["command"] = command;
+        action["data"] = data;
+
+        std::ofstream stream(
+            action_log,
+            std::ios::out | std::ios::app | std::ios::binary);
+        if (!stream)
+        {
+            return;
+        }
+
+        stream << action.dump() << "\n";
+    }
+
     void AppendRuntimeMessage(
         const RuntimeWorkerConfig& config,
         const RuntimeGrantItem& item,
@@ -1504,6 +1545,13 @@ namespace
         state["last_runtime_message_es"] = s_last_runtime_message_es;
         state["runtime_stage"] = s_runtime_stage;
         state["online_intent"] = s_online_intent;
+        state["pending_lan_invite"] = s_pending_lan_invite;
+        state["pending_lan_invite_session_id"] =
+            s_pending_lan_invite_session_id;
+        state["pending_lan_invite_host_name"] =
+            s_pending_lan_invite_host_name;
+        state["render_invite_prompt_visible"] =
+            DS2_RenderHook_IsInvitePromptVisible();
         state["rule_preset_index"] = s_rule_preset_index;
         state["rule_preset"] = RuntimeRulePresetName(s_rule_preset_index);
         state["rules"] = RuntimeRulePayload(s_rule_preset_index);
@@ -1844,12 +1892,12 @@ namespace
                     // clone of the local player as test pattern; v2.9.17
                     // will read peer data from SHM and apply is_phantom
                     // bypass post-spawn.
-                    int entry_idx = -1;
-                    bool spawn_ok = SaponitaDesbloqueada_Trigger(&entry_idx);
-                    payload["saponita_desbloqueada_spawn"] = spawn_ok;
-                    payload["saponita_queue_entry_index"] = entry_idx;
+                    // Current behavior: invite-only; queue writes disabled.
+                    payload["saponita_desbloqueada_invite"] = true;
+                    payload["saponita_queue_write_enabled"] = false;
                     payload["saponita_phantom_count_pre"] =
                         DS2_SaponitaPhantomCount_Read();
+                    payload["saponita_timer_pre"] = DS2_SaponitaTimer_Read();
                 }
                 else if (command == "session.join")
                 {
@@ -4919,6 +4967,164 @@ namespace
         return payload;
     }
 
+    void SetPendingLanInviteFromPayload(
+        const RuntimeWorkerConfig& config,
+        const nlohmann::json& parsed,
+        nlohmann::json& payload)
+    {
+        const nlohmann::json* invite = &parsed;
+        if (parsed.contains("payload") && parsed["payload"].is_object())
+        {
+            invite = &parsed["payload"];
+        }
+
+        const std::string session_id =
+            invite->value("session_id", std::string());
+        const std::string host_name =
+            invite->value("host_name", std::string("Bonfire peer"));
+        const std::string server_id =
+            invite->value("server_id", std::string());
+        const std::string hostname =
+            invite->value("hostname", std::string());
+        const std::string private_hostname =
+            invite->value("private_hostname", std::string());
+        const int32_t login_port =
+            invite->value("login_port", 0);
+
+        nlohmann::json state_snapshot;
+        {
+            std::lock_guard<std::mutex> guard(s_runtime_state_mutex);
+            s_pending_lan_invite = true;
+            s_pending_lan_invite_session_id = session_id;
+            s_pending_lan_invite_host_name = host_name;
+            s_pending_lan_invite_server_id = server_id;
+            s_pending_lan_invite_hostname = hostname;
+            s_pending_lan_invite_private_hostname = private_hostname;
+            s_pending_lan_invite_login_port = login_port;
+            s_last_runtime_command = "invite.received";
+            s_runtime_stage = "invite_prompt_visible";
+            s_online_intent = "cooperate_direct_invite";
+            state_snapshot = BuildRuntimeStatePayloadNoLock(config);
+        }
+
+        char body[128] = {};
+        snprintf(
+            body,
+            sizeof(body),
+            "SAPONITA FROM %.64s",
+            host_name.empty() ? "BONFIRE PEER" : host_name.c_str());
+        DS2_RenderHook_SetInvitePrompt(
+            "BONFIRE INVITE",
+            body,
+            "ENTER ACCEPT    ESC CANCEL");
+        {
+            std::lock_guard<std::mutex> guard(s_runtime_state_mutex);
+            state_snapshot = BuildRuntimeStatePayloadNoLock(config);
+        }
+
+        payload["action"] = "invite_prompt_visible";
+        payload["invite_session_id"] = session_id;
+        payload["invite_host_name"] = host_name;
+        payload["server_id"] = server_id;
+        payload["hostname"] = hostname;
+        payload["private_hostname"] = private_hostname;
+        payload["login_port"] = login_port;
+        payload["in_game_prompt"] = true;
+        WriteRuntimeStateSnapshot(config, state_snapshot);
+    }
+
+    void ClearPendingLanInvite()
+    {
+        std::lock_guard<std::mutex> guard(s_runtime_state_mutex);
+        s_pending_lan_invite = false;
+        s_pending_lan_invite_session_id.clear();
+        s_pending_lan_invite_host_name.clear();
+        s_pending_lan_invite_server_id.clear();
+        s_pending_lan_invite_hostname.clear();
+        s_pending_lan_invite_private_hostname.clear();
+        s_pending_lan_invite_login_port = 0;
+        DS2_RenderHook_ClearInvitePrompt();
+    }
+
+    void PollPendingLanInviteInput(const RuntimeWorkerConfig& config)
+    {
+        bool pending = false;
+        std::string session_id;
+        std::string host_name;
+        std::string server_id;
+        std::string hostname;
+        std::string private_hostname;
+        int32_t login_port = 0;
+        {
+            std::lock_guard<std::mutex> guard(s_runtime_state_mutex);
+            pending = s_pending_lan_invite;
+            if (!pending)
+            {
+                return;
+            }
+            session_id = s_pending_lan_invite_session_id;
+            host_name = s_pending_lan_invite_host_name;
+            server_id = s_pending_lan_invite_server_id;
+            hostname = s_pending_lan_invite_hostname;
+            private_hostname = s_pending_lan_invite_private_hostname;
+            login_port = s_pending_lan_invite_login_port;
+        }
+
+        const SHORT enter = GetAsyncKeyState(VK_RETURN);
+        const SHORT escape = GetAsyncKeyState(VK_ESCAPE);
+        if ((enter & 0x0001) == 0 && (escape & 0x0001) == 0)
+        {
+            return;
+        }
+
+        const bool accepted = (enter & 0x0001) != 0;
+        const uint64_t now_tick = GetTickCount64();
+        nlohmann::json state_snapshot;
+        {
+            std::lock_guard<std::mutex> guard(s_runtime_state_mutex);
+            if (s_pending_lan_invite_last_input_tick != 0 &&
+                now_tick >= s_pending_lan_invite_last_input_tick &&
+                now_tick - s_pending_lan_invite_last_input_tick < 750)
+            {
+                return;
+            }
+            s_pending_lan_invite_last_input_tick = now_tick;
+            s_pending_lan_invite = false;
+            s_last_runtime_command =
+                accepted ? "invite.accepted" : "invite.dismissed";
+            s_runtime_stage =
+                accepted ? "invite_accepted_in_game" : "invite_dismissed_in_game";
+            s_online_intent =
+                accepted ? "cooperate_join" : "cooperate_invite_dismiss";
+            state_snapshot = BuildRuntimeStatePayloadNoLock(config);
+        }
+        DS2_RenderHook_ClearInvitePrompt();
+        {
+            std::lock_guard<std::mutex> guard(s_runtime_state_mutex);
+            state_snapshot = BuildRuntimeStatePayloadNoLock(config);
+        }
+
+        nlohmann::json action;
+        action["invite_session_id"] = session_id;
+        action["invite_host_name"] = host_name;
+        action["server_id"] = server_id;
+        action["hostname"] = hostname;
+        action["private_hostname"] = private_hostname;
+        action["login_port"] = login_port;
+        action["in_game_prompt"] = true;
+        action["decision_key"] = accepted ? "enter" : "escape";
+        action["accepted"] = accepted;
+        AppendRuntimePromptAction(
+            config,
+            accepted ? "invite.accepted" : "invite.dismissed",
+            action);
+        AppendRuntimeEvent(
+            config,
+            accepted ? "invite.accepted" : "invite.dismissed",
+            action);
+        WriteRuntimeStateSnapshot(config, state_snapshot);
+    }
+
     bool IsKnownRuntimeCommand(const std::string& command)
     {
         return command == "ping" ||
@@ -4934,6 +5140,9 @@ namespace
             command == "curse.accrue" ||
             command == "world.recover" ||
             command == "inventory.probe" ||
+            command == "invite.received" ||
+            command == "invite.clear" ||
+            command == "invite.relaunching" ||
             command == "player.sync.request" ||
             command == "world.sync.request" ||
             // v17 Phase 4b: BonfireService publishes peer poses
@@ -4978,10 +5187,11 @@ namespace
 
                 // v2.9.16 Phase 4d — also from command bus path,
                 // trigger the engine spawn.
-                int entry_idx = -1;
-                bool spawn_ok = SaponitaDesbloqueada_Trigger(&entry_idx);
-                payload["saponita_desbloqueada_spawn"] = spawn_ok;
-                payload["saponita_queue_entry_index"] = entry_idx;
+                payload["saponita_desbloqueada_invite"] = true;
+                payload["saponita_queue_write_enabled"] = false;
+                payload["saponita_phantom_count_pre"] =
+                    DS2_SaponitaPhantomCount_Read();
+                payload["saponita_timer_pre"] = DS2_SaponitaTimer_Read();
             }
             else if (command == "session.join")
             {
@@ -5095,6 +5305,55 @@ namespace
                 payload["note"] = "inventory probe emitted";
                 AppendRuntimeEvent(config, "command.received", payload);
                 EmitInventoryProbeAndMaybeArm(config);
+                return;
+            }
+
+            if (command == "invite.received")
+            {
+                SetPendingLanInviteFromPayload(config, parsed, payload);
+                AppendRuntimeEvent(config, "invite.received", payload);
+                return;
+            }
+
+            if (command == "invite.clear")
+            {
+                ClearPendingLanInvite();
+                payload["action"] = "invite_prompt_cleared";
+                AppendRuntimeEvent(config, "invite.clear", payload);
+                return;
+            }
+
+            if (command == "invite.relaunching")
+            {
+                const nlohmann::json* notice = &parsed;
+                if (parsed.contains("payload") && parsed["payload"].is_object())
+                {
+                    notice = &parsed["payload"];
+                }
+                const std::string host_name =
+                    notice->value("host_name", std::string("Bonfire host"));
+                char body[128] = {};
+                snprintf(
+                    body,
+                    sizeof(body),
+                    "JOINING %.64s",
+                    host_name.empty() ? "BONFIRE HOST" : host_name.c_str());
+                DS2_RenderHook_SetInvitePrompt(
+                    "BONFIRE JOIN",
+                    body,
+                    "DS2 WILL RESTART");
+                {
+                    std::lock_guard<std::mutex> guard(s_runtime_state_mutex);
+                    s_last_runtime_command = "invite.relaunching";
+                    s_runtime_stage = "invite_relaunching_to_host";
+                    s_online_intent = "cooperate_join_relaunch";
+                    WriteRuntimeStateSnapshot(
+                        config,
+                        BuildRuntimeStatePayloadNoLock(config));
+                }
+                payload["action"] = "invite_relaunching_to_host";
+                payload["host_name"] = host_name;
+                AppendRuntimeEvent(config, "invite.relaunching", payload);
                 return;
             }
 
@@ -5233,11 +5492,11 @@ namespace
 
             if (command == "saponita.spawn")
             {
-                int entry_idx = -1;
-                bool ok = SaponitaDesbloqueada_Trigger(&entry_idx);
                 payload["spawn_attempted"] = true;
-                payload["spawn_ok"] = ok;
-                payload["queue_entry_index"] = entry_idx;
+                payload["spawn_ok"] = false;
+                payload["disabled"] = true;
+                payload["reason"] =
+                    "synthetic phantom queue writes are disabled for direct-invite gate";
                 payload["phantom_count_pre"] =
                     DS2_SaponitaPhantomCount_Read();
                 AppendRuntimeEvent(config, "saponita.spawn.result", payload);
@@ -5425,6 +5684,7 @@ namespace
         while (true)
         {
             command_offset = PollCommandInbox(*config, command_offset);
+            PollPendingLanInviteInput(*config);
 
             // v2.9.16 Phase 4d — Saponita Desbloqueada timer keep-alive.
             //
@@ -5592,7 +5852,7 @@ namespace
                 SafeEmitGuestSearchProbe(config.get());
             }
 
-            Sleep(2000);
+            Sleep(DS2_RenderHook_IsInvitePromptVisible() ? 100 : 2000);
         }
     }
 }

@@ -147,3 +147,10 @@ uint64_t DS2_RenderHook_GetMultiDrawCubesTotal();
 // _Checks = number of peer entries processed (denominator for ratio).
 uint64_t DS2_RenderHook_GetCubeSuppressTotal();
 uint64_t DS2_RenderHook_GetCubeSuppressChecks();
+
+// In-game Bonfire invite prompt. This is deliberately part of the DS2 render
+// hook, not the launcher UI: the service can deliver an invite command to the
+// runtime, and the player sees/answers it while focused on Dark Souls II.
+void DS2_RenderHook_SetInvitePrompt(const char* title, const char* body, const char* hint);
+void DS2_RenderHook_ClearInvitePrompt();
+bool DS2_RenderHook_IsInvitePromptVisible();

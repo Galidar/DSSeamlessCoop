@@ -15,12 +15,18 @@
  * filter unrelated broadcast traffic still propagate
  * administratively-scoped multicast within the local segment.
  *
- * Beacon payload (UTF-8 JSON, ~150 bytes):
+ * Beacon payload (UTF-8 JSON, small enough for one UDP packet):
  *
  *   {
  *     "kind"          : "ds2-bonfire-beacon-v1",
  *     "session_id"    : "<uuid>",
- *     "host_endpoint" : "192.168.1.10:50031",
+ *     "host_endpoint" : "192.168.1.10:50031",   // pose bridge/debug
+ *     "server_id"     : "<master-server-id>",
+ *     "hostname"      : "190.114.x.x",
+ *     "private_hostname": "192.168.1.10",
+ *     "login_port"    : 50050,
+ *     "game_type"     : "DarkSouls2",
+ *     "invite_kind"   : "saponita_direct",
  *     "host_name"     : "Galidar's Fire",
  *     "started_at_utc": "2026-05-17T03:00:00Z",
  *     "sender_id"     : 1234567890,
@@ -68,7 +74,14 @@ public static class Ds2LanBeacon
         string HostEndpoint,
         string HostName,
         DateTime StartedAtUtc,
-        long SenderId);
+        long SenderId,
+        string ServerId,
+        string Hostname,
+        string PrivateHostname,
+        int LoginPort,
+        string GameType,
+        bool PasswordRequired,
+        string InviteKind);
 
     public sealed record CachedBeacon(
         string SessionId,
@@ -76,6 +89,13 @@ public static class Ds2LanBeacon
         string HostName,
         DateTime StartedAtUtc,
         long SenderId,
+        string ServerId,
+        string Hostname,
+        string PrivateHostname,
+        int LoginPort,
+        string GameType,
+        bool PasswordRequired,
+        string InviteKind,
         long Sequence,
         IPAddress SourceIp,
         DateTime FirstSeenUtc,
@@ -142,11 +162,17 @@ public static class Ds2LanBeacon
                     beacon.SessionId,
                     _ => new CachedBeacon(
                         beacon.SessionId, beacon.HostEndpoint, beacon.HostName,
-                        beacon.StartedAtUtc, beacon.SenderId, sequence,
+                        beacon.StartedAtUtc, beacon.SenderId,
+                        beacon.ServerId, beacon.Hostname, beacon.PrivateHostname,
+                        beacon.LoginPort, beacon.GameType, beacon.PasswordRequired,
+                        beacon.InviteKind, sequence,
                         result.RemoteEndPoint.Address, now, now, 1),
                     (_, prev) => new CachedBeacon(
                         beacon.SessionId, beacon.HostEndpoint, beacon.HostName,
-                        beacon.StartedAtUtc, beacon.SenderId, sequence,
+                        beacon.StartedAtUtc, beacon.SenderId,
+                        beacon.ServerId, beacon.Hostname, beacon.PrivateHostname,
+                        beacon.LoginPort, beacon.GameType, beacon.PasswordRequired,
+                        beacon.InviteKind, sequence,
                         result.RemoteEndPoint.Address, prev.FirstSeenUtc, now,
                         prev.SeenCount + 1));
 
@@ -179,6 +205,15 @@ public static class Ds2LanBeacon
             var sessionId = obj["session_id"]?.GetValue<string>();
             var hostEndpoint = obj["host_endpoint"]?.GetValue<string>();
             var hostName = obj["host_name"]?.GetValue<string>() ?? "";
+            var serverId = obj["server_id"]?.GetValue<string>() ?? "";
+            var hostname = obj["hostname"]?.GetValue<string>() ?? "";
+            var privateHostname = obj["private_hostname"]?.GetValue<string>() ?? "";
+            var loginPort = obj["login_port"]?.GetValue<int>() ?? 0;
+            var gameType = obj["game_type"]?.GetValue<string>() ?? "DarkSouls2";
+            var passwordRequired =
+                obj["password_required"]?.GetValue<bool>() ?? false;
+            var inviteKind =
+                obj["invite_kind"]?.GetValue<string>() ?? "saponita_direct";
             var startedRaw = obj["started_at_utc"]?.GetValue<string>();
             var senderId = obj["sender_id"]?.GetValue<long>() ?? 0L;
             sequence = obj["sequence"]?.GetValue<long>() ?? 0L;
@@ -190,7 +225,10 @@ public static class Ds2LanBeacon
                 System.Globalization.DateTimeStyles.AssumeUniversal |
                 System.Globalization.DateTimeStyles.AdjustToUniversal,
                 out var dt) ? dt : DateTime.UtcNow;
-            beacon = new BeaconInfo(sessionId!, hostEndpoint!, hostName, started, senderId);
+            beacon = new BeaconInfo(
+                sessionId!, hostEndpoint!, hostName, started, senderId,
+                serverId, hostname, privateHostname, loginPort, gameType,
+                passwordRequired, inviteKind);
             return true;
         }
         catch
@@ -221,7 +259,14 @@ public static class Ds2LanBeacon
         string sessionId,
         string hostEndpoint,
         string hostName,
-        long senderId)
+        long senderId,
+        string serverId,
+        string hostname,
+        string privateHostname,
+        int loginPort,
+        string gameType,
+        bool passwordRequired,
+        string inviteKind)
     {
         lock (Lock)
         {
@@ -229,7 +274,10 @@ public static class Ds2LanBeacon
             if (string.IsNullOrWhiteSpace(hostEndpoint)) return;
             _hostBeacon = new BeaconInfo(
                 sessionId, hostEndpoint, hostName ?? "",
-                DateTime.UtcNow, senderId);
+                DateTime.UtcNow, senderId,
+                serverId ?? "", hostname ?? "", privateHostname ?? "",
+                loginPort, gameType ?? "DarkSouls2", passwordRequired,
+                inviteKind ?? "saponita_direct");
             _broadcastSequence = 0;
 
             if (_broadcastTask is not null) return; // already running; payload updated
@@ -296,6 +344,13 @@ public static class Ds2LanBeacon
                     ["session_id"] = snapshot.SessionId,
                     ["host_endpoint"] = snapshot.HostEndpoint,
                     ["host_name"] = snapshot.HostName,
+                    ["server_id"] = snapshot.ServerId,
+                    ["hostname"] = snapshot.Hostname,
+                    ["private_hostname"] = snapshot.PrivateHostname,
+                    ["login_port"] = snapshot.LoginPort,
+                    ["game_type"] = snapshot.GameType,
+                    ["password_required"] = snapshot.PasswordRequired,
+                    ["invite_kind"] = snapshot.InviteKind,
                     ["started_at_utc"] = snapshot.StartedAtUtc.ToString("O"),
                     ["sender_id"] = snapshot.SenderId,
                     ["sequence"] = seq,
@@ -361,6 +416,13 @@ public static class Ds2LanBeacon
                 ["session_id"] = b.SessionId,
                 ["host_endpoint"] = b.HostEndpoint,
                 ["host_name"] = b.HostName,
+                ["server_id"] = b.ServerId,
+                ["hostname"] = b.Hostname,
+                ["private_hostname"] = b.PrivateHostname,
+                ["login_port"] = b.LoginPort,
+                ["game_type"] = b.GameType,
+                ["password_required"] = b.PasswordRequired,
+                ["invite_kind"] = b.InviteKind,
                 ["sender_id"] = b.SenderId,
                 ["sequence"] = b.Sequence,
                 ["source_ip"] = b.SourceIp.ToString(),
@@ -383,6 +445,13 @@ public static class Ds2LanBeacon
                     ["session_id"] = hb.SessionId,
                     ["host_endpoint"] = hb.HostEndpoint,
                     ["host_name"] = hb.HostName,
+                    ["server_id"] = hb.ServerId,
+                    ["hostname"] = hb.Hostname,
+                    ["private_hostname"] = hb.PrivateHostname,
+                    ["login_port"] = hb.LoginPort,
+                    ["game_type"] = hb.GameType,
+                    ["password_required"] = hb.PasswordRequired,
+                    ["invite_kind"] = hb.InviteKind,
                     ["sender_id"] = hb.SenderId,
                     ["started_at_utc"] = hb.StartedAtUtc.ToString("O"),
                 }

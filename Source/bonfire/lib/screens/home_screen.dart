@@ -2990,7 +2990,7 @@ class _Ds2NativeSessionRowState extends State<_Ds2NativeSessionRow> {
             padding: const EdgeInsets.symmetric(
                 horizontal: Sp.md, vertical: Sp.xs),
             decoration: BoxDecoration(
-              color: p.accent.withValues(alpha: 0.10),
+              color: p.accent.withOpacity(0.10),
               borderRadius: BorderRadius.circular(R.sm),
               border: Border.all(color: p.accent, width: 1),
             ),
@@ -3111,9 +3111,9 @@ class _Chip extends StatelessWidget {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: Sp.sm, vertical: 2),
       decoration: BoxDecoration(
-        color: color.withValues(alpha: 0.12),
+        color: color.withOpacity(0.12),
         borderRadius: BorderRadius.circular(4),
-        border: Border.all(color: color.withValues(alpha: 0.35), width: 1),
+        border: Border.all(color: color.withOpacity(0.35), width: 1),
       ),
       child: Text(
         label,
@@ -3153,9 +3153,9 @@ class _Ds2JoinTargetBanner extends StatelessWidget {
         padding: const EdgeInsets.symmetric(
             horizontal: Sp.lg, vertical: Sp.md),
         decoration: BoxDecoration(
-          color: p.accent.withValues(alpha: 0.10),
+          color: p.accent.withOpacity(0.10),
           borderRadius: BorderRadius.circular(6),
-          border: Border.all(color: p.accent.withValues(alpha: 0.45), width: 1),
+          border: Border.all(color: p.accent.withOpacity(0.45), width: 1),
         ),
         child: Row(
           children: [

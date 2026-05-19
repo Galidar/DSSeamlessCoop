@@ -1,5 +1,6 @@
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using System.Diagnostics;
 using Bonfire.Service.Rpc;
 
 namespace Bonfire.Service.Modules;
@@ -20,6 +21,10 @@ public static class Ds2NativeSessionCoordinator
     private static CancellationTokenSource? _cts;
     private static Task? _worker;
     private static RpcServer? _server;
+    private static readonly HashSet<string> MutedLanInviteSessionIds =
+        new(StringComparer.OrdinalIgnoreCase);
+    private static string _lastPushedLanInviteSessionId = "";
+    private static DateTime _lastPushedLanInviteUtc = DateTime.MinValue;
 
     private static string Root => Path.Combine(Paths.InstallRoot, "Runtime", "DS2Native");
 
@@ -88,6 +93,7 @@ public static class Ds2NativeSessionCoordinator
                 // used the in-game host/guest orb. Role is decided
                 // from whether a JoinTarget is armed.
                 TryAutoStartPoseBridgeFromHeartbeat();
+                TryPushLanInvitePromptToRuntime();
             }
             catch (OperationCanceledException)
             {
@@ -244,6 +250,26 @@ public static class Ds2NativeSessionCoordinator
                 // the host auto-discovers the guest's IP via the
                 // listener and the link is bidirectional.
                 serverEffect["pose_bridge_started"] = TryStartPoseBridgeAsGuest();
+                break;
+
+            case "invite.accepted":
+                memory.SessionOpen = true;
+                memory.Mode = "guest";
+                memory.Stage = "service_direct_invite_accepted";
+                memory.OnlineIntent = "cooperate_join";
+                serverEffect = ArmJoinTargetFromInviteAction(data, memory.SessionId);
+                serverEffect["pose_bridge_started"] = TryStartPoseBridgeAsGuest();
+                serverEffect["network_note"] =
+                    "Invite accepted in DS2. Bonfire will relaunch DS2 directly into the host session without a launcher accept button.";
+                break;
+
+            case "invite.dismissed":
+                memory.SessionOpen = false;
+                memory.Mode = "solo";
+                memory.Stage = "service_direct_invite_dismissed";
+                memory.OnlineIntent = "cooperate_invite_dismiss";
+                MuteLanInviteSession(GetString(data, "invite_session_id"));
+                serverEffect["status"] = "invite_dismissed_in_game";
                 break;
 
             case "session.invade":
@@ -772,20 +798,54 @@ public static class Ds2NativeSessionCoordinator
         try
         {
             var privateIp = Network.GetPrivateIp() ?? "127.0.0.1";
-            var endpoint = $"{privateIp}:{kDefaultPoseBridgePort}";
+            var poseEndpoint = $"{privateIp}:{kDefaultPoseBridgePort}";
             var serverConfig = ServerConfig.Load(Paths.ConfigFile);
-            var sessionName = string.IsNullOrWhiteSpace(serverConfig?.ServerName)
+            var sessionName = string.IsNullOrWhiteSpace(serverConfig.ServerName)
                 ? "Bonfire DS2 fire"
                 : serverConfig.ServerName;
+            static bool IsLoopbackHost(string? value)
+            {
+                if (string.IsNullOrWhiteSpace(value)) return true;
+                var v = value.Trim();
+                return v.Equals("localhost", StringComparison.OrdinalIgnoreCase) ||
+                       v.Equals("::1", StringComparison.OrdinalIgnoreCase) ||
+                       v.StartsWith("127.", StringComparison.Ordinal);
+            }
+            var cfgHostname = serverConfig.ServerHostname;
+            var cfgPrivateHostname = serverConfig.ServerPrivateHostname;
+            var hostname = IsLoopbackHost(cfgHostname)
+                ? privateIp
+                : cfgHostname;
+            var privateHostname = IsLoopbackHost(cfgPrivateHostname)
+                ? privateIp
+                : cfgPrivateHostname;
+            var loginPort = serverConfig.LoginServerPort > 0
+                ? serverConfig.LoginServerPort
+                : 50050;
             var sessionId = Guid.NewGuid().ToString("N");
             // Cheap stable sender id from machine name — good enough
             // to deduplicate the host's own beacon when it loops back.
             var senderId = (long)Environment.MachineName.GetHashCode()
                            ^ ((long)Environment.UserName.GetHashCode() << 32);
             Ds2LanBeacon.EnsureListenerRunning();
-            Ds2LanBeacon.StartHostBroadcast(sessionId, endpoint, sessionName, senderId);
+            Ds2LanBeacon.StartHostBroadcast(
+                sessionId,
+                poseEndpoint,
+                sessionName,
+                senderId,
+                serverConfig.ServerId,
+                hostname,
+                privateHostname,
+                loginPort,
+                serverConfig.GameType,
+                !string.IsNullOrWhiteSpace(serverConfig.Password),
+                "saponita_direct");
             info["broadcasting"] = true;
-            info["endpoint"] = endpoint;
+            info["pose_endpoint"] = poseEndpoint;
+            info["hostname"] = hostname;
+            info["private_hostname"] = privateHostname;
+            info["login_port"] = loginPort;
+            info["server_id"] = serverConfig.ServerId;
             info["session_id"] = sessionId;
             info["session_name"] = sessionName;
         }
@@ -795,6 +855,336 @@ public static class Ds2NativeSessionCoordinator
             info["error"] = ex.Message;
         }
         return info;
+    }
+
+    private static void TryPushLanInvitePromptToRuntime()
+    {
+        try
+        {
+            Ds2LanBeacon.EnsureListenerRunning();
+            var status = Ds2NativeRuntimeBridge.GetStatus();
+            if (!status.Installed || !status.Active ||
+                string.IsNullOrWhiteSpace(status.SessionId))
+            {
+                return;
+            }
+
+            var beacon = Ds2LanBeacon.PickStrongest();
+            if (beacon is null)
+                return;
+
+            if (!string.Equals(beacon.GameType, "DarkSouls2",
+                    StringComparison.OrdinalIgnoreCase) ||
+                !string.Equals(beacon.InviteKind, "saponita_direct",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
+            lock (Lock)
+            {
+                if (MutedLanInviteSessionIds.Contains(beacon.SessionId))
+                    return;
+
+                var now = DateTime.UtcNow;
+                if (string.Equals(_lastPushedLanInviteSessionId, beacon.SessionId,
+                        StringComparison.OrdinalIgnoreCase) &&
+                    now - _lastPushedLanInviteUtc < TimeSpan.FromSeconds(8))
+                {
+                    return;
+                }
+
+                _lastPushedLanInviteSessionId = beacon.SessionId;
+                _lastPushedLanInviteUtc = now;
+            }
+
+            var payload = BeaconToInvitePayload(beacon);
+            Ds2NativeRuntimeBridge.SendCommand(
+                status.SessionId,
+                "invite.received",
+                payload);
+
+            _ = NotifyAsync("ds2_runtime.in_game_invite_seen", new JsonObject
+            {
+                ["time_utc"] = DateTime.UtcNow.ToString("O"),
+                ["runtime_session_id"] = status.SessionId,
+                ["invite"] = BeaconToInvitePayload(beacon),
+            });
+        }
+        catch (Exception ex)
+        {
+            _ = NotifyAsync("ds2_runtime.in_game_invite_error", new JsonObject
+            {
+                ["time_utc"] = DateTime.UtcNow.ToString("O"),
+                ["error"] = ex.Message,
+            });
+        }
+    }
+
+    private static JsonObject BeaconToInvitePayload(Ds2LanBeacon.CachedBeacon beacon)
+    {
+        return new JsonObject
+        {
+            ["session_id"] = beacon.SessionId,
+            ["host_name"] = beacon.HostName,
+            ["server_id"] = beacon.ServerId,
+            ["hostname"] = beacon.Hostname,
+            ["private_hostname"] = beacon.PrivateHostname,
+            ["login_port"] = beacon.LoginPort,
+            ["game_type"] = beacon.GameType,
+            ["password_required"] = beacon.PasswordRequired,
+            ["invite_kind"] = beacon.InviteKind,
+            ["host_endpoint"] = beacon.HostEndpoint,
+            ["source_ip"] = beacon.SourceIp.ToString(),
+            ["seen_count"] = beacon.SeenCount,
+            ["age_ms"] = (DateTime.UtcNow - beacon.LastSeenUtc).TotalMilliseconds,
+        };
+    }
+
+    private static JsonObject ArmJoinTargetFromInviteAction(
+        JsonObject? data,
+        string runtimeSessionId)
+    {
+        var effect = new JsonObject();
+        var inviteSessionId = GetString(data, "invite_session_id");
+        var beacon = string.IsNullOrWhiteSpace(inviteSessionId)
+            ? null
+            : Ds2LanBeacon.GetRecentBeacons()
+                .FirstOrDefault(b => string.Equals(
+                    b.SessionId,
+                    inviteSessionId,
+                    StringComparison.OrdinalIgnoreCase));
+
+        var hostName = FirstNonEmpty(
+            GetString(data, "invite_host_name"),
+            beacon?.HostName,
+            "Bonfire DS2 fire");
+        var serverId = FirstNonEmpty(GetString(data, "server_id"), beacon?.ServerId);
+        var privateHost = FirstNonEmpty(
+            GetString(data, "private_hostname"),
+            beacon?.PrivateHostname,
+            beacon?.SourceIp.ToString());
+        var hostname = FirstNonEmpty(GetString(data, "hostname"), beacon?.Hostname, privateHost);
+        var port = GetInt(data, "login_port");
+        if (port <= 0 && beacon is not null)
+            port = beacon.LoginPort;
+        if (port <= 0)
+            port = 50050;
+
+        var target = new Ds2NativeJoinTarget.JoinTarget(
+            ServerId: serverId,
+            ServerName: hostName,
+            Hostname: hostname,
+            PrivateHostname: privateHost,
+            Port: port,
+            Password: "",
+            GameType: FirstNonEmpty(beacon?.GameType, "DarkSouls2"),
+            SessionId: inviteSessionId,
+            SessionMode: "direct_invite_guest",
+            ArmedAtUtc: DateTime.UtcNow);
+        Ds2NativeJoinTarget.Set(target);
+        MuteLanInviteSession(inviteSessionId);
+
+        effect["status"] = "join_target_armed_from_in_game_prompt";
+        effect["target"] = Ds2NativeJoinTarget.ToJson(target);
+        effect["beacon_cache_hit"] = beacon is not null;
+        effect["source"] = "ds2_in_game_invite_prompt";
+        if (string.IsNullOrWhiteSpace(serverId))
+        {
+            effect["warning"] =
+                "Invite did not include a server id; pose bridge can still arm, but DS2 private-server reconnect may need a fresh host beacon.";
+        }
+        else
+        {
+            effect["auto_relaunch_scheduled"] = true;
+            ScheduleDirectInviteRelaunch(runtimeSessionId, target);
+        }
+        return effect;
+    }
+
+    private static void ScheduleDirectInviteRelaunch(
+        string runtimeSessionId,
+        Ds2NativeJoinTarget.JoinTarget target)
+    {
+        _ = Task.Run(async () =>
+        {
+            var result = new JsonObject
+            {
+                ["time_utc"] = DateTime.UtcNow.ToString("O"),
+                ["runtime_session_id"] = runtimeSessionId,
+                ["target"] = Ds2NativeJoinTarget.ToJson(target),
+            };
+
+            try
+            {
+                try
+                {
+                    Ds2NativeRuntimeBridge.SendCommand(
+                        runtimeSessionId,
+                        "invite.relaunching",
+                        new JsonObject
+                        {
+                            ["host_name"] = target.ServerName,
+                            ["server_id"] = target.ServerId,
+                        });
+                }
+                catch (Exception ex)
+                {
+                    result["runtime_notice_error"] = ex.Message;
+                }
+
+                await Task.Delay(TimeSpan.FromMilliseconds(1600));
+
+                result["closed_previous_process"] =
+                    CloseRuntimeProcess(runtimeSessionId);
+
+                if (!Loader.SteamUtils.IsSteamRunningAndLoggedIn())
+                {
+                    throw new Exception("Steam is not running or not logged in.");
+                }
+
+                var settings = GameSettings.Load();
+                var exePath = settings.PathFor("DarkSouls2");
+                if (string.IsNullOrWhiteSpace(exePath) || !File.Exists(exePath))
+                {
+                    throw new Exception(
+                        "No valid Dark Souls II executable is configured.");
+                }
+
+                var publicKey = (await MasterServer.GetPublicKeyAsync(
+                        target.ServerId,
+                        target.Password,
+                        CancellationToken.None))
+                    ?.Replace("\r\n", "\n");
+                if (string.IsNullOrWhiteSpace(publicKey))
+                {
+                    throw new Exception(
+                        "Could not fetch the host server public key. " +
+                        "If the host profile is passworded, in-game LAN accept " +
+                        "currently needs that host to be unsealed.");
+                }
+
+                var wan = await Network.GetPublicIpAsync(CancellationToken.None) ?? "";
+                var lan = Network.GetPrivateIp() ?? "";
+                var injectorPath =
+                    Path.Combine(Paths.InstallRoot, "Loader", "Injector.dll");
+                if (!File.Exists(injectorPath))
+                    injectorPath = Path.Combine(Paths.ServiceDirectory, "Injector.dll");
+
+                var launchRequest = new Bonfire.Service.Game.LaunchRequest(
+                    ExePath: exePath,
+                    ServerId: target.ServerId,
+                    ServerName: target.ServerName,
+                    Hostname: target.Hostname,
+                    PrivateHostname: target.PrivateHostname,
+                    Port: target.Port,
+                    PublicKey: publicKey,
+                    GameType: target.GameType,
+                    EnableSeparateSaves: settings.UseSeparateSaves,
+                    Ds2OverhaulPath: settings.Ds2OverhaulPath,
+                    EnableDs1Seamless: settings.EnableDs1Seamless,
+                    Ds1SeamlessPath: settings.Ds1SeamlessPath,
+                    EnableDs3Seamless: settings.EnableDs3Seamless,
+                    Ds3SeamlessPath: settings.Ds3SeamlessPath);
+
+                var launch = Bonfire.Service.Game.GameLauncher.Launch(
+                    launchRequest,
+                    wan,
+                    lan,
+                    injectorPath);
+                result["ok"] = launch.Ok;
+                result["pid"] = launch.Pid;
+                result["message"] = launch.Message;
+                if (!launch.Ok)
+                    throw new Exception(launch.Message);
+            }
+            catch (Exception ex)
+            {
+                result["ok"] = false;
+                result["error"] = ex.Message;
+            }
+
+            await NotifyAsync("ds2_runtime.direct_invite_relaunch", result);
+        });
+    }
+
+    private static JsonObject CloseRuntimeProcess(string runtimeSessionId)
+    {
+        var result = new JsonObject
+        {
+            ["session_id"] = runtimeSessionId,
+        };
+
+        var pid = TryParseRuntimePid(runtimeSessionId);
+        result["pid"] = pid;
+        if (pid <= 0)
+        {
+            result["status"] = "pid_not_found";
+            return result;
+        }
+
+        try
+        {
+            using var process = Process.GetProcessById(pid);
+            if (process.HasExited)
+            {
+                result["status"] = "already_exited";
+                return result;
+            }
+
+            if (process.CloseMainWindow())
+            {
+                result["close_main_window"] = true;
+                if (process.WaitForExit(5000))
+                {
+                    result["status"] = "closed_gracefully";
+                    return result;
+                }
+            }
+
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit(5000);
+            result["status"] = "killed";
+        }
+        catch (Exception ex)
+        {
+            result["status"] = "close_failed";
+            result["error"] = ex.Message;
+        }
+        return result;
+    }
+
+    private static int TryParseRuntimePid(string runtimeSessionId)
+    {
+        if (string.IsNullOrWhiteSpace(runtimeSessionId))
+            return 0;
+        var idx = runtimeSessionId.LastIndexOf('_');
+        if (idx < 0 || idx >= runtimeSessionId.Length - 1)
+            return 0;
+        return int.TryParse(runtimeSessionId.AsSpan(idx + 1), out var pid)
+            ? pid
+            : 0;
+    }
+
+    private static void MuteLanInviteSession(string sessionId)
+    {
+        if (string.IsNullOrWhiteSpace(sessionId))
+            return;
+
+        lock (Lock)
+        {
+            MutedLanInviteSessionIds.Add(sessionId);
+        }
+    }
+
+    private static string FirstNonEmpty(params string?[] values)
+    {
+        foreach (var value in values)
+        {
+            if (!string.IsNullOrWhiteSpace(value))
+                return value;
+        }
+        return "";
     }
 
     // v2.8.3: called every worker tick (~1 Hz). Watches the latest

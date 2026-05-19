@@ -33,7 +33,9 @@
 #include <dxgi.h>
 
 #include <atomic>
+#include <algorithm>
 #include <cstdint>
+#include <cstring>
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "dxgi.lib")
@@ -74,7 +76,16 @@ namespace
     ID3D11VertexShader*     s_overlay_vs = nullptr;
     ID3D11PixelShader*      s_overlay_ps = nullptr;
     ID3D11Buffer*           s_overlay_cbuffer = nullptr;  // Phase 3 dynamic cbuffer
+    ID3D11VertexShader*     s_screen_vs = nullptr;        // 2D in-game prompt
+    ID3D11PixelShader*      s_screen_ps = nullptr;
+    ID3D11Buffer*           s_screen_cbuffer = nullptr;
     LONG                    s_overlay_init_state = 0;  // 0=pending, 1=ok, 2=failed
+
+    SRWLOCK s_invite_prompt_lock = SRWLOCK_INIT;
+    bool s_invite_prompt_visible = false;
+    char s_invite_prompt_title[96] = {};
+    char s_invite_prompt_body[128] = {};
+    char s_invite_prompt_hint[96] = {};
 
     // ── Phase 3: Map/Unmap hooks to capture DS2's per-frame VP ───────
     // Hooks the device context's vtable[14]=Map and vtable[15]=Unmap.
@@ -560,6 +571,50 @@ float4 main(PSIn input) : SV_Target
 }
 )";
 
+    static constexpr const char* kScreenVSSource = R"(
+cbuffer ScreenCB : register(b0)
+{
+    float4 rect;
+    float4 color;
+    float2 screen;
+    float2 _pad;
+};
+
+struct VSOut
+{
+    float4 pos   : SV_Position;
+    float4 color : COLOR;
+};
+
+VSOut main(uint id : SV_VertexID)
+{
+    const float2 verts[6] = {
+        float2(0,0), float2(1,0), float2(0,1),
+        float2(1,0), float2(1,1), float2(0,1)
+    };
+    float2 p = rect.xy + verts[id] * rect.zw;
+    float2 clip = float2((p.x / screen.x) * 2.0 - 1.0,
+                         1.0 - (p.y / screen.y) * 2.0);
+    VSOut o;
+    o.pos = float4(clip, 0.0, 1.0);
+    o.color = color;
+    return o;
+}
+)";
+
+    static constexpr const char* kScreenPSSource = R"(
+struct PSIn
+{
+    float4 pos   : SV_Position;
+    float4 color : COLOR;
+};
+
+float4 main(PSIn input) : SV_Target
+{
+    return input.color;
+}
+)";
+
     // Layout MUST match the HLSL cbuffer.
     //  v15 was 80 bytes (5×16).
     //  v16 adds color + yaw_radians = 6×16 = 96 bytes.
@@ -573,6 +628,16 @@ float4 main(PSIn input) : SV_Target
     };
     static_assert(sizeof(OverlayCBData) == 96,
                   "OverlayCBData must match HLSL cbuffer (96 bytes)");
+
+    struct ScreenCBData
+    {
+        float rect[4];
+        float color[4];
+        float screen[2];
+        float pad[2];
+    };
+    static_assert(sizeof(ScreenCBData) == 48,
+                  "ScreenCBData must match HLSL cbuffer (48 bytes)");
 
     // Compile both shaders + create shader objects. Called once on the
     // first Present that observes a cached device pointer. Sets
@@ -674,6 +739,83 @@ float4 main(PSIn input) : SV_Target
             s_overlay_ps->Release(); s_overlay_ps = nullptr;
             InterlockedExchange(&s_overlay_init_state, 2);
             return;
+        }
+
+        ID3DBlob* screen_vs_blob = nullptr;
+        ID3DBlob* screen_ps_blob = nullptr;
+        err_blob = nullptr;
+        hr = D3DCompile(
+            kScreenVSSource, strlen(kScreenVSSource),
+            "ds2_screen_vs", nullptr, nullptr,
+            "main", "vs_4_0", 0, 0, &screen_vs_blob, &err_blob);
+        if (FAILED(hr))
+        {
+            Log("DS2_RenderHook: screen VS compile failed hr=0x%08lX msg=%s",
+                static_cast<unsigned long>(hr),
+                err_blob ? static_cast<const char*>(err_blob->GetBufferPointer())
+                         : "(no message)");
+            if (err_blob) err_blob->Release();
+        }
+        if (err_blob) { err_blob->Release(); err_blob = nullptr; }
+
+        if (screen_vs_blob != nullptr)
+        {
+            hr = D3DCompile(
+                kScreenPSSource, strlen(kScreenPSSource),
+                "ds2_screen_ps", nullptr, nullptr,
+                "main", "ps_4_0", 0, 0, &screen_ps_blob, &err_blob);
+            if (FAILED(hr))
+            {
+                Log("DS2_RenderHook: screen PS compile failed hr=0x%08lX msg=%s",
+                    static_cast<unsigned long>(hr),
+                    err_blob ? static_cast<const char*>(err_blob->GetBufferPointer())
+                             : "(no message)");
+                if (err_blob) err_blob->Release();
+                screen_vs_blob->Release();
+                screen_vs_blob = nullptr;
+            }
+            if (err_blob) { err_blob->Release(); err_blob = nullptr; }
+        }
+
+        if (screen_vs_blob != nullptr && screen_ps_blob != nullptr)
+        {
+            HRESULT screen_hr = s_d3d_device->CreateVertexShader(
+                screen_vs_blob->GetBufferPointer(),
+                screen_vs_blob->GetBufferSize(),
+                nullptr,
+                &s_screen_vs);
+            if (SUCCEEDED(screen_hr))
+            {
+                screen_hr = s_d3d_device->CreatePixelShader(
+                    screen_ps_blob->GetBufferPointer(),
+                    screen_ps_blob->GetBufferSize(),
+                    nullptr,
+                    &s_screen_ps);
+            }
+            screen_vs_blob->Release();
+            screen_ps_blob->Release();
+
+            D3D11_BUFFER_DESC screen_cb_desc = {};
+            screen_cb_desc.ByteWidth = sizeof(ScreenCBData);
+            screen_cb_desc.Usage = D3D11_USAGE_DYNAMIC;
+            screen_cb_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+            screen_cb_desc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+            if (SUCCEEDED(screen_hr))
+            {
+                screen_hr = s_d3d_device->CreateBuffer(
+                    &screen_cb_desc, nullptr, &s_screen_cbuffer);
+            }
+            if (FAILED(screen_hr) ||
+                s_screen_vs == nullptr ||
+                s_screen_ps == nullptr ||
+                s_screen_cbuffer == nullptr)
+            {
+                Log("DS2_RenderHook: in-game prompt pipeline unavailable hr=0x%08lX",
+                    static_cast<unsigned long>(screen_hr));
+                if (s_screen_vs) { s_screen_vs->Release(); s_screen_vs = nullptr; }
+                if (s_screen_ps) { s_screen_ps->Release(); s_screen_ps = nullptr; }
+                if (s_screen_cbuffer) { s_screen_cbuffer->Release(); s_screen_cbuffer = nullptr; }
+            }
         }
 
         InterlockedExchange(&s_overlay_init_state, 1);
@@ -1052,6 +1194,161 @@ float4 main(PSIn input) : SV_Target
         return false;
     }
 
+    const uint8_t* Glyph5x7(char raw)
+    {
+        static const uint8_t blank[7] = { 0, 0, 0, 0, 0, 0, 0 };
+        static const uint8_t digits[10][7] = {
+            { 0x0E, 0x11, 0x13, 0x15, 0x19, 0x11, 0x0E },
+            { 0x04, 0x0C, 0x04, 0x04, 0x04, 0x04, 0x0E },
+            { 0x0E, 0x11, 0x01, 0x02, 0x04, 0x08, 0x1F },
+            { 0x1F, 0x02, 0x04, 0x02, 0x01, 0x11, 0x0E },
+            { 0x02, 0x06, 0x0A, 0x12, 0x1F, 0x02, 0x02 },
+            { 0x1F, 0x10, 0x1E, 0x01, 0x01, 0x11, 0x0E },
+            { 0x06, 0x08, 0x10, 0x1E, 0x11, 0x11, 0x0E },
+            { 0x1F, 0x01, 0x02, 0x04, 0x08, 0x08, 0x08 },
+            { 0x0E, 0x11, 0x11, 0x0E, 0x11, 0x11, 0x0E },
+            { 0x0E, 0x11, 0x11, 0x0F, 0x01, 0x02, 0x0C },
+        };
+        static const uint8_t letters[26][7] = {
+            { 0x0E, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11 },
+            { 0x1E, 0x11, 0x11, 0x1E, 0x11, 0x11, 0x1E },
+            { 0x0E, 0x11, 0x10, 0x10, 0x10, 0x11, 0x0E },
+            { 0x1E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x1E },
+            { 0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x1F },
+            { 0x1F, 0x10, 0x10, 0x1E, 0x10, 0x10, 0x10 },
+            { 0x0E, 0x11, 0x10, 0x17, 0x11, 0x11, 0x0F },
+            { 0x11, 0x11, 0x11, 0x1F, 0x11, 0x11, 0x11 },
+            { 0x0E, 0x04, 0x04, 0x04, 0x04, 0x04, 0x0E },
+            { 0x07, 0x02, 0x02, 0x02, 0x12, 0x12, 0x0C },
+            { 0x11, 0x12, 0x14, 0x18, 0x14, 0x12, 0x11 },
+            { 0x10, 0x10, 0x10, 0x10, 0x10, 0x10, 0x1F },
+            { 0x11, 0x1B, 0x15, 0x15, 0x11, 0x11, 0x11 },
+            { 0x11, 0x19, 0x15, 0x13, 0x11, 0x11, 0x11 },
+            { 0x0E, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E },
+            { 0x1E, 0x11, 0x11, 0x1E, 0x10, 0x10, 0x10 },
+            { 0x0E, 0x11, 0x11, 0x11, 0x15, 0x12, 0x0D },
+            { 0x1E, 0x11, 0x11, 0x1E, 0x14, 0x12, 0x11 },
+            { 0x0F, 0x10, 0x10, 0x0E, 0x01, 0x01, 0x1E },
+            { 0x1F, 0x04, 0x04, 0x04, 0x04, 0x04, 0x04 },
+            { 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x0E },
+            { 0x11, 0x11, 0x11, 0x11, 0x11, 0x0A, 0x04 },
+            { 0x11, 0x11, 0x11, 0x15, 0x15, 0x1B, 0x11 },
+            { 0x11, 0x11, 0x0A, 0x04, 0x0A, 0x11, 0x11 },
+            { 0x11, 0x11, 0x0A, 0x04, 0x04, 0x04, 0x04 },
+            { 0x1F, 0x01, 0x02, 0x04, 0x08, 0x10, 0x1F },
+        };
+        const char c = static_cast<char>(
+            raw >= 'a' && raw <= 'z' ? raw - ('a' - 'A') : raw);
+        if (c >= '0' && c <= '9') return digits[c - '0'];
+        if (c >= 'A' && c <= 'Z') return letters[c - 'A'];
+        static const uint8_t colon[7] = { 0, 0x04, 0x04, 0, 0x04, 0x04, 0 };
+        static const uint8_t dash[7] = { 0, 0, 0, 0x1F, 0, 0, 0 };
+        static const uint8_t dot[7] = { 0, 0, 0, 0, 0, 0x0C, 0x0C };
+        static const uint8_t slash[7] = { 0x01, 0x02, 0x02, 0x04, 0x08, 0x08, 0x10 };
+        if (c == ':') return colon;
+        if (c == '-') return dash;
+        if (c == '.') return dot;
+        if (c == '/') return slash;
+        return blank;
+    }
+
+    void DrawScreenRect(
+        const D3D11_VIEWPORT& vp,
+        float x, float y, float w, float h,
+        float r, float g, float b, float a)
+    {
+        if (s_screen_vs == nullptr || s_screen_ps == nullptr ||
+            s_screen_cbuffer == nullptr || w <= 0.0f || h <= 0.0f)
+            return;
+
+        D3D11_MAPPED_SUBRESOURCE mcb = {};
+        HRESULT hrm = s_d3d_context->Map(
+            s_screen_cbuffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mcb);
+        if (FAILED(hrm)) return;
+
+        ScreenCBData* data = reinterpret_cast<ScreenCBData*>(mcb.pData);
+        data->rect[0] = x; data->rect[1] = y;
+        data->rect[2] = w; data->rect[3] = h;
+        data->color[0] = r; data->color[1] = g;
+        data->color[2] = b; data->color[3] = a;
+        data->screen[0] = vp.Width > 1.0f ? vp.Width : 1.0f;
+        data->screen[1] = vp.Height > 1.0f ? vp.Height : 1.0f;
+        data->pad[0] = 0.0f; data->pad[1] = 0.0f;
+        s_d3d_context->Unmap(s_screen_cbuffer, 0);
+
+        s_d3d_context->VSSetShader(s_screen_vs, nullptr, 0);
+        s_d3d_context->PSSetShader(s_screen_ps, nullptr, 0);
+        s_d3d_context->VSSetConstantBuffers(0, 1, &s_screen_cbuffer);
+        s_d3d_context->Draw(6, 0);
+    }
+
+    void DrawBitmapText(
+        const D3D11_VIEWPORT& vp,
+        const char* text,
+        float x, float y, float scale,
+        float r, float g, float b)
+    {
+        if (text == nullptr) return;
+        float pen_x = x;
+        for (const char* p = text; *p != '\0'; ++p)
+        {
+            if (*p == ' ')
+            {
+                pen_x += 4.0f * scale;
+                continue;
+            }
+            const uint8_t* glyph = Glyph5x7(*p);
+            for (int row = 0; row < 7; ++row)
+            {
+                for (int col = 0; col < 5; ++col)
+                {
+                    if ((glyph[row] & (1 << (4 - col))) == 0)
+                        continue;
+                    DrawScreenRect(
+                        vp,
+                        pen_x + col * scale,
+                        y + row * scale,
+                        scale,
+                        scale,
+                        r, g, b, 1.0f);
+                }
+            }
+            pen_x += 6.0f * scale;
+        }
+    }
+
+    void DrawInvitePrompt(const D3D11_VIEWPORT& vp)
+    {
+        if (!DS2_RenderHook_IsInvitePromptVisible())
+            return;
+
+        char title[96] = {};
+        char body[128] = {};
+        char hint[96] = {};
+        AcquireSRWLockShared(&s_invite_prompt_lock);
+        strncpy_s(title, s_invite_prompt_title, _TRUNCATE);
+        strncpy_s(body, s_invite_prompt_body, _TRUNCATE);
+        strncpy_s(hint, s_invite_prompt_hint, _TRUNCATE);
+        ReleaseSRWLockShared(&s_invite_prompt_lock);
+
+        const float width =
+            std::min(900.0f, std::max(520.0f, vp.Width - 160.0f));
+        const float height = 168.0f;
+        const float x = (vp.Width - width) * 0.5f;
+        const float y = std::max(60.0f, vp.Height * 0.13f);
+        const float gr = 0.80f, gg = 0.60f, gb = 0.22f;
+
+        DrawScreenRect(vp, x, y, width, height, 0.02f, 0.018f, 0.014f, 1.0f);
+        DrawScreenRect(vp, x, y, width, 3.0f, gr, gg, gb, 1.0f);
+        DrawScreenRect(vp, x, y + height - 3.0f, width, 3.0f, gr, gg, gb, 1.0f);
+        DrawScreenRect(vp, x, y, 3.0f, height, gr, gg, gb, 1.0f);
+        DrawScreenRect(vp, x + width - 3.0f, y, 3.0f, height, gr, gg, gb, 1.0f);
+
+        DrawBitmapText(vp, title, x + 28.0f, y + 26.0f, 4.0f, 0.95f, 0.86f, 0.62f);
+        DrawBitmapText(vp, body, x + 28.0f, y + 74.0f, 3.0f, 0.90f, 0.90f, 0.86f);
+        DrawBitmapText(vp, hint, x + 28.0f, y + 116.0f, 3.0f, gr, gg, gb);
+    }
+
     // Draw the screen-space overlay quad. Called from HookedPresent
     // BEFORE the chained Present. CRITICAL: save & restore every piece
     // of D3D11 immediate-context state we touch so the lighting engine
@@ -1147,6 +1444,22 @@ float4 main(PSIn input) : SV_Target
                     vp.Height   = static_cast<float>(desc.BufferDesc.Height);
                     vp.MinDepth = 0.0f;
                     vp.MaxDepth = 1.0f;
+
+                    if (DS2_RenderHook_IsInvitePromptVisible())
+                    {
+                        s_d3d_context->RSSetViewports(1, &vp);
+                        s_d3d_context->OMSetRenderTargets(1, &rtv, nullptr);
+                        s_d3d_context->OMSetBlendState(nullptr, nullptr, 0xFFFFFFFF);
+                        s_d3d_context->OMSetDepthStencilState(nullptr, 0);
+                        s_d3d_context->RSSetState(nullptr);
+                        s_d3d_context->IASetPrimitiveTopology(
+                            D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+                        s_d3d_context->IASetInputLayout(nullptr);
+                        s_d3d_context->GSSetShader(nullptr, nullptr, 0);
+                        s_d3d_context->HSSetShader(nullptr, nullptr, 0);
+                        s_d3d_context->DSSetShader(nullptr, nullptr, 0);
+                        DrawInvitePrompt(vp);
+                    }
 
                     // Phase 3 v14: VP from DS2's camera config struct.
                     // Phase 4a v16: build a per-frame draw list of N
@@ -1759,6 +2072,38 @@ void DS2_RenderHook::Uninstall()
 const char* DS2_RenderHook::GetName()
 {
     return "DS2 Render Hook (HKMP overlay v8c — D3D11CreateDevice→factory→present)";
+}
+
+void DS2_RenderHook_SetInvitePrompt(
+    const char* title,
+    const char* body,
+    const char* hint)
+{
+    AcquireSRWLockExclusive(&s_invite_prompt_lock);
+    strncpy_s(s_invite_prompt_title, title ? title : "", _TRUNCATE);
+    strncpy_s(s_invite_prompt_body, body ? body : "", _TRUNCATE);
+    strncpy_s(s_invite_prompt_hint, hint ? hint : "", _TRUNCATE);
+    s_invite_prompt_visible = true;
+    ReleaseSRWLockExclusive(&s_invite_prompt_lock);
+}
+
+void DS2_RenderHook_ClearInvitePrompt()
+{
+    AcquireSRWLockExclusive(&s_invite_prompt_lock);
+    s_invite_prompt_visible = false;
+    s_invite_prompt_title[0] = '\0';
+    s_invite_prompt_body[0] = '\0';
+    s_invite_prompt_hint[0] = '\0';
+    ReleaseSRWLockExclusive(&s_invite_prompt_lock);
+}
+
+bool DS2_RenderHook_IsInvitePromptVisible()
+{
+    bool visible = false;
+    AcquireSRWLockShared(&s_invite_prompt_lock);
+    visible = s_invite_prompt_visible;
+    ReleaseSRWLockShared(&s_invite_prompt_lock);
+    return visible;
 }
 
 uint64_t DS2_RenderHook_GetFrameCount()
