@@ -246,6 +246,17 @@ public static class Ds2NativeSessionCoordinator
                 // Guests' first packet auto-registers their IP, so we
                 // don't need a separate signalling channel.
                 serverEffect["pose_bridge_started"] = TryStartPoseBridgeAsHost();
+
+                // v2.9.27 HOTFIX: cuando el HOST usa Saponita Desbloqueada,
+                // intentamos enviar PushRequestSummonSign DIRECTAMENTE al
+                // peer sin relaunch. El server corre en la maquina del host
+                // asi que el inbox file debe escribirse en el lado HOST
+                // (no en el peer como hacia v2.9.27 v1). Si funciona, peer
+                // recibe el push y aparece in-place; si falla, el flujo
+                // legacy (LAN beacon -> peer auto-accept -> relaunch) sigue
+                // corriendo en paralelo como fallback.
+                var hostDirectSummon = TryDirectServerSummonAsHost(serverEffect);
+                serverEffect["server_direct_summon_host_initiated"] = hostDirectSummon;
                 break;
 
             case "session.join":
@@ -1083,11 +1094,75 @@ public static class Ds2NativeSessionCoordinator
         return effect;
     }
 
-    // v2.9.27 — Saponita Desbloqueada direct server-side summon.
-    // Writes admin_summon_inbox.json (atomically) and polls for
-    // admin_summon_outbox.json with the matching request_id.
-    // Returns true if the server confirmed the push, false otherwise
-    // (caller falls back to the legacy relaunch path).
+    // v2.9.27 HOTFIX — Saponita Desbloqueada direct summon from HOST side.
+    // This runs in the HOST's BonfireService when the host uses Saponita
+    // Desbloqueada (session.create action). The local Server.exe (on the
+    // same machine) drains the inbox each tick and emits
+    // PushRequestSummonSign to the peer's existing TCP connection. The
+    // peer's vanilla DS2 handles the push and spawns him in-place in the
+    // host's world — without any relaunch.
+    private static bool TryDirectServerSummonAsHost(JsonObject effect)
+    {
+        try
+        {
+            var requestId = Guid.NewGuid().ToString("N");
+            var inbox = new JsonObject
+            {
+                ["request_id"] = requestId,
+                ["issued_utc"] = DateTime.UtcNow.ToString("O"),
+                ["mode"] = "auto_pick_two_players",
+                ["trigger"] = "session.create_host_side",
+            };
+
+            const string InboxRoot = @"C:\DSSeamlessCoop";
+            const string InboxPath = @"C:\DSSeamlessCoop\admin_summon_inbox.json";
+            const string InboxTemp = @"C:\DSSeamlessCoop\admin_summon_inbox.json.tmp";
+            const string OutboxPath = @"C:\DSSeamlessCoop\admin_summon_outbox.json";
+
+            Directory.CreateDirectory(InboxRoot);
+            try { File.Delete(OutboxPath); } catch { }
+
+            File.WriteAllText(InboxTemp, inbox.ToJsonString(), Encoding.UTF8);
+            File.Move(InboxTemp, InboxPath, overwrite: true);
+
+            // Poll outbox up to ~1500ms (server Poll() runs ~30Hz).
+            var deadline = DateTime.UtcNow.AddMilliseconds(1500);
+            while (DateTime.UtcNow < deadline)
+            {
+                if (File.Exists(OutboxPath))
+                {
+                    try
+                    {
+                        var raw = File.ReadAllText(OutboxPath, Encoding.UTF8);
+                        var node = System.Text.Json.Nodes.JsonNode.Parse(raw) as JsonObject;
+                        var rid = node?["request_id"]?.GetValue<string>();
+                        if (string.Equals(rid, requestId, StringComparison.Ordinal))
+                        {
+                            var ok = node?["ok"]?.GetValue<bool>() ?? false;
+                            effect["direct_summon_host_outbox"] = node?.DeepClone();
+                            return ok;
+                        }
+                    }
+                    catch { /* keep polling */ }
+                }
+                Thread.Sleep(50);
+            }
+            effect["direct_summon_host_timeout"] = true;
+            return false;
+        }
+        catch (Exception ex)
+        {
+            effect["direct_summon_host_error"] = ex.Message;
+            return false;
+        }
+    }
+
+    // v2.9.27 — Saponita Desbloqueada direct server-side summon (peer-side,
+    // LEGACY: this is called from ArmJoinTargetFromInviteAction on the
+    // PEER side, but writes inbox to PEER's disk where there's no server.
+    // Kept for compatibility — usually returns false / times out and
+    // falls back to relaunch. Real direct summon happens via
+    // TryDirectServerSummonAsHost on the host side.
     //
     // v0 protocol: BonfireService does NOT know Steam IDs (it has no
     // direct Steam SDK access from the service process). It just signals
