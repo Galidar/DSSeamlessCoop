@@ -23,8 +23,8 @@ public static class Ds2NativeSessionCoordinator
     private static RpcServer? _server;
     private static readonly HashSet<string> MutedLanInviteSessionIds =
         new(StringComparer.OrdinalIgnoreCase);
-    private static string _lastPushedLanInviteSessionId = "";
-    private static DateTime _lastPushedLanInviteUtc = DateTime.MinValue;
+    private static string _lastAutoAcceptedLanInviteSessionId = "";
+    private static DateTime _lastAutoAcceptedLanInviteUtc = DateTime.MinValue;
 
     private static string Root => Path.Combine(Paths.InstallRoot, "Runtime", "DS2Native");
 
@@ -93,7 +93,7 @@ public static class Ds2NativeSessionCoordinator
                 // used the in-game host/guest orb. Role is decided
                 // from whether a JoinTarget is armed.
                 TryAutoStartPoseBridgeFromHeartbeat();
-                TryPushLanInvitePromptToRuntime();
+                TryAutoAcceptLanInviteForRuntime();
             }
             catch (OperationCanceledException)
             {
@@ -218,6 +218,15 @@ public static class Ds2NativeSessionCoordinator
         switch (command)
         {
             case "session.create":
+                if (memory.SessionOpen &&
+                    !string.Equals(memory.Mode, "solo",
+                        StringComparison.OrdinalIgnoreCase))
+                {
+                    serverEffect["status"] = "session_create_ignored_already_active";
+                    serverEffect["active_session_mode"] = memory.Mode;
+                    serverEffect["active_stage"] = memory.Stage;
+                    break;
+                }
                 memory.SessionOpen = true;
                 memory.Mode = "host";
                 memory.Stage = "service_host_online";
@@ -857,7 +866,7 @@ public static class Ds2NativeSessionCoordinator
         return info;
     }
 
-    private static void TryPushLanInvitePromptToRuntime()
+    private static void TryAutoAcceptLanInviteForRuntime()
     {
         try
         {
@@ -869,13 +878,21 @@ public static class Ds2NativeSessionCoordinator
                 return;
             }
 
+            var memory = GetSession(status.SessionId);
+            if (memory.SessionOpen &&
+                !string.Equals(memory.Mode, "solo",
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
             var beacon = Ds2LanBeacon.PickStrongest();
             if (beacon is null)
                 return;
 
-            // Ignore our own host beacon. The visible invite prompt is for
-            // peers only; otherwise the host sees a bogus accept/cancel box
-            // while using Saponita Desbloqueada.
+            // Ignore our own host beacon. Saponita is now direct-fire:
+            // the peer auto-joins, but the player who used the item must
+            // never auto-join their own beacon.
             if (string.Equals(beacon.SessionId, status.SessionId,
                     StringComparison.OrdinalIgnoreCase))
             {
@@ -896,38 +913,71 @@ public static class Ds2NativeSessionCoordinator
                     return;
 
                 var now = DateTime.UtcNow;
-                if (string.Equals(_lastPushedLanInviteSessionId, beacon.SessionId,
+                if (string.Equals(_lastAutoAcceptedLanInviteSessionId, beacon.SessionId,
                         StringComparison.OrdinalIgnoreCase) &&
-                    now - _lastPushedLanInviteUtc < TimeSpan.FromSeconds(8))
+                    now - _lastAutoAcceptedLanInviteUtc < TimeSpan.FromSeconds(8))
                 {
                     return;
                 }
 
-                _lastPushedLanInviteSessionId = beacon.SessionId;
-                _lastPushedLanInviteUtc = now;
+                _lastAutoAcceptedLanInviteSessionId = beacon.SessionId;
+                _lastAutoAcceptedLanInviteUtc = now;
             }
 
-            var payload = BeaconToInvitePayload(beacon);
-            Ds2NativeRuntimeBridge.SendCommand(
-                status.SessionId,
-                "invite.received",
-                payload);
+            var data = BeaconToInviteActionPayload(beacon);
+            var action = new JsonObject
+            {
+                ["command"] = "invite.accepted",
+                ["session_id"] = status.SessionId,
+                ["data"] = data.DeepClone(),
+            };
+            var state = ApplyAction(
+                memory,
+                action,
+                "invite.accepted",
+                "lan_saponita_auto_accept",
+                0);
+            WriteServiceState(status.SessionId, state);
+            _ = NotifyAsync("ds2_runtime.session", state);
 
-            _ = NotifyAsync("ds2_runtime.in_game_invite_seen", new JsonObject
+            _ = NotifyAsync("ds2_runtime.saponita_auto_accept", new JsonObject
             {
                 ["time_utc"] = DateTime.UtcNow.ToString("O"),
                 ["runtime_session_id"] = status.SessionId,
                 ["invite"] = BeaconToInvitePayload(beacon),
+                ["note"] = "Saponita direct invite auto-accepted without an in-game prompt.",
             });
         }
         catch (Exception ex)
         {
-            _ = NotifyAsync("ds2_runtime.in_game_invite_error", new JsonObject
+            _ = NotifyAsync("ds2_runtime.saponita_auto_accept_error", new JsonObject
             {
                 ["time_utc"] = DateTime.UtcNow.ToString("O"),
                 ["error"] = ex.Message,
             });
         }
+    }
+
+    private static JsonObject BeaconToInviteActionPayload(Ds2LanBeacon.CachedBeacon beacon)
+    {
+        return new JsonObject
+        {
+            ["invite_session_id"] = beacon.SessionId,
+            ["invite_host_name"] = beacon.HostName,
+            ["server_id"] = beacon.ServerId,
+            ["hostname"] = beacon.Hostname,
+            ["private_hostname"] = beacon.PrivateHostname,
+            ["login_port"] = beacon.LoginPort,
+            ["game_type"] = beacon.GameType,
+            ["password_required"] = beacon.PasswordRequired,
+            ["invite_kind"] = beacon.InviteKind,
+            ["host_endpoint"] = beacon.HostEndpoint,
+            ["source_ip"] = beacon.SourceIp.ToString(),
+            ["seen_count"] = beacon.SeenCount,
+            ["age_ms"] = (DateTime.UtcNow - beacon.LastSeenUtc).TotalMilliseconds,
+            ["auto_accepted"] = true,
+            ["prompt_removed"] = true,
+        };
     }
 
     private static JsonObject BeaconToInvitePayload(Ds2LanBeacon.CachedBeacon beacon)
@@ -994,10 +1044,10 @@ public static class Ds2NativeSessionCoordinator
         Ds2NativeJoinTarget.Set(target);
         MuteLanInviteSession(inviteSessionId);
 
-        effect["status"] = "join_target_armed_from_in_game_prompt";
+        effect["status"] = "join_target_armed_from_saponita_auto_accept";
         effect["target"] = Ds2NativeJoinTarget.ToJson(target);
         effect["beacon_cache_hit"] = beacon is not null;
-        effect["source"] = "ds2_in_game_invite_prompt";
+        effect["source"] = "saponita_auto_accept";
         if (string.IsNullOrWhiteSpace(serverId))
         {
             effect["warning"] =
@@ -1069,7 +1119,7 @@ public static class Ds2NativeSessionCoordinator
                 {
                     throw new Exception(
                         "Could not fetch the host server public key. " +
-                        "If the host profile is passworded, in-game LAN accept " +
+                        "If the host profile is passworded, direct Saponita auto-join " +
                         "currently needs that host to be unsealed.");
                 }
 

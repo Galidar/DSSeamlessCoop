@@ -159,8 +159,6 @@ namespace
     constexpr uintptr_t kItemGiveRva = 0x1AC3D0;
     constexpr uintptr_t kItemStructConvertRva = 0x05D950;
     constexpr uintptr_t kItemPopupDisplayRva = 0x501080;
-    constexpr uintptr_t kFrontendConfirmDisplayRva = 0x4FE1C0;
-    constexpr uintptr_t kFrontendCommonTextLookupRva = 0x503620;
     constexpr uintptr_t kInventoryFirstHopOffset = 0xA8;
     constexpr uintptr_t kInventoryHopOffset = 0x10;
     constexpr uintptr_t kItemInventoryBagListOffset = 0x10;
@@ -244,12 +242,6 @@ namespace
     std::string s_pending_lan_invite_private_hostname;
     int32_t s_pending_lan_invite_login_port = 0;
     uint64_t s_pending_lan_invite_last_input_tick = 0;
-    bool s_pending_lan_invite_enter_was_down = false;
-    bool s_pending_lan_invite_escape_was_down = false;
-    bool s_pending_lan_invite_native_prompt_visible = false;
-    uint32_t s_pending_lan_invite_native_prompt_id = 0;
-    constexpr wchar_t kNativeInvitePromptMessage[] =
-        L"Usar Saponita Desbloqueada?";
 
     struct RuntimeWorkerConfig
     {
@@ -310,18 +302,6 @@ namespace
     using ItemGiveFn = void(__fastcall*)(void* inventory_bag_list, void* item_spawn_list, int32_t item_count);
     using ItemStructConvertFn = void(__fastcall*)(void* display_stack, void* item_spawn_list, int32_t item_count, int32_t show_popup);
     using ItemPopupDisplayFn = void(__fastcall*)(void* item_display_manager, void* display_stack);
-    using FrontendConfirmDisplayFn =
-        uint32_t(__fastcall*)(void* item_display_manager,
-            const wchar_t* message,
-            const wchar_t* yes_label,
-            const wchar_t* no_label,
-            uint8_t unk4,
-            uint8_t unk5,
-            uint8_t unk6,
-            uint8_t unk7);
-    using FrontendCommonTextLookupFn =
-        const wchar_t*(__fastcall*)(int32_t table_id, int32_t text_id);
-
     RestAtBonfireFn s_original_rest_at_bonfire = nullptr;
     // Track C Phase 2B observer — trampolined-to original after
     // Detours attaches. Null until TryArmPlayerCtrlSpawnObserver
@@ -1464,10 +1444,10 @@ namespace
         action["time_utc"] = UtcNowIso8601();
         action["runtime"] = "ds2_native";
         action["session_id"] = config.SessionId;
-        action["source"] = "in_game_invite_prompt";
+        action["source"] = "saponita_auto_accept";
         action["item_id"] = 0;
         action["item_id_hex"] = "0x00000000";
-        action["runtime_name"] = "bonfire_invite_prompt";
+        action["runtime_name"] = "bonfire_saponita_auto_accept";
         action["command"] = command;
         action["data"] = data;
 
@@ -1572,10 +1552,6 @@ namespace
             s_pending_lan_invite_host_name;
         state["render_invite_prompt_visible"] =
             DS2_RenderHook_IsInvitePromptVisible();
-        state["native_invite_prompt_visible"] =
-            s_pending_lan_invite_native_prompt_visible;
-        state["native_invite_prompt_id"] =
-            s_pending_lan_invite_native_prompt_id;
         state["rule_preset_index"] = s_rule_preset_index;
         state["rule_preset"] = RuntimeRulePresetName(s_rule_preset_index);
         state["rules"] = RuntimeRulePayload(s_rule_preset_index);
@@ -1688,99 +1664,6 @@ namespace
         payload["item_display_manager"] = HexPointer(item_display_manager);
         payload["steps"] = steps;
         return true;
-    }
-
-    bool SafeShowNativeConfirmRaw(
-        uintptr_t game_base,
-        void* item_display_manager,
-        const wchar_t* message,
-        uint32_t* out_prompt_id)
-    {
-        if (out_prompt_id != nullptr)
-        {
-            *out_prompt_id = 0;
-        }
-        if (game_base == 0 || item_display_manager == nullptr || message == nullptr)
-        {
-            return false;
-        }
-
-        __try
-        {
-            auto lookup =
-                reinterpret_cast<FrontendCommonTextLookupFn>(
-                    game_base + kFrontendCommonTextLookupRva);
-            auto show =
-                reinterpret_cast<FrontendConfirmDisplayFn>(
-                    game_base + kFrontendConfirmDisplayRva);
-
-            const wchar_t* yes_label = lookup(0, 200);
-            const wchar_t* no_label = lookup(0, 0xC9);
-            if (yes_label == nullptr || *yes_label == L'\0')
-            {
-                yes_label = L"SI";
-            }
-            if (no_label == nullptr || *no_label == L'\0')
-            {
-                no_label = L"NO";
-            }
-
-            const uint32_t prompt_id =
-                show(
-                    item_display_manager,
-                    message,
-                    yes_label,
-                    no_label,
-                    1,
-                    0,
-                    0,
-                    1);
-            if (out_prompt_id != nullptr)
-            {
-                *out_prompt_id = prompt_id;
-            }
-            return prompt_id != 0;
-        }
-        __except (EXCEPTION_EXECUTE_HANDLER)
-        {
-            if (out_prompt_id != nullptr)
-            {
-                *out_prompt_id = 0;
-            }
-            return false;
-        }
-    }
-
-    bool TryShowNativeInvitePrompt(
-        const RuntimeWorkerConfig& config,
-        const std::string& host_name,
-        nlohmann::json& payload)
-    {
-        ItemGiveContext context;
-        nlohmann::json context_payload;
-        if (!ResolveItemGiveContext(config, context, context_payload))
-        {
-            payload["native_prompt_context"] = context_payload;
-            payload["native_prompt_result"] = "context_not_ready";
-            return false;
-        }
-
-        uint32_t prompt_id = 0;
-        const bool shown =
-            SafeShowNativeConfirmRaw(
-                config.GameBaseAddress,
-                context.ItemDisplayManager,
-                kNativeInvitePromptMessage,
-                &prompt_id);
-
-        payload["native_prompt_context"] = context_payload;
-        payload["native_prompt_method"] =
-            "FeSceneSpeciallyTreated_confirm_0x4FE1C0";
-        payload["native_prompt_message"] = "Usar Saponita Desbloqueada?";
-        payload["native_prompt_host_name"] = host_name;
-        payload["native_prompt_id"] = prompt_id;
-        payload["native_prompt_result"] = shown ? "shown" : "show_failed";
-        return shown;
     }
 
     bool BuildMissingBonfireItemBatch(
@@ -1960,6 +1843,7 @@ namespace
 
         const uint64_t now_tick = GetTickCount64();
         bool suppressed_duplicate = false;
+        bool suppressed_session_active = false;
         {
             std::lock_guard<std::mutex> guard(s_runtime_state_mutex);
             const std::string command =
@@ -1969,7 +1853,21 @@ namespace
                 now_tick >= s_last_runtime_action_tick &&
                 now_tick - s_last_runtime_action_tick < kRuntimeItemActionDebounceMs;
 
-            if (!suppressed_duplicate)
+            if (!suppressed_duplicate &&
+                command == "session.create" &&
+                s_session_open &&
+                s_session_mode != "solo")
+            {
+                suppressed_session_active = true;
+                payload["action"] = "session_create_ignored_already_active";
+                payload["active_session_mode"] = s_session_mode;
+                payload["active_session_request"] = s_last_session_request;
+                nlohmann::json state =
+                    BuildRuntimeStatePayloadNoLock(config);
+                payload["state"] = state;
+                WriteRuntimeStateSnapshot(config, state);
+            }
+            else if (!suppressed_duplicate)
             {
                 s_last_runtime_action_item_id = item.ItemId;
                 s_last_runtime_action_tick = now_tick;
@@ -2083,6 +1981,15 @@ namespace
         {
             payload["suppressed"] = true;
             payload["reason"] = "duplicate item-use event inside debounce window";
+            AppendRuntimeEvent(config, "bonfire.custom_item_action_suppressed", payload);
+            return;
+        }
+
+        if (suppressed_session_active)
+        {
+            payload["suppressed"] = true;
+            payload["reason"] =
+                "Saponita Desbloqueada is already active for this runtime session";
             AppendRuntimeEvent(config, "bonfire.custom_item_action_suppressed", payload);
             return;
         }
@@ -2884,16 +2791,8 @@ namespace
             {
                 AppendRuntimeEvent(
                     config,
-                    "bonfire.custom_item_use",
+                    "bonfire.custom_item_action_candidate",
                     payload);
-                HandleBonfireRuntimeItemUse(
-                    config,
-                    *runtime_item,
-                    1,
-                    1,
-                    "inventory_selected_category_0x1B19D0",
-                    -1,
-                    result);
             }
         }
 
@@ -3030,7 +2929,8 @@ namespace
     void LogItemUseValidation(
         int32_t item_id,
         bool native_validation_result,
-        bool forwarded_validation_result)
+        bool forwarded_validation_result,
+        bool blocked_by_active_session)
     {
         const LONG event_index =
             InterlockedIncrement(&s_item_use_validation_event_count);
@@ -3066,6 +2966,7 @@ namespace
         payload["validation_result"] = forwarded_validation_result;
         payload["bonfire_validation_override"] =
             forwarded_validation_result != native_validation_result;
+        payload["blocked_by_active_session"] = blocked_by_active_session;
         payload["known_online_item"] = known_online_item;
         payload["bonfire_runtime_item"] = runtime_item != nullptr;
         payload["placeholder_belongs_to_runtime_item"] =
@@ -3099,25 +3000,18 @@ namespace
             return;
         }
 
-        AppendRuntimeEvent(config, "bonfire.custom_item_use", payload);
+        AppendRuntimeEvent(config, "bonfire.custom_item_validation", payload);
         if (!forwarded_validation_result)
         {
-            payload["reason"] = "native validation returned false";
+            payload["reason"] =
+                blocked_by_active_session ?
+                    "Bonfire session already active" :
+                    "native validation returned false";
             AppendRuntimeEvent(
                 config,
                 "bonfire.custom_item_action_skipped",
                 payload);
-            return;
         }
-
-        HandleBonfireRuntimeItemUse(
-            config,
-            *runtime_item,
-            1,
-            1,
-            "item_use_validation_0x2D3B20",
-            -1,
-            forwarded_validation_result ? 1 : 0);
     }
 
     bool __fastcall ItemUseValidationHook(int32_t item_id)
@@ -3140,9 +3034,34 @@ namespace
             FindBonfireRuntimeItemByNativeUseItem(item_id);
         const bool bonfire_runtime_item =
             runtime_item != nullptr || placeholder_runtime_item != nullptr;
-        const bool forwarded_result = native_result || bonfire_runtime_item;
+        const RuntimeGrantItem* effective_runtime_item =
+            runtime_item != nullptr ? runtime_item : placeholder_runtime_item;
+        bool blocked_by_active_session = false;
+        if (effective_runtime_item != nullptr &&
+            effective_runtime_item->ActionCommand != nullptr &&
+            strcmp(effective_runtime_item->ActionCommand, "session.create") == 0)
+        {
+            const uint64_t now_tick = GetTickCount64();
+            std::lock_guard<std::mutex> guard(s_runtime_state_mutex);
+            const bool same_use_is_still_unwinding =
+                s_last_runtime_action_item_id == effective_runtime_item->ItemId &&
+                now_tick >= s_last_runtime_action_tick &&
+                now_tick - s_last_runtime_action_tick <
+                    kRuntimeItemVanillaSuppressWindowMs;
+            blocked_by_active_session =
+                s_session_open &&
+                s_session_mode != "solo" &&
+                !same_use_is_still_unwinding;
+        }
+        const bool forwarded_result =
+            (native_result || bonfire_runtime_item) &&
+            !blocked_by_active_session;
 
-        LogItemUseValidation(item_id, native_result, forwarded_result);
+        LogItemUseValidation(
+            item_id,
+            native_result,
+            forwarded_result,
+            blocked_by_active_session);
         return forwarded_result;
     }
 
@@ -5084,7 +5003,7 @@ namespace
         return payload;
     }
 
-    void SetPendingLanInviteFromPayload(
+    void AutoAcceptLanInviteFromPayload(
         const RuntimeWorkerConfig& config,
         const nlohmann::json& parsed,
         nlohmann::json& payload)
@@ -5118,70 +5037,70 @@ namespace
             return;
         }
 
+        bool already_active = false;
         nlohmann::json state_snapshot;
         {
             std::lock_guard<std::mutex> guard(s_runtime_state_mutex);
-            s_pending_lan_invite = true;
-            s_pending_lan_invite_session_id = session_id;
-            s_pending_lan_invite_host_name = host_name;
-            s_pending_lan_invite_server_id = server_id;
-            s_pending_lan_invite_hostname = hostname;
-            s_pending_lan_invite_private_hostname = private_hostname;
-            s_pending_lan_invite_login_port = login_port;
-            s_pending_lan_invite_last_input_tick = 0;
-            s_pending_lan_invite_enter_was_down = false;
-            s_pending_lan_invite_escape_was_down = false;
-            s_pending_lan_invite_native_prompt_visible = false;
-            s_pending_lan_invite_native_prompt_id = 0;
-            s_last_runtime_command = "invite.received";
-            s_runtime_stage = "invite_prompt_pending";
-            s_online_intent = "cooperate_direct_invite";
+            already_active =
+                s_session_open &&
+                s_session_mode != "solo";
+            if (!already_active)
+            {
+                s_pending_lan_invite = false;
+                s_pending_lan_invite_session_id.clear();
+                s_pending_lan_invite_host_name.clear();
+                s_pending_lan_invite_server_id.clear();
+                s_pending_lan_invite_hostname.clear();
+                s_pending_lan_invite_private_hostname.clear();
+                s_pending_lan_invite_login_port = 0;
+                s_pending_lan_invite_last_input_tick = 0;
+                s_last_runtime_command = "invite.accepted";
+                s_runtime_stage = "saponita_auto_accept";
+                s_online_intent = "cooperate_join";
+                s_session_open = true;
+                s_session_mode = "guest";
+                s_last_session_request = "direct_invite";
+            }
             state_snapshot = BuildRuntimeStatePayloadNoLock(config);
         }
 
         DS2_RenderHook_ClearInvitePrompt();
-        const bool native_prompt_shown =
-            TryShowNativeInvitePrompt(config, host_name, payload);
-        {
-            std::lock_guard<std::mutex> guard(s_runtime_state_mutex);
-            s_pending_lan_invite_native_prompt_visible =
-                native_prompt_shown;
-            s_pending_lan_invite_native_prompt_id =
-                payload.value("native_prompt_id", 0u);
-            s_runtime_stage =
-                native_prompt_shown ?
-                    "native_invite_prompt_visible" :
-                    "invite_prompt_visible";
-        }
-
-        char body[128] = {};
-        if (!native_prompt_shown)
-        {
-            snprintf(
-                body,
-                sizeof(body),
-                "SAPONITA DE %.64s",
-                host_name.empty() ? "BONFIRE PEER" : host_name.c_str());
-            DS2_RenderHook_SetInvitePrompt(
-                "INVITACION BONFIRE",
-                body,
-                "ENTER ACEPTAR    ESC CANCELAR");
-        }
-        {
-            std::lock_guard<std::mutex> guard(s_runtime_state_mutex);
-            state_snapshot = BuildRuntimeStatePayloadNoLock(config);
-        }
-
-        payload["action"] = "invite_prompt_visible";
+        payload["action"] =
+            already_active ? "invite_ignored_already_active" : "invite_auto_accepted";
         payload["invite_session_id"] = session_id;
         payload["invite_host_name"] = host_name;
         payload["server_id"] = server_id;
         payload["hostname"] = hostname;
         payload["private_hostname"] = private_hostname;
         payload["login_port"] = login_port;
-        payload["in_game_prompt"] = true;
-        payload["native_game_prompt"] = native_prompt_shown;
-        payload["fallback_render_prompt"] = !native_prompt_shown;
+        payload["in_game_prompt"] = false;
+        payload["native_game_prompt"] = false;
+        payload["fallback_render_prompt"] = false;
+        payload["auto_accepted"] = !already_active;
+        payload["prompt_removed"] = true;
+        if (already_active)
+        {
+            payload["reason"] = "runtime already has an active Bonfire session";
+            WriteRuntimeStateSnapshot(config, state_snapshot);
+            return;
+        }
+
+        nlohmann::json action;
+        action["invite_session_id"] = session_id;
+        action["invite_host_name"] = host_name;
+        action["server_id"] = server_id;
+        action["hostname"] = hostname;
+        action["private_hostname"] = private_hostname;
+        action["login_port"] = login_port;
+        action["in_game_prompt"] = false;
+        action["native_game_prompt"] = false;
+        action["fallback_render_prompt"] = false;
+        action["decision_key"] = "auto";
+        action["accepted"] = true;
+        action["auto_accepted"] = true;
+        action["prompt_removed"] = true;
+        AppendRuntimePromptAction(config, "invite.accepted", action);
+        AppendRuntimeEvent(config, "invite.accepted", action);
         WriteRuntimeStateSnapshot(config, state_snapshot);
     }
 
@@ -5196,114 +5115,7 @@ namespace
         s_pending_lan_invite_private_hostname.clear();
         s_pending_lan_invite_login_port = 0;
         s_pending_lan_invite_last_input_tick = 0;
-        s_pending_lan_invite_enter_was_down = false;
-        s_pending_lan_invite_escape_was_down = false;
-        s_pending_lan_invite_native_prompt_visible = false;
-        s_pending_lan_invite_native_prompt_id = 0;
         DS2_RenderHook_ClearInvitePrompt();
-    }
-
-    void PollPendingLanInviteInput(const RuntimeWorkerConfig& config)
-    {
-        bool pending = false;
-        std::string session_id;
-        std::string host_name;
-        std::string server_id;
-        std::string hostname;
-        std::string private_hostname;
-        int32_t login_port = 0;
-        bool native_prompt_visible = false;
-        {
-            std::lock_guard<std::mutex> guard(s_runtime_state_mutex);
-            pending = s_pending_lan_invite;
-            if (!pending)
-            {
-                return;
-            }
-            session_id = s_pending_lan_invite_session_id;
-            host_name = s_pending_lan_invite_host_name;
-            server_id = s_pending_lan_invite_server_id;
-            hostname = s_pending_lan_invite_hostname;
-            private_hostname = s_pending_lan_invite_private_hostname;
-            login_port = s_pending_lan_invite_login_port;
-            native_prompt_visible =
-                s_pending_lan_invite_native_prompt_visible;
-        }
-
-        const SHORT enter = GetAsyncKeyState(VK_RETURN);
-        const SHORT escape = GetAsyncKeyState(VK_ESCAPE);
-        const bool enter_down = (enter & 0x8000) != 0;
-        const bool escape_down = (escape & 0x8000) != 0;
-        bool enter_pressed = (enter & 0x0001) != 0;
-        bool escape_pressed = (escape & 0x0001) != 0;
-        {
-            std::lock_guard<std::mutex> guard(s_runtime_state_mutex);
-            enter_pressed =
-                enter_pressed ||
-                (enter_down && !s_pending_lan_invite_enter_was_down);
-            escape_pressed =
-                escape_pressed ||
-                (escape_down && !s_pending_lan_invite_escape_was_down);
-            s_pending_lan_invite_enter_was_down = enter_down;
-            s_pending_lan_invite_escape_was_down = escape_down;
-        }
-        if (!enter_pressed && !escape_pressed)
-        {
-            return;
-        }
-
-        const bool accepted = enter_pressed;
-        const uint64_t now_tick = GetTickCount64();
-        nlohmann::json state_snapshot;
-        {
-            std::lock_guard<std::mutex> guard(s_runtime_state_mutex);
-            if (s_pending_lan_invite_last_input_tick != 0 &&
-                now_tick >= s_pending_lan_invite_last_input_tick &&
-                now_tick - s_pending_lan_invite_last_input_tick < 750)
-            {
-                return;
-            }
-            s_pending_lan_invite_last_input_tick = now_tick;
-            s_pending_lan_invite = false;
-            s_pending_lan_invite_enter_was_down = false;
-            s_pending_lan_invite_escape_was_down = false;
-            s_pending_lan_invite_native_prompt_visible = false;
-            s_pending_lan_invite_native_prompt_id = 0;
-            s_last_runtime_command =
-                accepted ? "invite.accepted" : "invite.dismissed";
-            s_runtime_stage =
-                accepted ? "invite_accepted_in_game" : "invite_dismissed_in_game";
-            s_online_intent =
-                accepted ? "cooperate_join" : "cooperate_invite_dismiss";
-            state_snapshot = BuildRuntimeStatePayloadNoLock(config);
-        }
-        DS2_RenderHook_ClearInvitePrompt();
-        {
-            std::lock_guard<std::mutex> guard(s_runtime_state_mutex);
-            state_snapshot = BuildRuntimeStatePayloadNoLock(config);
-        }
-
-        nlohmann::json action;
-        action["invite_session_id"] = session_id;
-        action["invite_host_name"] = host_name;
-        action["server_id"] = server_id;
-        action["hostname"] = hostname;
-        action["private_hostname"] = private_hostname;
-        action["login_port"] = login_port;
-        action["in_game_prompt"] = true;
-        action["native_game_prompt"] = native_prompt_visible;
-        action["fallback_render_prompt"] = !native_prompt_visible;
-        action["decision_key"] = accepted ? "enter" : "escape";
-        action["accepted"] = accepted;
-        AppendRuntimePromptAction(
-            config,
-            accepted ? "invite.accepted" : "invite.dismissed",
-            action);
-        AppendRuntimeEvent(
-            config,
-            accepted ? "invite.accepted" : "invite.dismissed",
-            action);
-        WriteRuntimeStateSnapshot(config, state_snapshot);
     }
 
     bool IsKnownRuntimeCommand(const std::string& command)
@@ -5361,18 +5173,28 @@ namespace
             }
             else if (command == "session.create")
             {
-                s_session_open = true;
-                s_session_mode = "host";
-                s_last_session_request = "create";
-                payload["action"] = "session_create_requested";
+                if (s_session_open && s_session_mode != "solo")
+                {
+                    payload["applied"] = false;
+                    payload["action"] = "session_create_ignored_already_active";
+                    payload["active_session_mode"] = s_session_mode;
+                    payload["active_session_request"] = s_last_session_request;
+                }
+                else
+                {
+                    s_session_open = true;
+                    s_session_mode = "host";
+                    s_last_session_request = "create";
+                    payload["action"] = "session_create_requested";
 
                 // v2.9.16 Phase 4d — also from command bus path,
                 // trigger the engine spawn.
-                payload["saponita_desbloqueada_invite"] = true;
-                payload["saponita_queue_write_enabled"] = false;
-                payload["saponita_phantom_count_pre"] =
-                    DS2_SaponitaPhantomCount_Read();
-                payload["saponita_timer_pre"] = DS2_SaponitaTimer_Read();
+                    payload["saponita_desbloqueada_invite"] = true;
+                    payload["saponita_queue_write_enabled"] = false;
+                    payload["saponita_phantom_count_pre"] =
+                        DS2_SaponitaPhantomCount_Read();
+                    payload["saponita_timer_pre"] = DS2_SaponitaTimer_Read();
+                }
             }
             else if (command == "session.join")
             {
@@ -5491,8 +5313,8 @@ namespace
 
             if (command == "invite.received")
             {
-                SetPendingLanInviteFromPayload(config, parsed, payload);
-                AppendRuntimeEvent(config, "invite.received", payload);
+                AutoAcceptLanInviteFromPayload(config, parsed, payload);
+                AppendRuntimeEvent(config, "invite.auto_accept_compat", payload);
                 return;
             }
 
@@ -5519,15 +5341,16 @@ namespace
                     s_last_runtime_command = "invite.relaunching";
                     s_runtime_stage = "invite_relaunching_to_host";
                     s_online_intent = "cooperate_join_relaunch";
-                    s_pending_lan_invite_native_prompt_visible = false;
-                    s_pending_lan_invite_native_prompt_id = 0;
+                    s_session_open = true;
+                    s_session_mode = "guest";
+                    s_last_session_request = "direct_invite";
                     WriteRuntimeStateSnapshot(
                         config,
                         BuildRuntimeStatePayloadNoLock(config));
                 }
                 payload["action"] = "invite_relaunching_to_host";
                 payload["host_name"] = host_name;
-                payload["native_prompt"] = "closed_before_relaunch";
+                payload["prompt_removed"] = true;
                 AppendRuntimeEvent(config, "invite.relaunching", payload);
                 return;
             }
@@ -5859,7 +5682,6 @@ namespace
         while (true)
         {
             command_offset = PollCommandInbox(*config, command_offset);
-            PollPendingLanInviteInput(*config);
 
             // v2.9.16 Phase 4d — Saponita Desbloqueada timer keep-alive.
             //
