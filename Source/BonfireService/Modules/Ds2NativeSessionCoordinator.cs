@@ -257,6 +257,27 @@ public static class Ds2NativeSessionCoordinator
                 // corriendo en paralelo como fallback.
                 var hostDirectSummon = TryDirectServerSummonAsHost(serverEffect);
                 serverEffect["server_direct_summon_host_initiated"] = hostDirectSummon;
+
+                // v2.9.29 FIX: cuando el direct summon tiene exito, parar
+                // el LAN beacon broadcast inmediatamente. Sin esto, el
+                // peer (que ya recibio su PushRequestSummonSign por TCP
+                // existente y empezo a transicionar a nuestro mundo)
+                // ALSO ve el beacon LAN, auto-acepta el invite, y
+                // ScheduleDirectInviteRelaunch mata su DS2 ~7 segundos
+                // despues del push. Observado: 22:22:30 push enviado ok,
+                // 22:22:37 Wally desconectado por relaunch parallel.
+                if (hostDirectSummon)
+                {
+                    try
+                    {
+                        Ds2LanBeacon.StopHostBroadcast();
+                        serverEffect["lan_beacon_suppressed_after_direct_summon"] = true;
+                    }
+                    catch (Exception beaconStopEx)
+                    {
+                        serverEffect["lan_beacon_stop_error"] = beaconStopEx.Message;
+                    }
+                }
                 break;
 
             case "session.join":
