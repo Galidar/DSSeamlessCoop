@@ -248,7 +248,8 @@ namespace
     bool s_pending_lan_invite_escape_was_down = false;
     bool s_pending_lan_invite_native_prompt_visible = false;
     uint32_t s_pending_lan_invite_native_prompt_id = 0;
-    char s_native_invite_prompt_message[160] = {};
+    constexpr wchar_t kNativeInvitePromptMessage[] =
+        L"Usar Saponita Desbloqueada?";
 
     struct RuntimeWorkerConfig
     {
@@ -311,15 +312,15 @@ namespace
     using ItemPopupDisplayFn = void(__fastcall*)(void* item_display_manager, void* display_stack);
     using FrontendConfirmDisplayFn =
         uint32_t(__fastcall*)(void* item_display_manager,
-            const char* message,
-            const char* yes_label,
-            const char* no_label,
+            const wchar_t* message,
+            const wchar_t* yes_label,
+            const wchar_t* no_label,
             uint8_t unk4,
             uint8_t unk5,
             uint8_t unk6,
             uint8_t unk7);
     using FrontendCommonTextLookupFn =
-        const char*(__fastcall*)(int32_t table_id, int32_t text_id);
+        const wchar_t*(__fastcall*)(int32_t table_id, int32_t text_id);
 
     RestAtBonfireFn s_original_rest_at_bonfire = nullptr;
     // Track C Phase 2B observer — trampolined-to original after
@@ -1692,7 +1693,7 @@ namespace
     bool SafeShowNativeConfirmRaw(
         uintptr_t game_base,
         void* item_display_manager,
-        const char* message,
+        const wchar_t* message,
         uint32_t* out_prompt_id)
     {
         if (out_prompt_id != nullptr)
@@ -1713,15 +1714,15 @@ namespace
                 reinterpret_cast<FrontendConfirmDisplayFn>(
                     game_base + kFrontendConfirmDisplayRva);
 
-            const char* yes_label = lookup(0, 200);
-            const char* no_label = lookup(0, 0xC9);
-            if (yes_label == nullptr || *yes_label == '\0')
+            const wchar_t* yes_label = lookup(0, 200);
+            const wchar_t* no_label = lookup(0, 0xC9);
+            if (yes_label == nullptr || *yes_label == L'\0')
             {
-                yes_label = "SI";
+                yes_label = L"SI";
             }
-            if (no_label == nullptr || *no_label == '\0')
+            if (no_label == nullptr || *no_label == L'\0')
             {
-                no_label = "NO";
+                no_label = L"NO";
             }
 
             const uint32_t prompt_id =
@@ -1764,26 +1765,18 @@ namespace
             return false;
         }
 
-        // This is the same DS2 frontend family used by the native
-        // "Use <item>?" prompt. Keep the text short so it fits the
-        // game's own confirmation band in every language/layout.
-        snprintf(
-            s_native_invite_prompt_message,
-            sizeof(s_native_invite_prompt_message),
-            "Usar Saponita Desbloqueada?");
-
         uint32_t prompt_id = 0;
         const bool shown =
             SafeShowNativeConfirmRaw(
                 config.GameBaseAddress,
                 context.ItemDisplayManager,
-                s_native_invite_prompt_message,
+                kNativeInvitePromptMessage,
                 &prompt_id);
 
         payload["native_prompt_context"] = context_payload;
         payload["native_prompt_method"] =
             "FeSceneSpeciallyTreated_confirm_0x4FE1C0";
-        payload["native_prompt_message"] = s_native_invite_prompt_message;
+        payload["native_prompt_message"] = "Usar Saponita Desbloqueada?";
         payload["native_prompt_host_name"] = host_name;
         payload["native_prompt_id"] = prompt_id;
         payload["native_prompt_result"] = shown ? "shown" : "show_failed";
