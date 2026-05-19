@@ -233,19 +233,50 @@ void DS2_SignManager::ProcessAdminSummonInbox()
     result["summoner_player_id"] = SummonerClient->GetPlayerState().GetPlayerId();
     result["target_player_id"]   = TargetClient->GetPlayerState().GetPlayerId();
 
-    // Pick a sign for player_struct bytes. Prefer target's own sign so
-    // the message looks like a normal vanilla summon to that client.
+    // v2.9.30 — Pick a sign for player_struct bytes. MUST come from target
+    // because the peer client validates sign_id against its OWN local
+    // sign cache. Using a sign placed by anyone else causes the peer's
+    // vanilla DS2 client to reject the push and close the connection
+    // (~7s after receipt, observed in v2.9.27-29 tests).
+    //
+    // The summoner-fallback used in v2.9.27-29 was the actual cause of
+    // peer disconnect: when target had no fresh sign in his current
+    // session, code fell back to summoner's sign, peer received a push
+    // for a sign_id he didn't know → disconnect.
+    //
+    // Now: if target has no signs, abort with explicit error so
+    // BonfireService can show the operator a clear message ("peer needs
+    // to plant a fresh saponita peq first").
+    //
+    // Also: log ALL candidate signs for diagnostic.
+    nlohmann::json target_signs_dbg = nlohmann::json::array();
+    for (const auto& s : TargetClient->ActiveSummonSigns)
+    {
+        nlohmann::json e;
+        e["sign_id"] = s->SignId;
+        e["online_area_id"] = s->OnlineAreaId;
+        e["cell_id"] = s->CellId;
+        e["player_id"] = s->PlayerId;
+        e["player_struct_bytes"] = static_cast<int64_t>(s->PlayerStruct.size());
+        e["being_summoned_by"] = s->BeingSummonedByPlayerId;
+        target_signs_dbg.push_back(std::move(e));
+    }
+    result["target_active_signs"] = std::move(target_signs_dbg);
+
     std::shared_ptr<SummonSign> SourceSign;
     if (!TargetClient->ActiveSummonSigns.empty())
     {
         SourceSign = TargetClient->ActiveSummonSigns.back();
     }
-    else if (!SummonerClient->ActiveSummonSigns.empty())
+    else
     {
-        // Fallback: use summoner's own sign player_struct
-        // (peer will still get the push but the displayed summoner
-        // model may look like the summoner's last placed-sign avatar).
-        SourceSign = SummonerClient->ActiveSummonSigns.back();
+        result["error"] =
+            "target has no active signs — peer must plant a saponita "
+            "peq vanilla in current session BEFORE host triggers Saponita "
+            "Desbloqueada (cache the player_struct + sign_id in peer's "
+            "local client). NO summoner fallback (causes peer disconnect).";
+        WriteTextToFile(kOutboxPath, result.dump());
+        return;
     }
 
     DS2_Frpg2RequestMessage::PushRequestSummonSign PushMessage;
