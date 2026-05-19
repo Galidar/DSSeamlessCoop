@@ -64,6 +64,109 @@ secuencia hace una década y nuestro DS3OS-derived server la soporta server-side
 
 ---
 
+## 🔑 BREAKTHROUGH 2026-05-19 — protocolo vanilla mapeado (Etapa B COMPLETA)
+
+Durante la sesión de test del hermano se localizó en el source del Server el
+**mecanismo exacto** que vanilla DS2 usa para convocar a un peer sin reiniciarle
+el cliente. **Esto es el secreto del paso 7.** Documentado a partir de:
+
+- `Source/Server.DarkSouls2/Server/GameService/GameManagers/Signs/DS2_SignManager.cpp`
+  (líneas 226-296 = create sign, 358-432 = summon sign)
+- `Protobuf/DarkSouls2/DS2_Frpg2RequestMessage.proto`
+  (messages `RequestCreateSign`, `RequestSummonSign`, `PushRequestSummonSign`)
+
+### Flujo vanilla server-side completo
+
+```
+Peer (B) usa saponita peq vanilla:
+  B → Server: RequestCreateSign {
+                online_area_id: <B's area>,
+                cell_id: <B's cell>,
+                player_struct: <B's char data bytes>,
+                sign_type: SignType_WhiteSoapstone (o SmallWhiteSoapstone)
+              }
+  Server's Handle_RequestCreateSign:
+    1. Valida player_struct con DS2_NRSSRSanitizer (CVE-2022-24126 sanity)
+    2. Crea SummonSign con SignId = NextSignId++
+    3. LiveCache.Add(LocationId, SignId, Sign)
+    4. Client->ActiveSummonSigns.push_back(Sign)
+    5. Responde: RequestCreateSignResponse { sign_id: <new id> }
+
+Host (A) ve sign en su mundo + lo activa:
+  A → Server: RequestSummonSign {
+                online_area_id: <A's area>,
+                cell_id: <A's cell>,
+                sign_info.sign_id: <B's sign id>,
+                player_struct: <A's char data bytes>
+              }
+  Server's Handle_RequestSummonSign:
+    1. Valida con DS2_NRSSRSanitizer
+    2. LiveCache.Find(LocationId, sign_id) → encuentra Sign
+    3. Verifica Sign->BeingSummonedByPlayerId == 0 (no doble-summon)
+    4. ★ Construye PushRequestSummonSign:
+       PushMessage.push_message_id = PushID_PushRequestSummonSign
+       PushMessage.player_id       = A's player ID  (summoner)
+       PushMessage.player_steam_id = A's steam ID
+       PushMessage.sign_id         = Sign->SignId
+       PushMessage.player_struct   = A's player data
+    5. OriginClient->MessageStream->Send(&PushMessage)
+       ← envía a B (el dueño del sign)
+    6. Sign->BeingSummonedByPlayerId = A's player ID
+    7. Responde a A: RequestSummonSignResponse {} (vacío, ack)
+
+B's DS2 recibe PushRequestSummonSign (push):
+  → Pantalla de carga "te están convocando" aparece (engine vanilla)
+  → DS2 transiciona a B en el mundo de A como phantom REAL
+  → B aparece como personaje con su mesh + equip (no cubo)
+```
+
+### Lo que esto significa para Saponita Desbloqueada
+
+**El paso 7 (phantom spawn engine-real) se reduce a una sola cosa:** que el
+server envíe un `PushRequestSummonSign` al peer con los datos correctos. NO
+necesitamos modificar el cliente DS2 ni inventar protocolo nuevo — el engine
+vanilla YA sabe responder a ese mensaje y spawnear al peer in-place.
+
+**El paso 8 (DS2 del peer estable) se resuelve automáticamente** porque
+PushRequestSummonSign usa la conexión TCP existente entre peer y server, sin
+relaunch ni reconexión. El peer no necesita cerrar/abrir DS2.
+
+### Schema relevante (DS2 Frpg2RequestMessage proto)
+
+```protobuf
+message PushRequestSummonSign {
+    required PushMessageId push_message_id = 1;
+    required int64  player_id       = 2;  // summoner's player ID
+    required int64  sign_id         = 3;  // referenced sign
+    required bytes  player_struct   = 4;  // summoner's char data
+    required string player_steam_id = 5;
+}
+
+message RequestCreateSign {  // peer envia esto al plantar
+    required uint32 online_area_id      = 1;
+    required MatchingParameter matching_parameter = 2;
+    required bytes  player_struct       = 3;  // peer's char data
+    required uint32 cell_id             = 4;
+    required uint32 sign_type           = 5;  // 0 white, 1 red, ...
+}
+```
+
+**`player_struct` (bytes) es opaco al server** — DS2 client populates it con
+el char data que los otros players verán. Para sintetizar un summon necesitamos
+una de estas fuentes de `player_struct`:
+
+| Fuente | Disponibilidad | Realismo |
+|---|---|---|
+| **Sign previo plantado por peer** | Si peer plantó saponita peq en sesión, está en `Client->ActiveSummonSigns` | 100% (es el formato que peer usaria de todos modos) |
+| **PLAYER_STATUS_JSON cached** | Server ya tiene esto vía updates periódicos | Necesita reconstruir el binary format |
+| **Pre-canned blob** | Hardcoded "default char" struct | Bajo (cliente puede rechazar) |
+
+**Recomendado: requerir que el peer plante saponita peq al inicio de sesión**
+para tener un `Sign->PlayerStruct` válido en cache. La Saponita Desbloqueada
+reutiliza esa misma data cuando se dispara el summon.
+
+---
+
 ## Plan de research (orden recomendado)
 
 ### Etapa A — Reproducir saponita pequeña vanilla con full instrumentación
