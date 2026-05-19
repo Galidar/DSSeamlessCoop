@@ -1317,11 +1317,39 @@ float4 main(PSIn input) : SV_Target
         }
     }
 
+    float BitmapTextWidth(const char* text, float scale)
+    {
+        if (text == nullptr) return 0.0f;
+        float width = 0.0f;
+        for (const char* p = text; *p != '\0'; ++p)
+        {
+            width += (*p == ' ') ? 4.0f * scale : 6.0f * scale;
+        }
+        return width;
+    }
+
+    void DrawBitmapTextCentered(
+        const D3D11_VIEWPORT& vp,
+        const char* text,
+        float center_x,
+        float y,
+        float scale,
+        float r,
+        float g,
+        float b)
+    {
+        const float x = center_x - BitmapTextWidth(text, scale) * 0.5f;
+        DrawBitmapText(vp, text, x, y, scale, r, g, b);
+    }
+
     void DrawInvitePrompt(const D3D11_VIEWPORT& vp)
     {
         if (!DS2_RenderHook_IsInvitePromptVisible())
             return;
 
+        // Temporary fallback only. The intended Saponita invite UX is a real
+        // DS2 frontend confirm window; keep this restrained until that path is
+        // wired instead of exposing the old debug banner.
         char title[96] = {};
         char body[128] = {};
         char hint[96] = {};
@@ -1332,21 +1360,48 @@ float4 main(PSIn input) : SV_Target
         ReleaseSRWLockShared(&s_invite_prompt_lock);
 
         const float width =
-            std::min(900.0f, std::max(520.0f, vp.Width - 160.0f));
-        const float height = 168.0f;
+            std::min(760.0f, std::max(560.0f, vp.Width - 240.0f));
+        const float height = 178.0f;
         const float x = (vp.Width - width) * 0.5f;
-        const float y = std::max(60.0f, vp.Height * 0.13f);
-        const float gr = 0.80f, gg = 0.60f, gb = 0.22f;
+        const float y = std::max(120.0f, vp.Height * 0.36f);
+        const float center_x = x + width * 0.5f;
+        const float gr = 0.45f, gg = 0.42f, gb = 0.39f;
+        const float orange_r = 0.95f, orange_g = 0.48f, orange_b = 0.20f;
+        const float blue_r = 0.18f, blue_g = 0.36f, blue_b = 0.46f;
 
-        DrawScreenRect(vp, x, y, width, height, 0.02f, 0.018f, 0.014f, 1.0f);
-        DrawScreenRect(vp, x, y, width, 3.0f, gr, gg, gb, 1.0f);
-        DrawScreenRect(vp, x, y + height - 3.0f, width, 3.0f, gr, gg, gb, 1.0f);
-        DrawScreenRect(vp, x, y, 3.0f, height, gr, gg, gb, 1.0f);
-        DrawScreenRect(vp, x + width - 3.0f, y, 3.0f, height, gr, gg, gb, 1.0f);
+        DrawScreenRect(vp, x, y, width, height, 0.025f, 0.023f, 0.021f, 0.92f);
+        DrawScreenRect(vp, x + 8.0f, y + 8.0f, width - 16.0f, height - 16.0f,
+            0.045f, 0.043f, 0.040f, 0.96f);
+        DrawScreenRect(vp, x, y, width, 2.0f, gr, gg, gb, 1.0f);
+        DrawScreenRect(vp, x, y + height - 2.0f, width, 2.0f, gr, gg, gb, 1.0f);
+        DrawScreenRect(vp, x, y, 2.0f, height, gr, gg, gb, 1.0f);
+        DrawScreenRect(vp, x + width - 2.0f, y, 2.0f, height, gr, gg, gb, 1.0f);
+        DrawScreenRect(vp, x + 36.0f, y + 82.0f, width - 72.0f, 1.0f,
+            0.35f, 0.29f, 0.22f, 0.8f);
 
-        DrawBitmapText(vp, title, x + 28.0f, y + 26.0f, 4.0f, 0.95f, 0.86f, 0.62f);
-        DrawBitmapText(vp, body, x + 28.0f, y + 74.0f, 3.0f, 0.90f, 0.90f, 0.86f);
-        DrawBitmapText(vp, hint, x + 28.0f, y + 116.0f, 3.0f, gr, gg, gb);
+        DrawBitmapTextCentered(
+            vp, title, center_x, y + 34.0f, 3.0f, 0.88f, 0.86f, 0.78f);
+        DrawBitmapTextCentered(
+            vp, body, center_x, y + 70.0f, 2.0f, 0.84f, 0.82f, 0.76f);
+
+        const float button_w = 168.0f;
+        const float button_h = 38.0f;
+        const float button_y = y + 116.0f;
+        const float yes_x = center_x - button_w - 22.0f;
+        const float no_x = center_x + 22.0f;
+
+        DrawScreenRect(vp, yes_x, button_y, button_w, button_h,
+            blue_r, blue_g, blue_b, 0.92f);
+        DrawScreenRect(vp, no_x, button_y, button_w, button_h,
+            orange_r, orange_g, orange_b, 0.92f);
+        DrawScreenRect(vp, yes_x, button_y, button_w, 2.0f, gr, gg, gb, 1.0f);
+        DrawScreenRect(vp, no_x, button_y, button_w, 2.0f, gr, gg, gb, 1.0f);
+        DrawBitmapTextCentered(
+            vp, "SI ENTER", yes_x + button_w * 0.5f, button_y + 11.0f,
+            2.0f, 0.92f, 0.90f, 0.84f);
+        DrawBitmapTextCentered(
+            vp, "NO ESC", no_x + button_w * 0.5f, button_y + 11.0f,
+            2.0f, 0.92f, 0.90f, 0.84f);
     }
 
     // Draw the screen-space overlay quad. Called from HookedPresent

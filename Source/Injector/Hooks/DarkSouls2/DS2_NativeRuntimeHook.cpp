@@ -23,6 +23,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdint>
+#include <cstring>
 #include <ctime>
 #include <filesystem>
 #include <fstream>
@@ -158,6 +159,8 @@ namespace
     constexpr uintptr_t kItemGiveRva = 0x1AC3D0;
     constexpr uintptr_t kItemStructConvertRva = 0x05D950;
     constexpr uintptr_t kItemPopupDisplayRva = 0x501080;
+    constexpr uintptr_t kFrontendConfirmDisplayRva = 0x4FE1C0;
+    constexpr uintptr_t kFrontendCommonTextLookupRva = 0x503620;
     constexpr uintptr_t kInventoryFirstHopOffset = 0xA8;
     constexpr uintptr_t kInventoryHopOffset = 0x10;
     constexpr uintptr_t kItemInventoryBagListOffset = 0x10;
@@ -241,6 +244,11 @@ namespace
     std::string s_pending_lan_invite_private_hostname;
     int32_t s_pending_lan_invite_login_port = 0;
     uint64_t s_pending_lan_invite_last_input_tick = 0;
+    bool s_pending_lan_invite_enter_was_down = false;
+    bool s_pending_lan_invite_escape_was_down = false;
+    bool s_pending_lan_invite_native_prompt_visible = false;
+    uint32_t s_pending_lan_invite_native_prompt_id = 0;
+    char s_native_invite_prompt_message[160] = {};
 
     struct RuntimeWorkerConfig
     {
@@ -301,6 +309,17 @@ namespace
     using ItemGiveFn = void(__fastcall*)(void* inventory_bag_list, void* item_spawn_list, int32_t item_count);
     using ItemStructConvertFn = void(__fastcall*)(void* display_stack, void* item_spawn_list, int32_t item_count, int32_t show_popup);
     using ItemPopupDisplayFn = void(__fastcall*)(void* item_display_manager, void* display_stack);
+    using FrontendConfirmDisplayFn =
+        uint32_t(__fastcall*)(void* item_display_manager,
+            const char* message,
+            const char* yes_label,
+            const char* no_label,
+            uint8_t unk4,
+            uint8_t unk5,
+            uint8_t unk6,
+            uint8_t unk7);
+    using FrontendCommonTextLookupFn =
+        const char*(__fastcall*)(int32_t table_id, int32_t text_id);
 
     RestAtBonfireFn s_original_rest_at_bonfire = nullptr;
     // Track C Phase 2B observer — trampolined-to original after
@@ -1552,6 +1571,10 @@ namespace
             s_pending_lan_invite_host_name;
         state["render_invite_prompt_visible"] =
             DS2_RenderHook_IsInvitePromptVisible();
+        state["native_invite_prompt_visible"] =
+            s_pending_lan_invite_native_prompt_visible;
+        state["native_invite_prompt_id"] =
+            s_pending_lan_invite_native_prompt_id;
         state["rule_preset_index"] = s_rule_preset_index;
         state["rule_preset"] = RuntimeRulePresetName(s_rule_preset_index);
         state["rules"] = RuntimeRulePayload(s_rule_preset_index);
@@ -1664,6 +1687,107 @@ namespace
         payload["item_display_manager"] = HexPointer(item_display_manager);
         payload["steps"] = steps;
         return true;
+    }
+
+    bool SafeShowNativeConfirmRaw(
+        uintptr_t game_base,
+        void* item_display_manager,
+        const char* message,
+        uint32_t* out_prompt_id)
+    {
+        if (out_prompt_id != nullptr)
+        {
+            *out_prompt_id = 0;
+        }
+        if (game_base == 0 || item_display_manager == nullptr || message == nullptr)
+        {
+            return false;
+        }
+
+        __try
+        {
+            auto lookup =
+                reinterpret_cast<FrontendCommonTextLookupFn>(
+                    game_base + kFrontendCommonTextLookupRva);
+            auto show =
+                reinterpret_cast<FrontendConfirmDisplayFn>(
+                    game_base + kFrontendConfirmDisplayRva);
+
+            const char* yes_label = lookup(0, 200);
+            const char* no_label = lookup(0, 0xC9);
+            if (yes_label == nullptr || *yes_label == '\0')
+            {
+                yes_label = "SI";
+            }
+            if (no_label == nullptr || *no_label == '\0')
+            {
+                no_label = "NO";
+            }
+
+            const uint32_t prompt_id =
+                show(
+                    item_display_manager,
+                    message,
+                    yes_label,
+                    no_label,
+                    1,
+                    0,
+                    0,
+                    1);
+            if (out_prompt_id != nullptr)
+            {
+                *out_prompt_id = prompt_id;
+            }
+            return prompt_id != 0;
+        }
+        __except (EXCEPTION_EXECUTE_HANDLER)
+        {
+            if (out_prompt_id != nullptr)
+            {
+                *out_prompt_id = 0;
+            }
+            return false;
+        }
+    }
+
+    bool TryShowNativeInvitePrompt(
+        const RuntimeWorkerConfig& config,
+        const std::string& host_name,
+        nlohmann::json& payload)
+    {
+        ItemGiveContext context;
+        nlohmann::json context_payload;
+        if (!ResolveItemGiveContext(config, context, context_payload))
+        {
+            payload["native_prompt_context"] = context_payload;
+            payload["native_prompt_result"] = "context_not_ready";
+            return false;
+        }
+
+        // This is the same DS2 frontend family used by the native
+        // "Use <item>?" prompt. Keep the text short so it fits the
+        // game's own confirmation band in every language/layout.
+        snprintf(
+            s_native_invite_prompt_message,
+            sizeof(s_native_invite_prompt_message),
+            "Usar Saponita Desbloqueada?");
+
+        uint32_t prompt_id = 0;
+        const bool shown =
+            SafeShowNativeConfirmRaw(
+                config.GameBaseAddress,
+                context.ItemDisplayManager,
+                s_native_invite_prompt_message,
+                &prompt_id);
+
+        payload["native_prompt_context"] = context_payload;
+        payload["native_prompt_method"] =
+            "FeSceneSpeciallyTreated_confirm_0x4FE1C0";
+        payload["native_prompt_message"] = s_native_invite_prompt_message;
+        payload["native_prompt_host_name"] = host_name;
+        payload["native_prompt_id"] = prompt_id;
+        payload["native_prompt_result"] = shown ? "shown" : "show_failed";
+        return shown;
     }
 
     bool BuildMissingBonfireItemBatch(
@@ -4991,6 +5115,16 @@ namespace
         const int32_t login_port =
             invite->value("login_port", 0);
 
+        if (!session_id.empty() &&
+            _stricmp(session_id.c_str(), config.SessionId.c_str()) == 0)
+        {
+            payload["action"] = "invite_ignored_self";
+            payload["invite_session_id"] = session_id;
+            payload["invite_host_name"] = host_name;
+            payload["reason"] = "received local runtime session beacon";
+            return;
+        }
+
         nlohmann::json state_snapshot;
         {
             std::lock_guard<std::mutex> guard(s_runtime_state_mutex);
@@ -5001,22 +5135,45 @@ namespace
             s_pending_lan_invite_hostname = hostname;
             s_pending_lan_invite_private_hostname = private_hostname;
             s_pending_lan_invite_login_port = login_port;
+            s_pending_lan_invite_last_input_tick = 0;
+            s_pending_lan_invite_enter_was_down = false;
+            s_pending_lan_invite_escape_was_down = false;
+            s_pending_lan_invite_native_prompt_visible = false;
+            s_pending_lan_invite_native_prompt_id = 0;
             s_last_runtime_command = "invite.received";
-            s_runtime_stage = "invite_prompt_visible";
+            s_runtime_stage = "invite_prompt_pending";
             s_online_intent = "cooperate_direct_invite";
             state_snapshot = BuildRuntimeStatePayloadNoLock(config);
         }
 
+        DS2_RenderHook_ClearInvitePrompt();
+        const bool native_prompt_shown =
+            TryShowNativeInvitePrompt(config, host_name, payload);
+        {
+            std::lock_guard<std::mutex> guard(s_runtime_state_mutex);
+            s_pending_lan_invite_native_prompt_visible =
+                native_prompt_shown;
+            s_pending_lan_invite_native_prompt_id =
+                payload.value("native_prompt_id", 0u);
+            s_runtime_stage =
+                native_prompt_shown ?
+                    "native_invite_prompt_visible" :
+                    "invite_prompt_visible";
+        }
+
         char body[128] = {};
-        snprintf(
-            body,
-            sizeof(body),
-            "SAPONITA FROM %.64s",
-            host_name.empty() ? "BONFIRE PEER" : host_name.c_str());
-        DS2_RenderHook_SetInvitePrompt(
-            "BONFIRE INVITE",
-            body,
-            "ENTER ACCEPT    ESC CANCEL");
+        if (!native_prompt_shown)
+        {
+            snprintf(
+                body,
+                sizeof(body),
+                "SAPONITA DE %.64s",
+                host_name.empty() ? "BONFIRE PEER" : host_name.c_str());
+            DS2_RenderHook_SetInvitePrompt(
+                "INVITACION BONFIRE",
+                body,
+                "ENTER ACEPTAR    ESC CANCELAR");
+        }
         {
             std::lock_guard<std::mutex> guard(s_runtime_state_mutex);
             state_snapshot = BuildRuntimeStatePayloadNoLock(config);
@@ -5030,6 +5187,8 @@ namespace
         payload["private_hostname"] = private_hostname;
         payload["login_port"] = login_port;
         payload["in_game_prompt"] = true;
+        payload["native_game_prompt"] = native_prompt_shown;
+        payload["fallback_render_prompt"] = !native_prompt_shown;
         WriteRuntimeStateSnapshot(config, state_snapshot);
     }
 
@@ -5043,6 +5202,11 @@ namespace
         s_pending_lan_invite_hostname.clear();
         s_pending_lan_invite_private_hostname.clear();
         s_pending_lan_invite_login_port = 0;
+        s_pending_lan_invite_last_input_tick = 0;
+        s_pending_lan_invite_enter_was_down = false;
+        s_pending_lan_invite_escape_was_down = false;
+        s_pending_lan_invite_native_prompt_visible = false;
+        s_pending_lan_invite_native_prompt_id = 0;
         DS2_RenderHook_ClearInvitePrompt();
     }
 
@@ -5055,6 +5219,7 @@ namespace
         std::string hostname;
         std::string private_hostname;
         int32_t login_port = 0;
+        bool native_prompt_visible = false;
         {
             std::lock_guard<std::mutex> guard(s_runtime_state_mutex);
             pending = s_pending_lan_invite;
@@ -5068,16 +5233,33 @@ namespace
             hostname = s_pending_lan_invite_hostname;
             private_hostname = s_pending_lan_invite_private_hostname;
             login_port = s_pending_lan_invite_login_port;
+            native_prompt_visible =
+                s_pending_lan_invite_native_prompt_visible;
         }
 
         const SHORT enter = GetAsyncKeyState(VK_RETURN);
         const SHORT escape = GetAsyncKeyState(VK_ESCAPE);
-        if ((enter & 0x0001) == 0 && (escape & 0x0001) == 0)
+        const bool enter_down = (enter & 0x8000) != 0;
+        const bool escape_down = (escape & 0x8000) != 0;
+        bool enter_pressed = (enter & 0x0001) != 0;
+        bool escape_pressed = (escape & 0x0001) != 0;
+        {
+            std::lock_guard<std::mutex> guard(s_runtime_state_mutex);
+            enter_pressed =
+                enter_pressed ||
+                (enter_down && !s_pending_lan_invite_enter_was_down);
+            escape_pressed =
+                escape_pressed ||
+                (escape_down && !s_pending_lan_invite_escape_was_down);
+            s_pending_lan_invite_enter_was_down = enter_down;
+            s_pending_lan_invite_escape_was_down = escape_down;
+        }
+        if (!enter_pressed && !escape_pressed)
         {
             return;
         }
 
-        const bool accepted = (enter & 0x0001) != 0;
+        const bool accepted = enter_pressed;
         const uint64_t now_tick = GetTickCount64();
         nlohmann::json state_snapshot;
         {
@@ -5090,6 +5272,10 @@ namespace
             }
             s_pending_lan_invite_last_input_tick = now_tick;
             s_pending_lan_invite = false;
+            s_pending_lan_invite_enter_was_down = false;
+            s_pending_lan_invite_escape_was_down = false;
+            s_pending_lan_invite_native_prompt_visible = false;
+            s_pending_lan_invite_native_prompt_id = 0;
             s_last_runtime_command =
                 accepted ? "invite.accepted" : "invite.dismissed";
             s_runtime_stage =
@@ -5112,6 +5298,8 @@ namespace
         action["private_hostname"] = private_hostname;
         action["login_port"] = login_port;
         action["in_game_prompt"] = true;
+        action["native_game_prompt"] = native_prompt_visible;
+        action["fallback_render_prompt"] = !native_prompt_visible;
         action["decision_key"] = accepted ? "enter" : "escape";
         action["accepted"] = accepted;
         AppendRuntimePromptAction(
@@ -5332,27 +5520,21 @@ namespace
                 }
                 const std::string host_name =
                     notice->value("host_name", std::string("Bonfire host"));
-                char body[128] = {};
-                snprintf(
-                    body,
-                    sizeof(body),
-                    "JOINING %.64s",
-                    host_name.empty() ? "BONFIRE HOST" : host_name.c_str());
-                DS2_RenderHook_SetInvitePrompt(
-                    "BONFIRE JOIN",
-                    body,
-                    "DS2 WILL RESTART");
+                DS2_RenderHook_ClearInvitePrompt();
                 {
                     std::lock_guard<std::mutex> guard(s_runtime_state_mutex);
                     s_last_runtime_command = "invite.relaunching";
                     s_runtime_stage = "invite_relaunching_to_host";
                     s_online_intent = "cooperate_join_relaunch";
+                    s_pending_lan_invite_native_prompt_visible = false;
+                    s_pending_lan_invite_native_prompt_id = 0;
                     WriteRuntimeStateSnapshot(
                         config,
                         BuildRuntimeStatePayloadNoLock(config));
                 }
                 payload["action"] = "invite_relaunching_to_host";
                 payload["host_name"] = host_name;
+                payload["native_prompt"] = "closed_before_relaunch";
                 AppendRuntimeEvent(config, "invite.relaunching", payload);
                 return;
             }

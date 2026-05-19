@@ -873,6 +873,15 @@ public static class Ds2NativeSessionCoordinator
             if (beacon is null)
                 return;
 
+            // Ignore our own host beacon. The visible invite prompt is for
+            // peers only; otherwise the host sees a bogus accept/cancel box
+            // while using Saponita Desbloqueada.
+            if (string.Equals(beacon.SessionId, status.SessionId,
+                    StringComparison.OrdinalIgnoreCase))
+            {
+                return;
+            }
+
             if (!string.Equals(beacon.GameType, "DarkSouls2",
                     StringComparison.OrdinalIgnoreCase) ||
                 !string.Equals(beacon.InviteKind, "saponita_direct",
