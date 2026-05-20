@@ -15,6 +15,8 @@ public static class Json
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
         DefaultIgnoreCondition = JsonIgnoreCondition.WhenWritingNull,
+        // v2.9.33 — same fix as RpcServer.cs (.NET 8 needs explicit resolver)
+        TypeInfoResolver = new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver(),
     };
 
     public static T? GetParam<T>(this JsonNode? @params, string key) where T : class

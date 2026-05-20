@@ -27,6 +27,16 @@ public sealed class RpcServer
     {
         PropertyNamingPolicy = JsonNamingPolicy.SnakeCaseLower,
         DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull,
+        // v2.9.33 fix — .NET 8 marks JsonSerializerOptions read-only after first
+        // Serialize call. If TypeInfoResolver is null, subsequent calls fail with
+        // "JsonSerializerOptions instance must specify a TypeInfoResolver setting
+        // before being marked as read-only". Observed correlation: error started
+        // EXACT 1 second after a Saponita Desbloqueada use triggered a NotifyAsync
+        // with a complex payload (direct_summon_host_outbox DeepClone), then
+        // every subsequent RPC poll failed and BonfireService spammed errors
+        // every 2s. Symptom: peer's DS2 (via UI RPC dependency) disconnects ~5s
+        // later. Fix: provide the default reflection-based resolver explicitly.
+        TypeInfoResolver = new System.Text.Json.Serialization.Metadata.DefaultJsonTypeInfoResolver(),
     };
 
     public void Register(string method, RpcMethod handler)
