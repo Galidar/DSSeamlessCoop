@@ -16,6 +16,9 @@
 #include "Server.DarkSouls2/Server/GameService/Utils/DS2_GameIds.h"
 #include "Server.DarkSouls2/Server/GameService/Utils/DS2_CellAndAreaId.h"
 
+#include <unordered_map>
+#include <vector>
+
 struct Frpg2ReliableUdpMessage;
 class Server;
 class GameService;
@@ -68,5 +71,12 @@ private:
     OnlineAreaPool<DS2_CellAndAreaId, SummonSign> LiveCache;
 
     uint32_t NextSignId = 1000;
+
+    // v2.9.32 Opción C — cache la SessionAppData real (bytes que mando el
+    // activator en RequestSummonSign) keyed por player_id del activator.
+    // Cuando ProcessAdminSummonInbox dispara, usa esta SessionAppData
+    // cacheada en vez de Sign->PlayerStruct (que es AppData formato
+    // distinto y causa peer disconnect).
+    std::unordered_map<uint32_t, std::vector<uint8_t>> CachedSessionAppData;
 
 };

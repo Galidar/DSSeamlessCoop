@@ -317,27 +317,35 @@ void DS2_SignManager::ProcessAdminSummonInbox()
         return;
     }
 
-    // Pick SUMMONER's sign for player_struct (peer's UI uses this to
-    // display the summoner identity correctly).
-    std::shared_ptr<SummonSign> SummonerSign;
-    if (!SummonerClient->ActiveSummonSigns.empty())
-    {
-        SummonerSign = SummonerClient->ActiveSummonSigns.back();
-    }
-    else
+    // v2.9.32 Opción C — usar SessionAppData REAL del summoner cacheada
+    // de su última activación de sign vanilla (NO el AppData del sign,
+    // que es formato distinto y causa peer disconnect).
+    uint32_t summoner_player_id = SummonerClient->GetPlayerState().GetPlayerId();
+    auto cached_it = CachedSessionAppData.find(summoner_player_id);
+    if (cached_it == CachedSessionAppData.end())
     {
         result["error"] =
-            "SUMMONER has no active signs — host must ALSO plant a "
-            "saponita peq vanilla in current session so server can pass "
-            "host's player_struct to peer (so peer's UI shows correct "
-            "summoner identity instead of identity mismatch which closes "
-            "the connection).";
+            "summoner has no cached SessionAppData — host must activate "
+            "AT LEAST ONE saponita peq vanilla in current session (interactuar "
+            "con una saponita peq en el mundo) ANTES de usar Saponita "
+            "Desbloqueada. La activacion vanilla envia un RequestSummonSign "
+            "real cuyo player_struct (bytes) es el formato SessionAppData "
+            "correcto que el peer cliente espera. Lo cacheamos y reutilizamos.";
+        result["recovery_hint"] =
+            "Para arrancar la sesion: ambos plantan saponita peq vanilla, "
+            "host (Diux) activa el sign de Wally NORMAL una vez (vanilla "
+            "summon completo). Eso cachea su SessionAppData. Despues "
+            "Saponita Desbloqueada en zonas futuras reutiliza ese SessionAppData.";
         WriteTextToFile(kOutboxPath, result.dump());
         return;
     }
+    const std::vector<uint8_t>& cached_session_app_data = cached_it->second;
+    result["cached_session_app_data_bytes"] =
+        static_cast<int64_t>(cached_session_app_data.size());
+    result["cached_session_app_data_player_id"] = summoner_player_id;
 
-    // We'll set sign_id from TargetSign, player_struct from SummonerSign
-    // (used later in PushMessage construction).
+    // SourceSign sigue siendo TargetSign (for sign_id), pero el
+    // player_struct va a venir del cache (no de SummonerSign).
     std::shared_ptr<SummonSign> SourceSign = TargetSign;
 
     DS2_Frpg2RequestMessage::PushRequestSummonSign PushMessage;
@@ -346,16 +354,17 @@ void DS2_SignManager::ProcessAdminSummonInbox()
     PushMessage.set_player_id(SummonerClient->GetPlayerState().GetPlayerId());
     PushMessage.set_player_steam_id(SummonerClient->GetPlayerState().GetSteamId());
 
-    // v2.9.31 — mix-and-match: sign_id from TARGET (so peer validates),
-    // player_struct from SUMMONER (so peer sees who is summoning).
+    // v2.9.32 Opción C — sign_id de target sign + player_struct del
+    // SessionAppData cacheado del summoner (NO de SummonerSign->PlayerStruct
+    // que era el formato wrong AppData).
     PushMessage.set_sign_id(TargetSign->SignId);
     PushMessage.set_player_struct(
-        SummonerSign->PlayerStruct.data(),
-        SummonerSign->PlayerStruct.size());
+        cached_session_app_data.data(),
+        cached_session_app_data.size());
     result["sign_id"] = TargetSign->SignId;
     result["player_struct_bytes"] =
-        static_cast<int64_t>(SummonerSign->PlayerStruct.size());
-    result["player_struct_source"] = "summoner_sign";
+        static_cast<int64_t>(cached_session_app_data.size());
+    result["player_struct_source"] = "cached_session_app_data";
     result["sign_id_source"] = "target_sign";
 
     if (!TargetClient->MessageStream->Send(&PushMessage))
@@ -663,6 +672,21 @@ MessageHandleResult DS2_SignManager::Handle_RequestSummonSign(GameClient* Client
     PlayerState& Player = Client->GetPlayerState();
 
     DS2_Frpg2RequestMessage::RequestSummonSign* Request = (DS2_Frpg2RequestMessage::RequestSummonSign*)Message.Protobuf.get();
+
+    // v2.9.32 Opción C — cachear SessionAppData REAL del activator.
+    // Cada vez que un client envia RequestSummonSign, el player_struct
+    // bytes son NetSvrSummonSignSessionAppData válida (formato correcto
+    // para el cliente que la deserializa). La cacheamos aquí keyed por
+    // player_id del activator. Después ProcessAdminSummonInbox reutiliza
+    // este cache (en vez de Sign->PlayerStruct que es AppData formato
+    // distinto y causa peer disconnect).
+    {
+        uint32_t player_id = Player.GetPlayerId();
+        const std::string& bytes = Request->player_struct();
+        CachedSessionAppData[player_id].assign(bytes.begin(), bytes.end());
+        Log("Cached SessionAppData for player %u (%zu bytes) from vanilla RequestSummonSign.",
+            player_id, bytes.size());
+    }
 
     bool bSuccess = true;
 
