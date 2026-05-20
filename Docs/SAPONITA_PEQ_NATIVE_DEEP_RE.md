@@ -318,6 +318,181 @@ Conservar el flow v2.9.27 (LAN beacon → peer auto-accept → relaunch). Funcio
 
 ---
 
+## 7-bis. PIPELINE COMPLETO recuperado vía Ghidra (sesión 2)
+
+Reverseé el flujo end-to-end de cómo el cliente DS2 envía un summon:
+
+### `FUN_1402a5b40` — alto nivel (1 arg `param_1` = context)
+
+```c
+void FUN_1402a5b40(longlong context)  // context = some Frpg2 manager
+{
+    sign_mgr = *(context + 0x60) + 0x30;     // = NetSvrSummonSignInterface
+    area_id  = **(int**)(context + 0x58);    // current area
+    cell     = FUN_1402a9c90(...) / FUN_1402a9f80(...);  // build CellAddress
+    sign_info = build from local sign list   // 8 bytes by value
+    
+    char session_buf[168];                    // SessionAppData = 168 bytes
+    FUN_140a3efc0(session_buf);              // ctor / init
+    
+    gm = *DAT_141616cf8;                     // gm global (RVA 0x1616CF8) — YA TENEMOS ESTO
+    FUN_140520000(gm, session_buf);          // FILL SessionAppData from current player state
+    
+    FUN_14029e700(sign_mgr, area_id, &cell, sign_info, session_buf);
+    //           ^^^^^^^^                              ^^^^^^^^^^^
+    //           SummonSummonSign wrapper             our buffer
+    
+    FUN_140a3f0b0(session_buf);              // dtor
+}
+```
+
+### `FUN_14029e700` — wrapper público (5 args)
+
+```c
+LONGLONG FUN_14029e700(
+    self,                                    // NetSvrSummonSignInterface*
+    u32 area_id,                            // param_2
+    u32* cell_addr,                         // param_3 (CellAddress)
+    u64 sign_info,                          // param_4 (SignInfo, by value)
+    NetSvrSummonSignSessionAppData* session // param_5 (on stack arg)
+);
+```
+
+Internamente:
+```c
+job = alloc(0x58);                           // 88 bytes for job
+FUN_14029d830(job);                          // factory init (vftable etc.)
+FUN_140284f80(self+0x18, job);               // enqueue in NetSvrManager
+job[0x28] = area_id;                         // store area
+job[0x2C] = cell;                            // store cell  
+job[0x30] = sign_info;                       // store sign info
+FUN_1402a6cf0(session, job + 0x38);          // COPY SessionAppData into job
+return job;
+```
+
+### `FUN_140520000` — SessionAppData filler (CRÍTICO)
+
+```c
+void FUN_140520000(longlong gm, longlong buf)
+{
+    FUN_140a408b0(gm + 0x10, buf, 0);        // fill core fields from GM+0x10
+    *(u64*)(buf + 0xA8) = *(u64*)(gm + 0x78); // copy 2 fields from GM
+    *(u64*)(buf + 0xB0) = *(u64*)(gm + 0x80);
+}
+```
+
+Esta función toma el GameManagerImp y el buffer de 168 bytes, y POPULA todos los campos correctos del SessionAppData. Si llamamos esto desde el Injector, **obtenemos la SessionAppData CORRECTA** para el jugador local.
+
+### RVAs adicionales descubiertos
+
+| Function | RVA | Purpose |
+|---|---|---|
+| `FUN_1402a5b40` | `0x2A5B40` | High-level summon trigger (1-arg) |
+| `FUN_14029e700` | `0x29E700` | SummonSummonSign 5-arg wrapper |
+| `FUN_140520000` | `0x520000` | SessionAppData filler from GM |
+| `FUN_140a3efc0` | `0xA3EFC0` | SessionAppData ctor |
+| `FUN_140a3f0b0` | `0xA3F0B0` | SessionAppData dtor |
+| `FUN_140a408b0` | `0xA408B0` | Inner field copier (called by filler) |
+| `FUN_140284f80` | `0x284F80` | NetSvrManager job enqueue |
+| `FUN_140833320` | `0x833320` | Memory allocator (used by job factories) |
+| `FUN_1402aa380` | `0x2AA380` | Heap accessor for SignManager allocations |
+| `FUN_1402a9c90` | `0x2A9C90` | CellAddress builder |
+| `FUN_1402a9f80` | `0x2A9F80` | CellAddress / SignInfo builder helper |
+| `FUN_1402a6e40` | `0x2A6E40` | Area validation ("is online area") |
+
+---
+
+## 8. Implementación práctica de Opción A (recipe)
+
+Con todo lo recuperado, el Injector puede emular el flujo así:
+
+```cpp
+// In DS2_NativeRuntimeHook.cpp, when Saponita Desbloqueada is used:
+
+uintptr_t base = game_base;  // DarkSoulsII.exe base addr
+
+// 1. Resolve gm_imp via existing kPhantomMgrHolderRva (0x1616CF8)
+uintptr_t* dat_141616cf8 = (uintptr_t*)(base + 0x1616CF8);
+uintptr_t gm = *dat_141616cf8;
+if (!gm) return false;
+
+// 2. Allocate 168 bytes for SessionAppData (stack OK, or heap if needed)
+alignas(8) uint8_t session_app_data[168] = {0};
+
+// 3. Init via FUN_140a3efc0(buffer)
+auto init_fn = (void(*)(void*))(base + 0xA3EFC0);
+init_fn(session_app_data);
+
+// 4. Fill via FUN_140520000(gm, buffer)
+auto fill_fn = (void(*)(uintptr_t, void*))(base + 0x520000);
+fill_fn(gm, session_app_data);
+
+// 5. Build CellAddress + SignInfo — REQUIRES finding layouts
+//    For CellAddress: probably {u32 area_id, u32 cell_id, ...}
+//    For SignInfo: 8 bytes by value — likely {u32 sign_id, u32 type+flags}
+//    Both can be probed by reading what NetSvrSummonSummonSignJob stores at +0x28,+0x2C,+0x30
+
+uintptr_t target_sign_id = <wally's sign_id from server beacon>;
+uintptr_t target_area_id = 0x9A4D830;  // 10100000 dec = our test area
+uint64_t sign_info = target_sign_id;   // simplest case, just the id (may need more fields)
+uint32_t cell_addr[3] = { target_area_id, target_cell_id, 0 };
+
+// 6. Get NetSvrSummonSignInterface singleton
+//    UNKNOWN — need to find. Probably global via path like:
+//       *(some_global) -> +0x60 -> +0x30 = SignManager
+//    Or via accessor function (TBD: search for "SummonSign.*GetInstance")
+
+uintptr_t sign_mgr = ?;  // singleton lookup
+
+// 7. Call FUN_14029e700(sign_mgr, area_id, &cell, sign_info, session_app_data)
+auto summon_fn = (uintptr_t(*)(uintptr_t, uint32_t, uint32_t*, uint64_t, void*))(base + 0x29E700);
+uintptr_t job_handle = summon_fn(sign_mgr, target_area_id, cell_addr, sign_info, session_app_data);
+
+// 8. Dtor via FUN_140a3f0b0(buffer)
+auto dtor_fn = (void(*)(void*))(base + 0xA3F0B0);
+dtor_fn(session_app_data);
+
+// Done — DS2 client now sent a real RequestSummonSign through its native MessageStream.
+// Server processes vanilla → sends valid PushRequestSummonSign to peer → peer accepts.
+```
+
+### Unknowns críticos antes de poder buildar v2.9.32 Opción A
+
+1. **`NetSvrSummonSignInterface` singleton pointer**: encontrar globalmente. Posibles paths:
+   - Buscar funciones con "GetSummonSignManager" o similar
+   - Trazar quién llama a `FUN_1402a5b40` y ver de dónde sale `param_1`
+   - Probar todos los DAT_ globals que apunten a algo cuyo +0x60+0x30 sea un vftable de NetSvrSummonSignInterface
+
+2. **`Frpg2Sv::SignInfo` layout exacto**: ¿solo sign_id (4 bytes) o tiene type/state/flags adicionales? El job store at +0x30 sugiere 8 bytes pero puede haber padding.
+
+3. **`Frpg2Sv::CellAddress` layout**: probablemente `{area_id u32, cell_id u32}` por su uso pero hay que confirmar.
+
+4. **Cómo obtener el `sign_id` de Wally desde el cliente de Diux**: el cliente conoce los signs cercanos via RequestGetSignList polling. Si Diux NO se ha movido cerca del sign de Wally, su cliente NO conoce el sign_id local. Una opción: BonfireService recibe el sign_id del server (via outbox) y se lo pasa al Injector.
+
+### Camino más simple aún (Opción A-bis): hijack FUN_1402a5b40
+
+Si `FUN_1402a5b40` puede ser llamada con un context que apunte a globals que ya tenemos, podemos invocarla directamente sin construir args manualmente. Necesita más RE.
+
+---
+
+## 9. Status realista para terminar la Saponita Desbloqueada
+
+Después de TODO este análisis, las realidades:
+
+| Opción | Effort | Probabilidad de éxito | Notes |
+|---|---|---|---|
+| A — client-side inject SummonSummonSign | 4-8 hrs (multi-sesión) | Alta si resolvemos los 4 unknowns | Camino "correcto" — usa código vanilla del cliente |
+| C — server cache SessionAppData de activación vanilla previa | 30 min | Media (SessionAppData puede ser time-varying) | Quick experiment, fallback aceptable |
+| D — pulir relaunch path como solución final | 1 hr | Alta (ya funciona) | "Buena" UX pero no in-place — DS2 del peer se cierra y vuelve |
+
+**Recomendación honesta**: dado que ya invertimos 10+ versiones en este problema, y A requiere RE más profundo, **lo más sano es:**
+1. Implementar C como experimento rápido (validar SessionAppData hypothesis)
+2. Si C funciona → win
+3. Si C no funciona → ir a D (pulir relaunch) — paso 7-8 aceptables-con-relaunch
+4. Dejar A documentado para sesión futura con más tiempo
+
+---
+
 ## 8. Lo que NO conocemos todavía (TODO para próximas sesiones)
 
 1. **`NetSvrSummonSignInterface` singleton accessor RVA** — para llamar SummonSummonSign client-side necesitamos el puntero a la interface.
