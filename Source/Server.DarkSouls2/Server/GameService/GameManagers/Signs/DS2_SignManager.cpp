@@ -249,6 +249,28 @@ void DS2_SignManager::ProcessAdminSummonInbox()
     // to plant a fresh saponita peq first").
     //
     // Also: log ALL candidate signs for diagnostic.
+    // v2.9.31 — CRITICAL FIX: vanilla DS2_SignManager::Handle_RequestSummonSign
+    // sends to peer a PushRequestSummonSign with the SUMMONER's player_struct
+    // (so peer can display "te estan convocando" with the summoner's avatar).
+    //
+    // v2.9.30 was sending PEER's own sign->PlayerStruct as player_struct in
+    // the push, which means peer received "tu mismo te estas convocando" =
+    // identity mismatch with the player_id field → peer's vanilla client
+    // detects inconsistency and closes the message stream (observed: ~7s
+    // disconnect, same pattern across v2.9.27-30 tests).
+    //
+    // Correct flow (v2.9.31):
+    //   * sign_id     = TARGET's most recent sign (so peer's local DS2 cache
+    //                   recognizes the sign → no rejection)
+    //   * player_struct = SUMMONER's most recent sign's PlayerStruct (so the
+    //                   "te estan convocando" UI shows summoner correctly)
+    //   * player_id   = summoner's player ID
+    //   * steam_id    = summoner's Steam ID
+    //
+    // Pre-requirement: BOTH players must have placed at least one saponita
+    // peq vanilla in CURRENT session so server has both PlayerStructs.
+
+    // Diagnostic: list target's signs.
     nlohmann::json target_signs_dbg = nlohmann::json::array();
     for (const auto& s : TargetClient->ActiveSummonSigns)
     {
@@ -263,21 +285,60 @@ void DS2_SignManager::ProcessAdminSummonInbox()
     }
     result["target_active_signs"] = std::move(target_signs_dbg);
 
-    std::shared_ptr<SummonSign> SourceSign;
+    // Diagnostic: list summoner's signs.
+    nlohmann::json summoner_signs_dbg = nlohmann::json::array();
+    for (const auto& s : SummonerClient->ActiveSummonSigns)
+    {
+        nlohmann::json e;
+        e["sign_id"] = s->SignId;
+        e["online_area_id"] = s->OnlineAreaId;
+        e["cell_id"] = s->CellId;
+        e["player_id"] = s->PlayerId;
+        e["player_struct_bytes"] = static_cast<int64_t>(s->PlayerStruct.size());
+        e["being_summoned_by"] = s->BeingSummonedByPlayerId;
+        summoner_signs_dbg.push_back(std::move(e));
+    }
+    result["summoner_active_signs"] = std::move(summoner_signs_dbg);
+
+    // Pick TARGET's sign for sign_id (peer validates this against its
+    // local cache when receiving the push).
+    std::shared_ptr<SummonSign> TargetSign;
     if (!TargetClient->ActiveSummonSigns.empty())
     {
-        SourceSign = TargetClient->ActiveSummonSigns.back();
+        TargetSign = TargetClient->ActiveSummonSigns.back();
     }
     else
     {
         result["error"] =
             "target has no active signs — peer must plant a saponita "
-            "peq vanilla in current session BEFORE host triggers Saponita "
-            "Desbloqueada (cache the player_struct + sign_id in peer's "
-            "local client). NO summoner fallback (causes peer disconnect).";
+            "peq vanilla in current session so peer's local DS2 cache has "
+            "the sign_id we'll reference in the push.";
         WriteTextToFile(kOutboxPath, result.dump());
         return;
     }
+
+    // Pick SUMMONER's sign for player_struct (peer's UI uses this to
+    // display the summoner identity correctly).
+    std::shared_ptr<SummonSign> SummonerSign;
+    if (!SummonerClient->ActiveSummonSigns.empty())
+    {
+        SummonerSign = SummonerClient->ActiveSummonSigns.back();
+    }
+    else
+    {
+        result["error"] =
+            "SUMMONER has no active signs — host must ALSO plant a "
+            "saponita peq vanilla in current session so server can pass "
+            "host's player_struct to peer (so peer's UI shows correct "
+            "summoner identity instead of identity mismatch which closes "
+            "the connection).";
+        WriteTextToFile(kOutboxPath, result.dump());
+        return;
+    }
+
+    // We'll set sign_id from TargetSign, player_struct from SummonerSign
+    // (used later in PushMessage construction).
+    std::shared_ptr<SummonSign> SourceSign = TargetSign;
 
     DS2_Frpg2RequestMessage::PushRequestSummonSign PushMessage;
     PushMessage.set_push_message_id(
@@ -285,28 +346,17 @@ void DS2_SignManager::ProcessAdminSummonInbox()
     PushMessage.set_player_id(SummonerClient->GetPlayerState().GetPlayerId());
     PushMessage.set_player_steam_id(SummonerClient->GetPlayerState().GetSteamId());
 
-    if (SourceSign)
-    {
-        PushMessage.set_sign_id(SourceSign->SignId);
-        PushMessage.set_player_struct(
-            SourceSign->PlayerStruct.data(),
-            SourceSign->PlayerStruct.size());
-        result["sign_id"] = SourceSign->SignId;
-        result["player_struct_bytes"] =
-            static_cast<int64_t>(SourceSign->PlayerStruct.size());
-    }
-    else
-    {
-        // No cached player_struct anywhere — emit empty bytes and a
-        // synthetic sign id. Likely the client will reject, but we
-        // record it for diagnostic.
-        PushMessage.set_sign_id(0);
-        PushMessage.set_player_struct("");
-        result["sign_id"] = 0;
-        result["player_struct_bytes"] = 0;
-        result["warning"] =
-            "no cached player_struct — push may be rejected by target client";
-    }
+    // v2.9.31 — mix-and-match: sign_id from TARGET (so peer validates),
+    // player_struct from SUMMONER (so peer sees who is summoning).
+    PushMessage.set_sign_id(TargetSign->SignId);
+    PushMessage.set_player_struct(
+        SummonerSign->PlayerStruct.data(),
+        SummonerSign->PlayerStruct.size());
+    result["sign_id"] = TargetSign->SignId;
+    result["player_struct_bytes"] =
+        static_cast<int64_t>(SummonerSign->PlayerStruct.size());
+    result["player_struct_source"] = "summoner_sign";
+    result["sign_id_source"] = "target_sign";
 
     if (!TargetClient->MessageStream->Send(&PushMessage))
     {
