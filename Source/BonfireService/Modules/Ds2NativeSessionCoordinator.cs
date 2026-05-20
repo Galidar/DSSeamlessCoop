@@ -867,10 +867,10 @@ public static class Ds2NativeSessionCoordinator
                 ? serverConfig.LoginServerPort
                 : 50050;
             var sessionId = Guid.NewGuid().ToString("N");
-            // Cheap stable sender id from machine name — good enough
-            // to deduplicate the host's own beacon when it loops back.
-            var senderId = (long)Environment.MachineName.GetHashCode()
-                           ^ ((long)Environment.UserName.GetHashCode() << 32);
+            // v2.9.34 — single source of truth for the local sender id
+            // (was a duplicated formula here + in StartHostBroadcast
+            // callers). `LocalSenderId` is computed once at type init.
+            var senderId = Ds2LanBeacon.LocalSenderId;
             Ds2LanBeacon.EnsureListenerRunning();
             Ds2LanBeacon.StartHostBroadcast(
                 sessionId,
@@ -913,6 +913,19 @@ public static class Ds2NativeSessionCoordinator
                 return;
             }
 
+            // v2.9.34 — if a local Server.exe (bonfire-server) is currently
+            // running, this machine *is* the host. Auto-accepting a peer's
+            // saponita beacon would arm a JoinTarget that contradicts the
+            // host role (the UI surfaces this as "Next launch joins …"
+            // even though Server.exe is still up). The host bonfire must
+            // never be armed as guest simultaneously.
+            try
+            {
+                if (ServerProcess.QueryStatus().Running)
+                    return;
+            }
+            catch { /* ServerProcess query is best-effort — fall through. */ }
+
             var memory = GetSession(status.SessionId);
             if (memory.SessionOpen &&
                 !string.Equals(memory.Mode, "solo",
@@ -925,11 +938,17 @@ public static class Ds2NativeSessionCoordinator
             if (beacon is null)
                 return;
 
-            // Ignore our own host beacon. Saponita is now direct-fire:
-            // the peer auto-joins, but the player who used the item must
-            // never auto-join their own beacon.
-            if (string.Equals(beacon.SessionId, status.SessionId,
-                    StringComparison.OrdinalIgnoreCase))
+            // v2.9.34 — drop our OWN beacons by SenderId. Previous code
+            // compared `beacon.SessionId` (a Guid the broadcaster mints at
+            // StartHostBroadcast time) against `status.SessionId` (the
+            // runtime "<guid>_<pid>" id minted by the Injector). Those
+            // namespaces never overlap, so the filter was a no-op and a
+            // BonfireService could end up auto-accepting its own host
+            // beacon if `ServerProcess.QueryStatus` had not yet caught
+            // the freshly spawned Server.exe. SenderId is stable per
+            // machine+user account (see `Ds2LanBeacon.LocalSenderId`),
+            // so this filter works regardless of timing.
+            if (beacon.SenderId == Ds2LanBeacon.LocalSenderId)
             {
                 return;
             }

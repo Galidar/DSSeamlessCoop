@@ -55,6 +55,16 @@ public static class Ds2LanBeacon
     public static readonly TimeSpan BroadcastInterval = TimeSpan.FromSeconds(1);
     public static readonly TimeSpan BeaconTtl = TimeSpan.FromSeconds(8);
 
+    // v2.9.34 — stable per-machine sender id. Computed once at type init so
+    // any caller (host broadcaster, guest auto-accept filter, debug status)
+    // can dedupe against the *local* sender without waiting for the broadcast
+    // to spin up. Must match the formula `StartHostBroadcast` historically
+    // used (machine name hash XOR user name hash << 32) so existing peers
+    // continue to recognise our beacons.
+    public static readonly long LocalSenderId =
+        (long)Environment.MachineName.GetHashCode()
+        ^ ((long)Environment.UserName.GetHashCode() << 32);
+
     private static readonly object Lock = new();
     private static CancellationTokenSource? _cts;
     private static Task? _broadcastTask;
